@@ -74,11 +74,9 @@ async def master_switch_role(
 
 @router.message(F.text == "➕ Добавить клиента")
 async def master_add_client(message: Message, state: FSMContext) -> None:
-    await answer_tracked(
-        message,
-        state,
-        "Тут будет флоу добавления клиента вручную ✍️",
-    )
+    from src.handlers.master.add_client import start_add_client
+
+    await start_add_client(message, state)
 
 
 @router.message(F.text == "🗓 Добавить запись")

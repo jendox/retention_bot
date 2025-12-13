@@ -9,6 +9,7 @@ __all__ = (
     "Base",
     "Database",
     "session_local",
+    "active_session",
 )
 
 URL_PARTS = 2
