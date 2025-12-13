@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import typing
-from datetime import date, datetime, time
+from datetime import date as date_type, datetime, time
 
 from sqlalchemy import (
     BigInteger,
@@ -52,6 +52,12 @@ class Master(Base):
     bookings: Mapped[list[Booking]] = relationship(
         "Booking", back_populates="master", cascade="all, delete-orphan",
     )
+    overrides: Mapped[list[WorkdayOverride]] = relationship(
+        "WorkdayOverride",
+        back_populates="master",
+        cascade="all, delete-orphan",
+        order_by="WorkdayOverride.date",
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=func.now(), nullable=False,
@@ -66,20 +72,32 @@ class WorkdayOverride(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     master_id: Mapped[int] = mapped_column(ForeignKey("masters.id", ondelete="CASCADE"), nullable=False)
-    date: Mapped[date] = mapped_column(Date, nullable=False)
+    date: Mapped[date_type] = mapped_column(Date, nullable=False)
 
     # None = выходной
     start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
 
-    __table_args__ = (UniqueConstraint("master_id", "date", name="uq_override_master_date"),)
+    master: Mapped[Master] = relationship("Master", back_populates="overrides")
+
+    __table_args__ = (
+        UniqueConstraint("master_id", "date", name="uq_override_master_date"),
+    )
 
 
 master_clients = Table(
     "master_clients",
     Base.metadata,
-    Column("id", Integer, primary_key=True),
-    Column("master_id", ForeignKey("masters.id", ondelete="CASCADE"), nullable=False),
-    Column("client_id", ForeignKey("clients.id", ondelete="CASCADE"), nullable=False),
-    UniqueConstraint("master_id", "client_id", name="uq_master_client"),
+    Column(
+        "master_id",
+        ForeignKey("masters.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    ),
+    Column(
+        "client_id",
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    ),
 )

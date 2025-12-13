@@ -70,6 +70,17 @@ async def session_local() -> AsyncIterator[AsyncSession]:
         yield session
 
 
+@asynccontextmanager
+async def active_session(*, begin: bool = True) -> AsyncIterator[AsyncSession]:
+    async with session_local() as session:
+        if not begin:
+            yield session
+            return
+
+        async with session.begin():
+            yield session
+
+
 def _redact_url(url: str) -> str:
     try:
         prefix, rest = url.split("://", 1)

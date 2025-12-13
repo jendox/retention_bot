@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, func
 from sqlalchemy.dialects.postgresql import ENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,9 +21,14 @@ class Booking(Base):
 
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_min: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
-    status: Mapped[BookingStatus] = mapped_column(booking_status_enum, default=BookingStatus.CONFIRMED, nullable=False)
+    status: Mapped[BookingStatus] = mapped_column(booking_status_enum, default=BookingStatus.PENDING, nullable=False)
 
     master: Mapped[Master] = relationship("Master", back_populates="bookings")
     client: Mapped[Client] = relationship("Client", back_populates="bookings")
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_bookings_master_start_at", "master_id", "start_at"),
+        Index("ix_bookings_master_status_start_at", "master_id", "status", "start_at"),
+    )

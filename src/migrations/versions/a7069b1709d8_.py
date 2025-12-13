@@ -1,8 +1,8 @@
 """
 
-Revision ID: 57f13bc320af
+Revision ID: a7069b1709d8
 Revises: 
-Create Date: 2025-12-11 17:12:29.514599
+Create Date: 2025-12-12 16:56:29.599830
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '57f13bc320af'
+revision: str = 'a7069b1709d8'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -54,12 +54,14 @@ def upgrade() -> None:
     sa.Column('client_id', sa.Integer(), nullable=False),
     sa.Column('start_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('duration_min', sa.Integer(), nullable=False),
-    sa.Column('status', postgresql.ENUM('CONFIRMED', 'CANCELLED', name='booking_status_enum'), nullable=False),
+    sa.Column('status', postgresql.ENUM('PENDING', 'CONFIRMED', 'DECLINED', 'CANCELLED', 'COMPLETED', name='booking_status_enum'), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.ForeignKeyConstraint(['client_id'], ['clients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['master_id'], ['masters.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_index('ix_bookings_master_start_at', 'bookings', ['master_id', 'start_at'], unique=False)
+    op.create_index('ix_bookings_master_status_start_at', 'bookings', ['master_id', 'status', 'start_at'], unique=False)
     op.create_table('invites',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('token', sa.String(length=32), nullable=False),
@@ -77,13 +79,11 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_invites_token'), 'invites', ['token'], unique=True)
     op.create_table('master_clients',
-    sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('master_id', sa.Integer(), nullable=False),
     sa.Column('client_id', sa.Integer(), nullable=False),
     sa.ForeignKeyConstraint(['client_id'], ['clients.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['master_id'], ['masters.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('master_id', 'client_id', name='uq_master_client')
+    sa.PrimaryKeyConstraint('master_id', 'client_id')
     )
     op.create_table('workday_overrides',
     sa.Column('id', sa.Integer(), nullable=False),
@@ -105,6 +105,8 @@ def downgrade() -> None:
     op.drop_table('master_clients')
     op.drop_index(op.f('ix_invites_token'), table_name='invites')
     op.drop_table('invites')
+    op.drop_index('ix_bookings_master_status_start_at', table_name='bookings')
+    op.drop_index('ix_bookings_master_start_at', table_name='bookings')
     op.drop_table('bookings')
     op.drop_index(op.f('ix_masters_telegram_id'), table_name='masters')
     op.drop_index(op.f('ix_masters_id'), table_name='masters')

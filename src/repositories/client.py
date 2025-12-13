@@ -1,5 +1,5 @@
 from sqlalchemy import select, update
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import selectinload
 
 from src.models import Client as ClientEntity
 from src.repositories.base import BaseRepository
@@ -19,8 +19,8 @@ class ClientRepository(BaseRepository):
         stmt = select(ClientEntity).where(ClientEntity.id == client_id)
         if load_details:
             stmt = stmt.options(
-                joinedload(ClientEntity.masters),
-                joinedload(ClientEntity.bookings),
+                selectinload(ClientEntity.masters),
+                selectinload(ClientEntity.bookings),
             )
         entity = await self._session.scalar(stmt)
         if entity is None:
@@ -36,8 +36,8 @@ class ClientRepository(BaseRepository):
         stmt = select(ClientEntity).where(ClientEntity.telegram_id == telegram_id)
         if load_details:
             stmt = stmt.options(
-                joinedload(ClientEntity.masters),
-                joinedload(ClientEntity.bookings),
+                selectinload(ClientEntity.masters),
+                selectinload(ClientEntity.bookings),
             )
         entity = await self._session.scalar(stmt)
         if entity is None:

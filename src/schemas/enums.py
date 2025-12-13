@@ -38,8 +38,15 @@ class Timezone(StrEnum):
 
 
 class BookingStatus(StrEnum):
+    PENDING = "pending"
     CONFIRMED = "confirmed"
+    DECLINED = "declined"
     CANCELLED = "cancelled"
+    COMPLETED = "completed"
+
+    @classmethod
+    def active(cls) -> set["BookingStatus"]:
+        return {cls.PENDING, cls.CONFIRMED}
 
 
 class InviteType(StrEnum):

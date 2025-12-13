@@ -1,5 +1,14 @@
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
+
+from src.schemas.enums import Timezone
+
+
+@dataclass(frozen=True)
+class UtcRange:
+    start: datetime
+    end: datetime
 
 
 def get_timezone(tz_name: str) -> ZoneInfo:
@@ -10,20 +19,20 @@ def get_timezone(tz_name: str) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def utc_to_local(dt: datetime, tz_name: str) -> datetime:
-    """Перевод UTC → локальное время"""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(get_timezone(tz_name))
+def master_day_from_client_day(*, client_day: date, client_tz: Timezone, master_tz: Timezone) -> date:
+    client_zone = ZoneInfo(str(client_tz.value))
+    master_zone = ZoneInfo(str(master_tz.value))
+
+    client_midnight = datetime.combine(client_day, time(0, 0), tzinfo=client_zone)
+    return client_midnight.astimezone(master_zone).date()
 
 
-def local_to_utc(dt: datetime, tz_name: str) -> datetime:
-    """Перевод локального времени → UTC"""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=get_timezone(tz_name))
-    return dt.astimezone(UTC)
+def utc_range_for_master_day(*, master_day: date, master_tz: Timezone) -> UtcRange:
+    master_zone = ZoneInfo(str(master_tz.value))
+    start_local = datetime.combine(master_day, time(0, 0), tzinfo=master_zone)
+    end_local = start_local + timedelta(days=1)
+    return UtcRange(start=start_local.astimezone(UTC), end=end_local.astimezone(UTC))
 
 
-def format_dt_local(dt: datetime, tz_name: str, fmt: str = "%d.%m.%Y %H:%M") -> str:
-    """Форматирует UTC datetime в строку в локальном времени мастера"""
-    return utc_to_local(dt, tz_name).strftime(fmt)
+def to_zone(dt_utc: datetime, tz: Timezone) -> datetime:
+    return dt_utc.astimezone(ZoneInfo(str(tz.value)))
