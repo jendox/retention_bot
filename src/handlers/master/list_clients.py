@@ -8,11 +8,9 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import session_local
 from src.repositories import MasterNotFound, MasterRepository
-from src.utils import answer_tracked
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
-
 
 PAGE_SIZE = 10
 CLIENTS_PAGE_PREFIX = "master_clients_page:"
@@ -91,15 +89,12 @@ def _build_clients_pagination_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-@router.message(F.text == "👥 Клиенты")
-async def master_clients_entry(message: Message, state: FSMContext) -> None:
+async def start_clients_entry(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     all_clients = await _fetch_master_clients(telegram_id)
 
     if not all_clients:
-        await answer_tracked(
-            message,
-            state,
+        await message.answer(
             text="У тебя пока нет клиентов 👀\n\n"
                  "Пригласи клиента по ссылке или добавь вручную, и они появятся здесь.",
         )
@@ -115,12 +110,8 @@ async def master_clients_entry(message: Message, state: FSMContext) -> None:
     text = _build_clients_page_text(clients_page, page, total_pages)
     keyboard = _build_clients_pagination_keyboard(page, total_pages)
 
-    await answer_tracked(
-        message,
-        state,
-        text=text,
-        reply_markup=keyboard,
-    )
+    await message.answer(text=text, reply_markup=keyboard)
+    await message.delete()
 
 
 @router.callback_query(F.data.startswith(CLIENTS_PAGE_PREFIX))

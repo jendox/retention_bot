@@ -7,7 +7,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
-from src.handlers.master.master_menu import send_master_main_menu
 from src.repositories import ClientRepository, MasterRepository
 from src.schemas import ClientCreate
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
@@ -47,10 +46,19 @@ async def _create_client(master_id: int, name: str, phone: str) -> int:
         )
         master_repo = MasterRepository(session)
         await master_repo.attach_client(master_id, client.id)
+        logger.info(
+            "master.add_client.created",
+            extra={"master_id": master_id, "client_id": client.id, "phone": phone},
+        )
         return client.id
 
 
 async def start_add_client(message: Message, state: FSMContext) -> None:
+    await track_message(state, message, bucket=ADD_CLIENT_BUCKET)
+    logger.info(
+        "master.add_client.start",
+        extra={"telegram_id": message.from_user.id if message.from_user else None},
+    )
     await answer_tracked(
         message,
         state,
@@ -65,6 +73,10 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=ADD_CLIENT_BUCKET)
     name = (message.text or "").strip()
     if not name:
+        logger.debug(
+            "master.add_client.invalid_name",
+            extra={"telegram_id": message.from_user.id if message.from_user else None},
+        )
         await answer_tracked(
             message,
             state,
@@ -89,6 +101,13 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
     raw_phone = (message.text or "").strip()
     phone = validate_phone(raw_phone)
     if phone is None:
+        logger.debug(
+            "master.add_client.invalid_phone",
+            extra={
+                "telegram_id": message.from_user.id if message.from_user else None,
+                "raw_phone": raw_phone,
+            },
+        )
         await answer_tracked(
             message,
             state,
@@ -126,12 +145,24 @@ async def master_add_client_restart(callback: CallbackQuery, state: FSMContext) 
 
 @router.callback_query(StateFilter(AddClientStates.confirm), F.data == "master_add_client_confirm")
 async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    logger.info(
+        "master.add_client.confirm",
+        extra={"telegram_id": callback.from_user.id if callback.from_user else None},
+    )
     await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
 
     data = await state.get_data()
     name = data.get("name")
     phone = data.get("phone")
     if not name or not phone:
+        logger.warning(
+            "master.add_client.missing_data",
+            extra={
+                "telegram_id": callback.from_user.id if callback.from_user else None,
+                "name": bool(name),
+                "phone": bool(phone),
+            },
+        )
         await callback.answer("Не хватает данных, попробуйте заново", show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         await state.clear()
@@ -143,10 +174,8 @@ async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) 
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(callback.from_user.id)
 
-    client_id = await _create_client(master.id, name, phone)
-
+    await _create_client(master.id, name, phone)
     await callback.message.answer("Готово! Клиент добавлен (офлайн) ✅")
 
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()
-    await send_master_main_menu(callback.message, show_switch_role=True)

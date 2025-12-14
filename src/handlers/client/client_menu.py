@@ -6,7 +6,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from src.filters.user_role import UserRole
-from src.handlers.master.master_menu import send_master_main_menu
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked
 
@@ -57,9 +56,12 @@ async def client_switch_role(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
 ) -> None:
+    from src.handlers.master.master_menu import send_master_main_menu
+
     await user_ctx_storage.set_role(message.from_user.id, ActiveRole.MASTER)
     await state.clear()
     await send_master_main_menu(message, show_switch_role=True)
+    await message.delete()
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == "⚙️ Настройки")

@@ -10,7 +10,10 @@ from aiogram.types import (
 )
 
 from src.filters.user_role import UserRole
-from src.handlers.client.client_menu import send_client_main_menu
+from src.handlers.master.add_booking import start_add_booking
+from src.handlers.master.add_client import start_add_client
+from src.handlers.master.invite_client import start_invite_client
+from src.handlers.master.list_clients import start_clients_entry
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked
 
@@ -67,25 +70,32 @@ async def master_switch_role(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
 ) -> None:
+    from src.handlers.client.client_menu import send_client_main_menu
+
     await user_ctx_storage.set_role(message.from_user.id, ActiveRole.CLIENT)
     await state.clear()
     await send_client_main_menu(message, show_switch_role=True)
+    await message.delete()
+
+
+@router.message(F.text == "📨 Пригласить клиента")
+async def master_invite_client(message: Message, state: FSMContext) -> None:
+    await start_invite_client(message, state)
 
 
 @router.message(F.text == "➕ Добавить клиента")
 async def master_add_client(message: Message, state: FSMContext) -> None:
-    from src.handlers.master.add_client import start_add_client
-
     await start_add_client(message, state)
 
 
 @router.message(F.text == "🗓 Добавить запись")
 async def master_add_booking(message: Message, state: FSMContext) -> None:
-    await answer_tracked(
-        message,
-        state,
-        "Тут будет создание новой записи 📆",
-    )
+    await start_add_booking(message, state)
+
+
+@router.message(F.text == "👥 Клиенты")
+async def master_clients_entry(message: Message, state: FSMContext) -> None:
+    await start_clients_entry(message, state)
 
 
 @router.message(F.text == "📅 Расписание")

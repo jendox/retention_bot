@@ -82,8 +82,7 @@ def render_invite_message(
     )
 
 
-@router.message(F.text == "📨 Пригласить клиента")
-async def master_invite_client(message: Message, state: FSMContext) -> None:
+async def start_invite_client(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=INVITE_CLIENT_BUCKET)
 
     telegram_id = message.from_user.id
