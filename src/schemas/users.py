@@ -70,7 +70,7 @@ class MasterWithOverrides(Master):
     def _overrides_for_day(self) -> dict[date, WorkdayOverride]:
         return {override.date: override for override in self.overrides}
 
-    def override_for_day(self, day: date) -> WorkdayOverride:
+    def override_for_day(self, day: date) -> WorkdayOverride | None:
         return self._overrides_for_day.get(day)
 
     def work_window_for_day(self, day: date) -> tuple[time, time] | None:
