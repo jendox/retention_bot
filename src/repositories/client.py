@@ -1,7 +1,7 @@
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
-from src.models import Client as ClientEntity
+from src.models import Client as ClientEntity, master_clients
 from src.repositories.base import BaseRepository
 from src.schemas import Client, ClientCreate, ClientDetails, ClientUpdate
 
@@ -87,3 +87,24 @@ class ClientRepository(BaseRepository):
         result = await self._session.execute(stmt)
 
         return (result.rowcount or 0) > 0
+
+    async def find_offline_for_master_by_phone(
+        self,
+        *,
+        master_id: int,
+        phone: str,
+    ) -> Client:
+        stmt = (
+            select(ClientEntity)
+            .join(master_clients, ClientEntity.id == master_clients.c.client_id)
+            .where(
+                master_clients.c.master_id == master_id,
+                ClientEntity.phone == phone,
+                ClientEntity.telegram_id.is_(None),
+            )
+            .limit(1)
+        )
+        entity = await self._session.scalar(stmt)
+        if entity is None:
+            raise ClientNotFound(f"Client with phone={phone} for master_id={master_id} not found.")
+        return Client.model_validate(entity)

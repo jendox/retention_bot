@@ -122,7 +122,7 @@ class WorkdayOverride(WorkdayOverrideBase):
 class BaseClient(BaseModel):
     telegram_id: int | None = Field(default=None)
     name: str
-    phone: str | None = Field(default=None)
+    phone: str
     timezone: Timezone = Field(default=Timezone.EUROPE_MINSK)
 
 

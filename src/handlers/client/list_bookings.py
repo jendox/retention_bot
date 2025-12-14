@@ -49,8 +49,7 @@ async def _list_bookings(
         slot_client = to_zone(booking.start_at, client_timezone)
         badge = status_badge(booking.status)
         text = dedent(f"""
-            <b>{booking.master.name}</b>
-            
+            <b>{booking.master.name}</b>\n
             {badge} {BOOKING_STATUS_MAP[booking.status]}
             📅 {slot_client:%d.%m.%Y}
             ⏰ {slot_client:%H:%M}

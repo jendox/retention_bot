@@ -39,6 +39,7 @@ class Master(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
 
     work_days: Mapped[list[int]] = mapped_column(ARRAY(Integer), default=[0, 1, 2, 3, 4], nullable=False)
     start_time: Mapped[time] = mapped_column(Time, nullable=False)

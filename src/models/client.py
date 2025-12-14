@@ -27,7 +27,7 @@ class Client(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
     timezone: Mapped[Timezone] = mapped_column(timezone_enum, default=Timezone.EUROPE_MINSK, nullable=False)
 
     masters: Mapped[list[Master]] = relationship(

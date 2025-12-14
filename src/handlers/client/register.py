@@ -16,7 +16,7 @@ from src.repositories import (
     MasterNotFound,
     MasterRepository,
 )
-from src.schemas import ClientCreate, Invite
+from src.schemas import ClientCreate, ClientUpdate, Invite
 from src.schemas.enums import Timezone
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
@@ -109,6 +109,28 @@ async def _create_and_attach_client(
         await master_repo.attach_client(master_id, client.id)
 
     return client.id
+
+
+async def _claim_offline_client_if_exists(
+    *,
+    master_id: int,
+    phone: str,
+    client_update: ClientUpdate,
+) -> bool:
+    async with active_session() as session:
+        client_repo = ClientRepository(session)
+        master_repo = MasterRepository(session)
+        offline = await client_repo.find_offline_for_master_by_phone(master_id=master_id, phone=phone)
+        if offline is None:
+            return False
+        # Safety: don't overwrite an existing TG binding (shouldn't happen due to filter),
+        # but keep it explicit.
+        if offline.telegram_id is not None and offline.telegram_id != client_update.telegram_id:
+            return False
+
+        await client_repo.update_by_id(offline.id, client_update)
+        await master_repo.attach_client(master_id, offline.id)
+        return True
 
 
 async def start_client_registration(
@@ -227,6 +249,22 @@ async def client_reg_confirm(
     data = await state.get_data()
     invite_master_id = data.get("invite_master_id")
     telegram_id = callback.from_user.id
+
+    claimed = await _claim_offline_client_if_exists(
+        master_id=invite_master_id,
+        phone=data["phone"],
+        client_update=ClientUpdate(
+            telegram_id=telegram_id,
+            name=data["name"],
+            timezone=Timezone.EUROPE_MINSK,
+        ),
+    )
+    if claimed:
+        await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+        await state.clear()
+        is_master = await _check_if_master(telegram_id)
+        await send_client_main_menu(callback.message, show_switch_role=is_master)
+        return
 
     client_create = ClientCreate(
         telegram_id=telegram_id,
