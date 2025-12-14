@@ -172,7 +172,7 @@ async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) 
         master = await master_repo.get_by_telegram_id(callback.from_user.id)
 
     await _create_client(master.id, name, phone)
-    text = f"✅ Готово! Клиент добавлен (🔴 оффлайн)"
+    text = "✅ Готово! Клиент добавлен (🔴 оффлайн)"
     await callback.answer(text=text, show_alert=True)
 
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)

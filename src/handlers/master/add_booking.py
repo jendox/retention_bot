@@ -1,6 +1,6 @@
 import logging
+from collections.abc import Iterable
 from datetime import datetime
-from typing import Iterable
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -49,7 +49,7 @@ def _build_clients_keyboard(clients: list) -> InlineKeyboardMarkup:
         if client.phone:
             label += f" ({client.phone})"
         if client.telegram_id is None:
-            label += f" · 🔴 оффлайн"
+            label += " · 🔴 оффлайн"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{client.id}")])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

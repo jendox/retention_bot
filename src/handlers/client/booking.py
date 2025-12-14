@@ -9,7 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 from sqlalchemy.exc import IntegrityError
 
-from src.core.sa import session_local
+from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
 from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
 from src.repositories import ClientNotFound, ClientRepository, MasterRepository
@@ -286,36 +286,35 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
 
     slot_dt_utc = datetime.fromisoformat(slots_iso[index])
 
-    async with session_local() as session:
-        async with session.begin():
-            master_repo = MasterRepository(session)
-            booking_repo = BookingRepository(session)
+    async with active_session() as session:
+        master_repo = MasterRepository(session)
+        booking_repo = BookingRepository(session)
 
-            master = await master_repo.get_by_id(master_id)
+        master = await master_repo.get_by_id(master_id)
 
-            booking_create = BookingCreate(
-                master_id=master_id,
-                client_id=client_id,
-                start_at=slot_dt_utc,
-                duration_min=master.slot_size_min,
+        booking_create = BookingCreate(
+            master_id=master_id,
+            client_id=client_id,
+            start_at=slot_dt_utc,
+            duration_min=master.slot_size_min,
+        )
+        try:
+            booking = await booking_repo.create(booking_create)
+        except IntegrityError:
+            await callback.message.answer(
+                "Упс — этот слот только что заняли 😕\n"
+                "Пожалуйста, выбери другое время.",
             )
-            try:
-                booking = await booking_repo.create(booking_create)
-            except IntegrityError:
-                await callback.message.answer(
-                    "Упс — этот слот только что заняли 😕\n"
-                    "Пожалуйста, выбери другое время.",
-                )
-                return
+            return
 
-            logger.info(
-                "booking.created",
-                extra={
-                    "booking_id": booking.id,
-                    "master_id": master_id,
-                    "client_id": client_id,
-                },
-            )
+        logger.info(
+            "booking.created",
+            extra={
+                "booking_id": booking.id,
+                "master_id": master_id,
+                "client_id": client_id,
+            },
+        )
 
     await cleanup_messages(state, callback.bot)
     await state.clear()

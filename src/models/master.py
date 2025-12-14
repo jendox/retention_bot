@@ -47,7 +47,10 @@ class Master(Base):
     timezone: Mapped[Timezone] = mapped_column(timezone_enum, default=Timezone.EUROPE_MINSK, nullable=False)
 
     clients: Mapped[list[Client]] = relationship(
-        "Client", secondary="master_clients", back_populates="masters",
+        "Client",
+        secondary="master_clients",
+        back_populates="masters",
+        order_by="Client.name",
     )
     bookings: Mapped[list[Booking]] = relationship(
         "Booking", back_populates="master", cascade="all, delete-orphan",

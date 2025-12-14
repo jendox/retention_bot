@@ -150,6 +150,7 @@ async def master_add_booking(message: Message, state: FSMContext) -> None:
 @router.message(UserRole(ActiveRole.MASTER), F.text == "📅 Расписание")
 async def master_schedule_entry(message: Message) -> None:
     await master_schedule(message)
+    await message.delete()
 
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == "⚙️ Настройки")

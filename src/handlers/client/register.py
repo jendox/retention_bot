@@ -51,30 +51,29 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
 
 async def _get_valid_invite(invite_link: str, message: Message) -> Invite | None:
     token = invite_link.removeprefix("c_")
-    async with session_local() as session:
-        async with session.begin():
-            repo = InviteRepository(session)
-            try:
-                invite = await repo.get_by_token(token)
-            except InviteNotFound:
-                await message.answer(
-                    "Похоже, эта ссылка недействительна 😕\n"
-                    "Возможно, она устарела или была отправлена с ошибкой.\n\n"
-                    "Попроси мастера прислать новую ссылку ✨",
-                )
-                return None
+    async with active_session() as session:
+        repo = InviteRepository(session)
+        try:
+            invite = await repo.get_by_token(token)
+        except InviteNotFound:
+            await message.answer(
+                "Похоже, эта ссылка недействительна 😕\n"
+                "Возможно, она устарела или была отправлена с ошибкой.\n\n"
+                "Попроси мастера прислать новую ссылку ✨",
+            )
+            return None
 
-            if not invite.is_invite_valid():
-                await message.answer(
-                    "Эта ссылка на регистрацию больше не активна 😕\n"
-                    "Она могла истечь или быть использована ранее.\n\n"
-                    "Попроси мастера отправить новую ссылку ✨",
-                )
-                return None
+        if not invite.is_invite_valid():
+            await message.answer(
+                "Эта ссылка на регистрацию больше не активна 😕\n"
+                "Она могла истечь или быть использована ранее.\n\n"
+                "Попроси мастера отправить новую ссылку ✨",
+            )
+            return None
 
-            await repo.increment_used_count_if_valid(token)
+        await repo.increment_used_count_if_valid(token)
 
-            return invite
+        return invite
 
 
 async def _check_if_master(telegram_id: int) -> bool:

@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from src.core.sa import session_local
+from src.core.sa import active_session
 from src.use_cases.create_client_invite import CreateClientInvite
 from src.utils import answer_tracked, cleanup_messages
 
@@ -84,10 +84,9 @@ def render_invite_message(
 
 async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
     telegram_id = callback.from_user.id
-    async with session_local() as session:
-        async with session.begin():
-            use_case = CreateClientInvite(session)
-            result = await use_case.execute_for_telegram(master_telegram_id=telegram_id)
+    async with active_session() as session:
+        use_case = CreateClientInvite(session)
+        result = await use_case.execute_for_telegram(master_telegram_id=telegram_id)
 
     await state.update_data(
         invite_link=result.link,

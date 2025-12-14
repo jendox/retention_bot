@@ -51,7 +51,10 @@ class MasterRepository(BaseRepository):
             raise MasterNotFound(f"Master id={master_id} not found.")
         return MasterWithClients.from_db_entity(entity)
 
-    async def get_with_clients_by_telegram_id(self, telegram_id: int) -> MasterWithClients:
+    async def get_with_clients_by_telegram_id(
+        self,
+        telegram_id: int,
+    ) -> MasterWithClients:
         stmt = (
             select(MasterEntity)
             .where(MasterEntity.telegram_id == telegram_id)

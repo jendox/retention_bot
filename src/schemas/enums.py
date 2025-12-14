@@ -53,6 +53,26 @@ class BookingStatus(StrEnum):
         return {cls.PENDING, cls.CONFIRMED, cls.DECLINED, cls.CANCELLED}
 
 
+BOOKING_STATUS_MAP: dict[BookingStatus, str] = {
+    BookingStatus.PENDING: "Ожидает подтверждения",
+    BookingStatus.CONFIRMED: "Подтверждена",
+    BookingStatus.DECLINED: "Отклонена",
+    BookingStatus.CANCELLED: "Отменена",
+    BookingStatus.COMPLETED: "Завершена",
+}
+
+
+def status_badge(status: BookingStatus) -> str:
+    badges = {
+        BookingStatus.PENDING: "⏳",
+        BookingStatus.CONFIRMED: "✅",
+        BookingStatus.DECLINED: "❌",
+        BookingStatus.CANCELLED: "🚫",
+        BookingStatus.COMPLETED: "🟢",
+    }
+    return badges.get(status, "")
+
+
 class InviteType(StrEnum):
     MASTER = "master"
     CLIENT = "client"

@@ -1,17 +1,18 @@
 import logging
 from datetime import UTC, datetime
+from textwrap import dedent
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from src.core.sa import session_local
+from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone
 from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
 from src.repositories import ClientNotFound, ClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
-from src.schemas.enums import BookingStatus, Timezone
+from src.schemas.enums import BookingStatus, Timezone, status_badge, BOOKING_STATUS_MAP
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -46,15 +47,14 @@ async def _list_bookings(
 ) -> None:
     for booking in bookings:
         slot_client = to_zone(booking.start_at, client_timezone)
-        dt_str = slot_client.strftime("%d.%m.%Y %H:%M")
-
-        status_label = "⏳ ожидает подтверждения" if booking.status == BookingStatus.PENDING \
-            else "✅ подтверждена"
-        text = (
-            f"<b>{booking.master.name}</b>\n"
-            f"📅 {dt_str}\n"
-            f"🔖 {status_label}"
-        )
+        badge = status_badge(booking.status)
+        text = dedent(f"""
+            <b>{booking.master.name}</b>
+            
+            {badge} {BOOKING_STATUS_MAP[booking.status]}
+            📅 {slot_client:%d.%m.%Y}
+            ⏰ {slot_client:%H:%M}
+        """).strip()
 
         can_cancel = booking.start_at > datetime.now(UTC)
         reply_markup = build_booking_cancel_keyboard(booking.id) if can_cancel else None
@@ -103,30 +103,29 @@ async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
 
     telegram_id = callback.from_user.id
 
-    async with session_local() as session:
-        async with session.begin():
-            client_repo = ClientRepository(session)
-            booking_repo = BookingRepository(session)
+    async with active_session() as session:
+        client_repo = ClientRepository(session)
+        booking_repo = BookingRepository(session)
 
-            client = await client_repo.get_by_telegram_id(telegram_id)
-            try:
-                booking = await booking_repo.get_for_review(booking_id)
-            except BookingNotFound:
-                await callback.answer(
-                    text="Запись не найдена или уже удалена.",
-                    show_alert=True,
-                )
-                return
-
-            # безопасность: клиент может отменять только свою запись
-            if booking.client.id != client.id:
-                await callback.answer("Это не ваша запись.", show_alert=True)
-                return
-
-            cancelled = await booking_repo.cancel_by_client(
-                booking_id=booking_id,
-                client_id=client.id,
+        client = await client_repo.get_by_telegram_id(telegram_id)
+        try:
+            booking = await booking_repo.get_for_review(booking_id)
+        except BookingNotFound:
+            await callback.answer(
+                text="Запись не найдена или уже удалена.",
+                show_alert=True,
             )
+            return
+
+        # безопасность: клиент может отменять только свою запись
+        if booking.client.id != client.id:
+            await callback.answer("Это не ваша запись.", show_alert=True)
+            return
+
+        cancelled = await booking_repo.cancel_by_client(
+            booking_id=booking_id,
+            client_id=client.id,
+        )
 
     if not cancelled:
         await callback.answer(

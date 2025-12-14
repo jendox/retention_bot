@@ -4,7 +4,7 @@ from datetime import UTC
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from src.core.sa import session_local
+from src.core.sa import active_session
 from src.datetime_utils import to_zone
 from src.repositories import (
     BookingRepository,
@@ -32,9 +32,7 @@ def _parse_review_callback(data: str) -> tuple[int, str] | None:
     return booking_id, action
 
 
-@router.callback_query(
-    F.data.startswith("m:booking:"),
-)
+@router.callback_query(F.data.startswith("m:booking:"))
 async def master_review_booking(callback: CallbackQuery) -> None:
     parsed = _parse_review_callback(callback.data or "")
     if parsed is None:
@@ -44,24 +42,23 @@ async def master_review_booking(callback: CallbackQuery) -> None:
     booking_id, action = parsed
     master_telegram_id = callback.from_user.id
 
-    async with session_local() as session:
-        async with session.begin():
-            repo = BookingRepository(session)
+    async with active_session() as session:
+        repo = BookingRepository(session)
 
-            booking = await repo.get_for_review(booking_id)
+        booking = await repo.get_for_review(booking_id)
 
-            # Безопасность: мастер может подтверждать только свои записи
-            if booking.master.telegram_id != master_telegram_id:
-                await callback.answer("Это не твоя запись.", show_alert=True)
-                return
+        # Безопасность: мастер может подтверждать только свои записи
+        if booking.master.telegram_id != master_telegram_id:
+            await callback.answer("Это не твоя запись.", show_alert=True)
+            return
 
-            # Не даём обработать повторно
-            if booking.status != BookingStatus.PENDING:
-                await callback.answer("Эта запись уже обработана.", show_alert=True)
-                return
+        # Не даём обработать повторно
+        if booking.status != BookingStatus.PENDING:
+            await callback.answer("Эта запись уже обработана.", show_alert=True)
+            return
 
-            new_status = BookingStatus.CONFIRMED if action == "confirm" else BookingStatus.DECLINED
-            await repo.set_status(booking_id, new_status)
+        new_status = BookingStatus.CONFIRMED if action == "confirm" else BookingStatus.DECLINED
+        await repo.set_status(booking_id, new_status)
 
     await callback.answer("Готово ✅")
 
