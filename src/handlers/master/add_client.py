@@ -54,14 +54,13 @@ async def _create_client(master_id: int, name: str, phone: str) -> int:
         return client.id
 
 
-async def start_add_client(message: Message, state: FSMContext) -> None:
-    await track_message(state, message, bucket=ADD_CLIENT_BUCKET)
+async def start_add_client(callback: CallbackQuery, state: FSMContext) -> None:
     logger.info(
         "master.add_client.start",
-        extra={"telegram_id": message.from_user.id if message.from_user else None},
+        extra={"telegram_id": callback.from_user.id if callback.from_user else None},
     )
     await answer_tracked(
-        message,
+        callback.message,
         state,
         text="Добавим клиента ✍️\n\nКак зовут клиента?",
         bucket=ADD_CLIENT_BUCKET,

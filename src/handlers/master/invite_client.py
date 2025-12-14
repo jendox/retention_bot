@@ -82,10 +82,8 @@ def render_invite_message(
     )
 
 
-async def start_invite_client(message: Message, state: FSMContext) -> None:
-    await track_message(state, message, bucket=INVITE_CLIENT_BUCKET)
-
-    telegram_id = message.from_user.id
+async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
+    telegram_id = callback.from_user.id
     async with session_local() as session:
         async with session.begin():
             use_case = CreateClientInvite(session)
@@ -97,7 +95,7 @@ async def start_invite_client(message: Message, state: FSMContext) -> None:
     )
 
     await answer_tracked(
-        message,
+        callback.message,
         state,
         text="Готово ✅ Ссылка для клиента создана.\n\n"
              "Что отправить клиенту?",

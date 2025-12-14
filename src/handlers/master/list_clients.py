@@ -89,12 +89,12 @@ def _build_clients_pagination_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-async def start_clients_entry(message: Message, state: FSMContext) -> None:
-    telegram_id = message.from_user.id
+async def start_clients_entry(callback: CallbackQuery) -> None:
+    telegram_id = callback.from_user.id
     all_clients = await _fetch_master_clients(telegram_id)
 
     if not all_clients:
-        await message.answer(
+        await callback.message.answer(
             text="У тебя пока нет клиентов 👀\n\n"
                  "Пригласи клиента по ссылке или добавь вручную, и они появятся здесь.",
         )
@@ -110,8 +110,7 @@ async def start_clients_entry(message: Message, state: FSMContext) -> None:
     text = _build_clients_page_text(clients_page, page, total_pages)
     keyboard = _build_clients_pagination_keyboard(page, total_pages)
 
-    await message.answer(text=text, reply_markup=keyboard)
-    await message.delete()
+    await callback.message.answer(text=text, reply_markup=keyboard)
 
 
 @router.callback_query(F.data.startswith(CLIENTS_PAGE_PREFIX))

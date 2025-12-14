@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     KeyboardButton,
     Message,
-    ReplyKeyboardMarkup, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
 )
 
 from src.filters.user_role import UserRole
@@ -33,10 +33,6 @@ MASTER_MAIN_MENU_TEXT = dedent("""
 def build_master_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
     rows = [
         [
-            KeyboardButton(text="📨 Пригласить клиента"),
-            KeyboardButton(text="➕ Добавить клиента"),
-        ],
-        [
             KeyboardButton(text="🗓 Добавить запись"),
             KeyboardButton(text="📅 Расписание"),
         ],
@@ -54,6 +50,24 @@ def build_master_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
     )
 
 
+def build_master_clients_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📋 Список", callback_data="m:clients:list"),
+                InlineKeyboardButton(text="➕ Добавить", callback_data="m:clients:add"),
+            ],
+            [
+                InlineKeyboardButton(text="🔎 Найти/Изменить", callback_data="m:clients:search"),
+                InlineKeyboardButton(text="📨 Пригласить", callback_data="m:clients:invite"),
+            ],
+            [
+                InlineKeyboardButton(text="◀️ Назад", callback_data="m:clients:back"),
+            ],
+        ],
+    )
+
+
 async def send_master_main_menu(
     message: Message,
     show_switch_role: bool = False,
@@ -62,6 +76,44 @@ async def send_master_main_menu(
         text=MASTER_MAIN_MENU_TEXT,
         reply_markup=build_master_main_keyboard(show_switch_role),
     )
+
+
+@router.message(F.text == "👥 Клиенты")
+async def master_clients(message: Message, state: FSMContext) -> None:
+    await message.answer(
+        text="Выбери действие:",
+        reply_markup=build_master_clients_keyboard(),
+    )
+    await message.delete()
+
+
+@router.callback_query(F.data == "m:clients:list")
+async def master_clients_list(callback: CallbackQuery) -> None:
+    await callback.answer()
+    await start_clients_entry(callback)
+
+
+@router.callback_query(F.data == "m:clients:add")
+async def master_add_client(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await start_add_client(callback, state)
+
+
+@router.callback_query(F.data == "m:clients:search")
+async def master_search_client(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer("Здесь будет добавлен поиск и редактирование клиентов.")
+
+
+@router.callback_query(F.data == "m:clients:invite")
+async def master_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await start_invite_client(callback, state)
+
+
+@router.callback_query(F.data == "m:clients:back")
+async def master_back_to_main_menu(callback: CallbackQuery) -> None:
+    await callback.answer("Возвращаемся в главное меню.")
+    await callback.message.delete()
 
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == "🔄 Сменить роль")
@@ -78,24 +130,9 @@ async def master_switch_role(
     await message.delete()
 
 
-@router.message(F.text == "📨 Пригласить клиента")
-async def master_invite_client(message: Message, state: FSMContext) -> None:
-    await start_invite_client(message, state)
-
-
-@router.message(F.text == "➕ Добавить клиента")
-async def master_add_client(message: Message, state: FSMContext) -> None:
-    await start_add_client(message, state)
-
-
 @router.message(F.text == "🗓 Добавить запись")
 async def master_add_booking(message: Message, state: FSMContext) -> None:
     await start_add_booking(message, state)
-
-
-@router.message(F.text == "👥 Клиенты")
-async def master_clients_entry(message: Message, state: FSMContext) -> None:
-    await start_clients_entry(message, state)
 
 
 @router.message(F.text == "📅 Расписание")
@@ -114,3 +151,4 @@ async def master_settings(message: Message, state: FSMContext) -> None:
         state,
         text="Тут будут настройки мастера: график, таймзона, уведомления и т.д. ⚙️",
     )
+    await message.delete()
