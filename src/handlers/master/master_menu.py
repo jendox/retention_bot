@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
+    ReplyKeyboardMarkup, InlineKeyboardMarkup,
 )
 
 from src.filters.user_role import UserRole

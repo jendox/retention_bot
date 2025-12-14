@@ -16,7 +16,7 @@ from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, MasterWithClients
 from src.schemas.enums import BookingStatus, Timezone
 from src.use_cases.master_free_slots import GetMasterFreeSlots
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
+from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, styled_text
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -49,7 +49,7 @@ def _build_clients_keyboard(clients: list) -> InlineKeyboardMarkup:
         if client.phone:
             label += f" ({client.phone})"
         if client.telegram_id is None:
-            label += " · офлайн"
+            label += f" · 🔴 оффлайн"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{client.id}")])
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -84,6 +84,11 @@ async def _load_master_with_clients(telegram_id: int) -> MasterWithClients:
 
 
 async def start_add_booking(message: Message, state: FSMContext) -> None:
+    logger.info(
+        "master.add_booking.start",
+        extra={"telegram_id": message.from_user.id if message.from_user else None},
+    )
+    await track_message(state, message, bucket=ADD_BOOKING_BUCKET)
     await answer_tracked(
         message,
         state,
@@ -98,6 +103,10 @@ async def search_client(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=ADD_BOOKING_BUCKET)
     query = (message.text or "").strip()
     if not query:
+        logger.debug(
+            "master.add_booking.empty_query",
+            extra={"telegram_id": message.from_user.id if message.from_user else None},
+        )
         await answer_tracked(
             message,
             state,
@@ -109,6 +118,13 @@ async def search_client(message: Message, state: FSMContext) -> None:
     master = await _load_master_with_clients(message.from_user.id)
     matches = _filter_clients(master.clients, query)
     if not matches:
+        logger.info(
+            "master.add_booking.no_matches",
+            extra={
+                "telegram_id": message.from_user.id if message.from_user else None,
+                "query": query,
+            },
+        )
         await answer_tracked(
             message,
             state,
@@ -146,15 +162,27 @@ async def choose_client(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         client_id = int(client_id_str)
     except ValueError:
+        logger.warning(
+            "master.add_booking.client_parse_error",
+            extra={"telegram_id": callback.from_user.id if callback.from_user else None, "raw": client_id_str},
+        )
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         return
 
     data = await state.get_data()
     client = _get_selected_client(data, client_id)
     if client is None:
+        logger.warning(
+            "master.add_booking.client_not_in_state",
+            extra={"telegram_id": callback.from_user.id if callback.from_user else None, "client_id": client_id},
+        )
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         return
 
+    logger.info(
+        "master.add_booking.client_selected",
+        extra={"telegram_id": callback.from_user.id if callback.from_user else None, "client_id": client_id},
+    )
     await state.update_data(client=client)
 
     calendar = SimpleCalendar()
@@ -180,6 +208,10 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     master_id = data.get("master_id")
     master_timezone = data.get("master_timezone")
     if master_id is None or master_timezone is None:
+        logger.warning(
+            "master.add_booking.missing_master_data",
+            extra={"telegram_id": callback.from_user.id if callback.from_user else None},
+        )
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         return
     master_tz_enum = Timezone(master_timezone)
@@ -190,6 +222,14 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
 
     slots = result.slots_utc
     if not slots:
+        logger.info(
+            "master.add_booking.no_slots",
+            extra={
+                "telegram_id": callback.from_user.id if callback.from_user else None,
+                "master_id": master_id,
+                "date": picked_date.date().isoformat(),
+            },
+        )
         await callback.message.edit_text(
             text="На этот день свободных слотов нет. Выбери другую дату.",
         )
@@ -211,12 +251,24 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         index = int(index_str)
     except ValueError:
+        logger.warning(
+            "master.add_booking.slot_parse_error",
+            extra={"telegram_id": callback.from_user.id if callback.from_user else None, "raw": index_str},
+        )
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         return
 
     data = await state.get_data()
     slots_iso: list[str] = data.get("slots", [])
     if not slots_iso or index < 0 or index >= len(slots_iso):
+        logger.warning(
+            "master.add_booking.slot_out_of_range",
+            extra={
+                "telegram_id": callback.from_user.id if callback.from_user else None,
+                "index": index,
+                "slots_len": len(slots_iso),
+            },
+        )
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         return
 
@@ -251,6 +303,10 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
     master_timezone = data.get("master_timezone")
     master_tz_enum = Timezone(master_timezone) if master_timezone else None
     if slot_iso is None or master_id is None or not client or master_slot_size is None or master_tz_enum is None:
+        logger.warning(
+            "master.add_booking.missing_confirm_data",
+            extra={"telegram_id": callback.from_user.id if callback.from_user else None},
+        )
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         return
 
@@ -267,11 +323,20 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
         )
         booking = await booking_repo.create(booking_create)
 
+    logger.info(
+        "master.add_booking.created",
+        extra={
+            "master_id": master_id,
+            "client_id": client["id"],
+            "booking_id": booking.id,
+            "slot_utc": slot_dt.isoformat(),
+        },
+    )
     client_has_tg = client.get("telegram_id") is not None
 
-    await callback.message.edit_text(
-        "Запись создана ✅" + (" (офлайн)" if not client_has_tg else ""),
-    )
+    text = "✅ Запись создана" + (" (🔴 оффлайн)" if not client_has_tg else "")
+
+    await callback.answer(text=text, show_alert=True)
 
     if client_has_tg:
         client_tz_val = client.get("timezone")
@@ -292,6 +357,6 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "m:add_booking:cancel")
 async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Действие отменено")
+    await callback.answer("❌ Создание записи отменено", show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
     await state.clear()

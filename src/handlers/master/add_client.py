@@ -9,7 +9,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from src.core.sa import active_session, session_local
 from src.repositories import ClientRepository, MasterRepository
 from src.schemas import ClientCreate
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
+from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone, \
+    styled_text
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -168,14 +169,13 @@ async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) 
         await state.clear()
         return
 
-    await callback.answer()
-
     async with session_local() as session:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(callback.from_user.id)
 
     await _create_client(master.id, name, phone)
-    await callback.message.answer("Готово! Клиент добавлен (офлайн) ✅")
+    text = f"✅ Готово! Клиент добавлен (🔴 оффлайн)"
+    await callback.answer(text=text, show_alert=True)
 
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()

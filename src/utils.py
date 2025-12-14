@@ -153,3 +153,23 @@ def validate_phone(value: str, region: str = "BY") -> str | None:
         return phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)
     except (NumberParseException, ValueError):
         return None
+
+
+def styled_text(text: str, color: str = None, bold: bool = False, italic: bool = False) -> str:
+    """Форматирование текста с разными стилями"""
+    styles = []
+
+    if color:
+        styles.append(f"color: {color}")
+
+    if bold:
+        styles.append("font-weight: bold")
+
+    if italic:
+        styles.append("font-style: italic")
+
+    if styles:
+        style_attr = " ".join(styles)
+        return f'<span style="{style_attr}">{text}</span>'
+
+    return text
