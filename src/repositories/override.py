@@ -13,8 +13,8 @@ class WorkdayOverrideRepository(BaseRepository):
             select(WorkdayOverrideEntity)
             .where(WorkdayOverrideEntity.master_id == master_id)
         )
-        entities = await self._session.scalars(stmt)
-        return list(entities) if entities else []
+        result = await self._session.execute(stmt)
+        return [WorkdayOverride.model_validate(entity) for entity in result.scalars().all()]
 
     async def create(self, override: WorkdayOverrideCreate) -> WorkdayOverride:
         entity = override.to_db_entity()

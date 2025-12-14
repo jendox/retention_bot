@@ -54,11 +54,11 @@ class InviteRepository(BaseRepository):
             )
         )
         result = await self._session.execute(stmt)
-        return result.rowcount > 0
+        return (result.rowcount or 0) > 0
 
     async def delete_expired(self) -> int:
         now = datetime.now(UTC)
         stmt = delete(InviteEntity).where(InviteEntity.expires_at <= now)
         result = await self._session.execute(stmt)
 
-        return result.row_count or 0
+        return result.rowcount or 0

@@ -154,9 +154,16 @@ def _build_bookings_list_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _build_booking_card_keyboard(*, booking_id: int, scope: Scope, page: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _build_booking_card_keyboard(
+    *,
+    booking_id: int,
+    status: BookingStatus,
+    scope: Scope,
+    page: int,
+) -> InlineKeyboardMarkup:
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    if status in BookingStatus.active():
+        inline_keyboard.append(
             [
                 InlineKeyboardButton(
                     text="❌ Отменить",
@@ -167,14 +174,16 @@ def _build_booking_card_keyboard(*, booking_id: int, scope: Scope, page: int) ->
                     callback_data=cb_action("reschedule", booking_id, scope, page),
                 ),
             ],
-            [
-                InlineKeyboardButton(
-                    text="◀️ Назад к расписанию",
-                    callback_data=cb_schedule(scope, page),
-                ),
-            ],
+        )
+    inline_keyboard.append(
+        [
+            InlineKeyboardButton(
+                text="◀️ Назад к расписанию",
+                callback_data=cb_schedule(scope, page),
+            ),
         ],
     )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
 # ---------- helpers ----------

@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
+from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone
@@ -321,7 +322,15 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
             duration_min=master_slot_size,
             status=BookingStatus.CONFIRMED,
         )
-        booking = await booking_repo.create(booking_create)
+        try:
+            booking = await booking_repo.create(booking_create)
+        except IntegrityError:
+            await callback.answer(
+                text="Упс — этот слот только что заняли 😕\n"
+                     "Пожалуйста, выбери другое время.",
+                show_alert=True,
+            )
+            return
 
     logger.info(
         "master.add_booking.created",

@@ -282,8 +282,6 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer("Что-то пошло не так, попробуй ещё раз", show_alert=True)
         return
 
-    await callback.answer()
-
     slot_dt_utc = datetime.fromisoformat(slots_iso[index])
 
     async with active_session() as session:
@@ -301,9 +299,10 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         try:
             booking = await booking_repo.create(booking_create)
         except IntegrityError:
-            await callback.message.answer(
-                "Упс — этот слот только что заняли 😕\n"
-                "Пожалуйста, выбери другое время.",
+            await callback.answer(
+                text="Упс — этот слот только что заняли 😕\n"
+                     "Пожалуйста, выбери другое время.",
+                show_alert=True,
             )
             return
 
@@ -315,6 +314,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
                 "client_id": client_id,
             },
         )
+    await callback.answer()
 
     await cleanup_messages(state, callback.bot)
     await state.clear()
