@@ -3,8 +3,7 @@ from collections.abc import Sequence
 from math import ceil
 
 from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import session_local
 from src.repositories import MasterNotFound, MasterRepository

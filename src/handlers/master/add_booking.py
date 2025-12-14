@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
-from src.core.sa import session_local, active_session
+from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository

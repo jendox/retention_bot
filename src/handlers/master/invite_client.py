@@ -5,11 +5,11 @@ from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import session_local
 from src.use_cases.create_client_invite import CreateClientInvite
-from src.utils import answer_tracked, cleanup_messages, track_message
+from src.utils import answer_tracked, cleanup_messages
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -114,7 +114,7 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
         await cleanup_messages(state, callback.bot, bucket=INVITE_CLIENT_BUCKET)
         await state.set_state(None)
         await callback.answer(
-            text="Окей, отменил. Если нужно — нажми «📨 Пригласить клиента» ещё раз 🙂",
+            text="Окей, отменил. Если нужно — нажми «📨 Пригласить» ещё раз 🙂",
             show_alert=True,
         )
         return

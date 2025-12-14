@@ -48,6 +48,10 @@ class BookingStatus(StrEnum):
     def active(cls) -> set["BookingStatus"]:
         return {cls.PENDING, cls.CONFIRMED}
 
+    @classmethod
+    def without_completed(cls) -> set["BookingStatus"]:
+        return {cls.PENDING, cls.CONFIRMED, cls.DECLINED, cls.CANCELLED}
+
 
 class InviteType(StrEnum):
     MASTER = "master"

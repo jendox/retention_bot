@@ -4,9 +4,12 @@ from textwrap import dedent
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
-    ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
+    ReplyKeyboardMarkup,
 )
 
 from src.filters.user_role import UserRole
@@ -14,6 +17,7 @@ from src.handlers.master.add_booking import start_add_booking
 from src.handlers.master.add_client import start_add_client
 from src.handlers.master.invite_client import start_invite_client
 from src.handlers.master.list_clients import start_clients_entry
+from src.handlers.master.schedule import master_schedule
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked
 
@@ -28,6 +32,14 @@ MASTER_MAIN_MENU_TEXT = dedent("""
     • смотреть расписание
     • управлять настройками
 """).strip()
+
+CLIENTS_MENU_CB = {
+    "list": "m:clients:list",
+    "invite": "m:clients:invite",
+    "add": "m:clients:add",
+    "search": "m:clients:search",
+    "back": "m:clients:back",
+}
 
 
 def build_master_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
@@ -54,15 +66,15 @@ def build_master_clients_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="📋 Список", callback_data="m:clients:list"),
-                InlineKeyboardButton(text="➕ Добавить", callback_data="m:clients:add"),
+                InlineKeyboardButton(text="📋 Список", callback_data=CLIENTS_MENU_CB["list"]),
+                InlineKeyboardButton(text="➕ Добавить", callback_data=CLIENTS_MENU_CB["add"]),
             ],
             [
-                InlineKeyboardButton(text="🔎 Найти/Изменить", callback_data="m:clients:search"),
-                InlineKeyboardButton(text="📨 Пригласить", callback_data="m:clients:invite"),
+                InlineKeyboardButton(text="🔎 Найти/Изменить", callback_data=CLIENTS_MENU_CB["search"]),
+                InlineKeyboardButton(text="📨 Пригласить", callback_data=CLIENTS_MENU_CB["invite"]),
             ],
             [
-                InlineKeyboardButton(text="◀️ Назад", callback_data="m:clients:back"),
+                InlineKeyboardButton(text="◀️ Назад", callback_data=CLIENTS_MENU_CB["back"]),
             ],
         ],
     )
@@ -87,30 +99,30 @@ async def master_clients(message: Message, state: FSMContext) -> None:
     await message.delete()
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:list")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["list"])
 async def master_clients_list(callback: CallbackQuery) -> None:
     await callback.answer()
     await start_clients_entry(callback)
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:add")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["add"])
 async def master_add_client(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await start_add_client(callback, state)
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:search")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["search"])
 async def master_search_client(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Здесь будет добавлен поиск и редактирование клиентов.")
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:invite")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["invite"])
 async def master_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await start_invite_client(callback, state)
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:back")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["back"])
 async def master_back_to_main_menu(callback: CallbackQuery) -> None:
     await callback.answer("Возвращаемся в главное меню.")
     await callback.message.delete()
@@ -136,12 +148,8 @@ async def master_add_booking(message: Message, state: FSMContext) -> None:
 
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == "📅 Расписание")
-async def master_schedule(message: Message, state: FSMContext) -> None:
-    await answer_tracked(
-        message,
-        state,
-        "Здесь в будущем покажем твое расписание на день / неделю 🗓",
-    )
+async def master_schedule_entry(message: Message) -> None:
+    await master_schedule(message)
 
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == "⚙️ Настройки")

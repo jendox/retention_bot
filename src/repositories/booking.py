@@ -1,5 +1,6 @@
 from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
+from typing import Literal, overload
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
@@ -35,6 +36,7 @@ class BookingRepository(BaseRepository):
         await self._session.refresh(entity)
         return Booking.from_db_entity(entity)
 
+    @overload
     async def get_for_master_in_range(
         self,
         *,
@@ -42,12 +44,42 @@ class BookingRepository(BaseRepository):
         start_at_utc: datetime,
         end_at_utc: datetime,
         statuses: set[BookingStatus] | None = None,
+        load_clients: Literal[True],
+    ) -> list[BookingForReview]:
+        ...
+
+    @overload
+    async def get_for_master_in_range(
+        self,
+        *,
+        master_id: int,
+        start_at_utc: datetime,
+        end_at_utc: datetime,
+        statuses: set[BookingStatus] | None = None,
+        load_clients: Literal[False] = False,
     ) -> list[Booking]:
+        ...
+
+    async def get_for_master_in_range(
+        self,
+        *,
+        master_id: int,
+        start_at_utc: datetime,
+        end_at_utc: datetime,
+        statuses: set[BookingStatus] | None = None,
+        load_clients: bool = False,
+    ):
         stmt = select(BookingEntity).where(
             BookingEntity.master_id == master_id,
             BookingEntity.start_at >= start_at_utc,
             BookingEntity.start_at < end_at_utc,
         )
+
+        if load_clients:
+            stmt = stmt.options(
+                selectinload(BookingEntity.client),
+                selectinload(BookingEntity.master),
+            )
 
         if statuses:
             stmt = stmt.where(BookingEntity.status.in_(statuses))
@@ -55,7 +87,11 @@ class BookingRepository(BaseRepository):
         stmt = stmt.order_by(BookingEntity.start_at.asc())
 
         result = await self._session.execute(stmt)
-        return [Booking.model_validate(entity) for entity in result.scalars().all()]
+        entities = result.scalars().all()
+
+        if load_clients:
+            return [BookingForReview.model_validate(entity) for entity in entities]
+        return [Booking.model_validate(entity) for entity in entities]
 
     @staticmethod
     def _day_bounds_utc(day: date, *, delta: int = 1) -> tuple[datetime, datetime]:
@@ -69,7 +105,7 @@ class BookingRepository(BaseRepository):
         master_id: int,
         day: date,
         statuses: set[BookingStatus] | None = None,
-    ) -> list[Booking]:
+    ) -> list[BookingForReview]:
         start, end = self._day_bounds_utc(day)
 
         return await self.get_for_master_in_range(
@@ -77,6 +113,7 @@ class BookingRepository(BaseRepository):
             start_at_utc=start,
             end_at_utc=end,
             statuses=statuses,
+            load_clients=True,
         )
 
     async def get_for_master_on_week(
@@ -85,13 +122,14 @@ class BookingRepository(BaseRepository):
         master_id: int,
         week_start: date,
         statuses: set[BookingStatus] | None = None,
-    ) -> list[Booking]:
+    ) -> list[BookingForReview]:
         start, end = self._day_bounds_utc(week_start, delta=7)
         return await self.get_for_master_in_range(
             master_id=master_id,
             start_at_utc=start,
             end_at_utc=end,
             statuses=statuses,
+            load_clients=True,
         )
 
     async def get_for_master_on_month(
@@ -101,7 +139,7 @@ class BookingRepository(BaseRepository):
         year: int,
         month: int,
         statuses: set[BookingStatus] | None = None,
-    ) -> list[Booking]:
+    ) -> list[BookingForReview]:
         start = datetime(year, month, 1, tzinfo=UTC)
         days_in_month = monthrange(year, month)[1]
         end = start + timedelta(days=days_in_month)
@@ -111,6 +149,7 @@ class BookingRepository(BaseRepository):
             start_at_utc=start,
             end_at_utc=end,
             statuses=statuses,
+            load_clients=True,
         )
 
     async def get_for_review(self, booking_id: int) -> BookingForReview:
