@@ -57,7 +57,7 @@ TITLE_MAP: dict[Scope, str] = {
 # ---------- callback builders (short + stable) ----------
 
 def cb_schedule(scope: Scope, page: int) -> str:
-    # m:sch:<scope>:p:<page>
+    # m:s:<scope>:p:<page>
     return f"m:s:{scope.value}:p:{page}"
 
 
@@ -67,7 +67,7 @@ def cb_open_booking(booking_id: int, scope: Scope, page: int) -> str:
 
 
 def cb_action(action: str, booking_id: int, scope: Scope, page: int) -> str:
-    # m:act:<action>:<booking_id>:s:<scope>:p:<page>
+    # m:a:<action>:<booking_id>:s:<scope>:p:<page>
     return f"m:a:{action}:{booking_id}:s:{scope.value}:p:{page}"
 
 

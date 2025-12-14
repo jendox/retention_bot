@@ -12,7 +12,7 @@ from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
 from src.repositories import ClientNotFound, ClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
-from src.schemas.enums import BookingStatus, Timezone, status_badge, BOOKING_STATUS_MAP
+from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, status_badge
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
