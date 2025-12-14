@@ -78,7 +78,7 @@ async def send_master_main_menu(
     )
 
 
-@router.message(F.text == "👥 Клиенты")
+@router.message(UserRole(ActiveRole.MASTER), F.text == "👥 Клиенты")
 async def master_clients(message: Message, state: FSMContext) -> None:
     await message.answer(
         text="Выбери действие:",
@@ -87,30 +87,30 @@ async def master_clients(message: Message, state: FSMContext) -> None:
     await message.delete()
 
 
-@router.callback_query(F.data == "m:clients:list")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:list")
 async def master_clients_list(callback: CallbackQuery) -> None:
     await callback.answer()
     await start_clients_entry(callback)
 
 
-@router.callback_query(F.data == "m:clients:add")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:add")
 async def master_add_client(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await start_add_client(callback, state)
 
 
-@router.callback_query(F.data == "m:clients:search")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:search")
 async def master_search_client(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Здесь будет добавлен поиск и редактирование клиентов.")
 
 
-@router.callback_query(F.data == "m:clients:invite")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:invite")
 async def master_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await start_invite_client(callback, state)
 
 
-@router.callback_query(F.data == "m:clients:back")
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:clients:back")
 async def master_back_to_main_menu(callback: CallbackQuery) -> None:
     await callback.answer("Возвращаемся в главное меню.")
     await callback.message.delete()
@@ -130,12 +130,12 @@ async def master_switch_role(
     await message.delete()
 
 
-@router.message(F.text == "🗓 Добавить запись")
+@router.message(UserRole(ActiveRole.MASTER), F.text == "🗓 Добавить запись")
 async def master_add_booking(message: Message, state: FSMContext) -> None:
     await start_add_booking(message, state)
 
 
-@router.message(F.text == "📅 Расписание")
+@router.message(UserRole(ActiveRole.MASTER), F.text == "📅 Расписание")
 async def master_schedule(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,

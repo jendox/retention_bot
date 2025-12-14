@@ -16,7 +16,7 @@ from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, MasterWithClients
 from src.schemas.enums import BookingStatus, Timezone
 from src.use_cases.master_free_slots import GetMasterFreeSlots
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, styled_text
+from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)

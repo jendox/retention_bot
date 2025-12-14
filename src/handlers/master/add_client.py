@@ -9,8 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from src.core.sa import active_session, session_local
 from src.repositories import ClientRepository, MasterRepository
 from src.schemas import ClientCreate
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone, \
-    styled_text
+from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
