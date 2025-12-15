@@ -169,4 +169,5 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
     )
 
     await callback.message.answer(text)
+    await cleanup_messages(state, callback.bot, bucket=INVITE_CLIENT_BUCKET)
     await state.clear()

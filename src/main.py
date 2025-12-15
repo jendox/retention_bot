@@ -7,7 +7,8 @@ from redis.asyncio import Redis
 
 from src.core.sa import Database
 from src.handlers import routers
-from src.middlewares import UserContextMiddleware
+from src.middlewares import LoggingMiddleware, UserContextMiddleware
+from src.observability import setup_logging
 from src.settings import AppSettings, app_settings
 from src.user_context import UserContextStorage
 
@@ -17,6 +18,7 @@ logger = logging.getLogger("retention_bot")
 def build_dispatcher(redis: Redis) -> Dispatcher:
     dp = Dispatcher()
     user_ctx_storage = UserContextStorage(redis)
+    dp.update.outer_middleware(LoggingMiddleware())
     dp.update.outer_middleware(UserContextMiddleware(user_ctx_storage))
     dp.include_routers(*routers)
 
@@ -27,10 +29,7 @@ async def main():
     settings = AppSettings.load()
     app_settings.set(settings)
     debug = settings.debug
-    logging.basicConfig(
-        level=logging.DEBUG if debug else logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    setup_logging(debug=debug)
     redis: Redis | None = None
 
     try:
@@ -49,7 +48,7 @@ async def main():
             await dp.start_polling(bot)
 
     except Exception as exc:
-        logger.error("app.error", exc_info=True, extra={"error": str(exc)})
+        logger.error("app.error", exc_info=True, extra={"error_type": type(exc).__name__})
     finally:
         if redis is not None:
             await redis.aclose()

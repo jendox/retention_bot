@@ -14,7 +14,7 @@ from src.repositories import ClientNotFound, ClientRepository, MasterRepository,
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
 from src.user_context import UserContextStorage
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
+from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ MASTER_REGISTRATION_BUCKET = "master_registration"
 
 class MasterRegistration(StatesGroup):
     name = State()
+    phone = State()
     work_days = State()
     work_time = State()
     slot_size = State()
@@ -124,6 +125,20 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
                     callback_data="master_reg_restart",
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data="master_reg_cancel",
+                ),
+            ],
+        ],
+    )
+
+
+def _build_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отмена", callback_data="master_reg_cancel")],
         ],
     )
 
@@ -154,6 +169,7 @@ async def start_master_registration(message: Message, state: FSMContext, token: 
              "Давай настроим твой профиль мастера в BeautyDesk.\n\n"
              "Как тебя зовут? (Например: Маша)",
         bucket=MASTER_REGISTRATION_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(MasterRegistration.name)
 
@@ -173,6 +189,7 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
             text="Я не понял имя 🤔\n"
                  "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Маша</b>",
             bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
         )
         return
 
@@ -182,6 +199,42 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
         message,
         state,
         text=f"Отлично, <b>{name}</b>! ✨\n\n"
+             "Теперь добавь номер телефона для связи (в формате <code>375291234567</code>):",
+        bucket=MASTER_REGISTRATION_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
+    )
+    await state.set_state(MasterRegistration.phone)
+
+
+@router.message(StateFilter(MasterRegistration.phone))
+async def process_master_phone(message: Message, state: FSMContext) -> None:
+    await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
+    raw_text = (message.text or "").strip()
+    phone = validate_phone(raw_text)
+    if phone is None:
+        logger.debug(
+            "master_reg.phone.invalid",
+            extra={
+                "telegram_id": message.from_user.id if message.from_user else None,
+                "raw": raw_text,
+            },
+        )
+        await answer_tracked(
+            message,
+            state,
+            text="Не смог разобрать номер 🤔\n\n"
+                 "Пожалуйста, введи реальный номер в формате <code>375291234567</code>:",
+            bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
+        )
+        return
+
+    await state.update_data(phone=phone)
+
+    await answer_tracked(
+        message,
+        state,
+        text="Принято! ✅\n\n"
              "Теперь давай настроим твои рабочие дни.\n\n"
              "<b>В какие дни недели ты работаешь?</b>\n"
              "Напиши номера дней недели:\n"
@@ -190,6 +243,7 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
              "• <code>1-5</code> — с понедельника по пятницу\n"
              "• <code>1,3,5</code> — пн, ср, пт",
         bucket=MASTER_REGISTRATION_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(MasterRegistration.work_days)
 
@@ -215,6 +269,7 @@ async def process_master_work_days(message: Message, state: FSMContext) -> None:
                  "• <code>1,3,5</code>\n\n"
                  "Где 1 — Пн, 7 — Вс.",
             bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
         )
         return
 
@@ -228,6 +283,7 @@ async def process_master_work_days(message: Message, state: FSMContext) -> None:
              "Напиши в формате <code>HH:MM-HH:MM</code>.\n\n"
              "Например: <code>10:00-19:00</code>",
         bucket=MASTER_REGISTRATION_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(MasterRegistration.work_time)
 
@@ -251,6 +307,7 @@ async def process_master_work_time(message: Message, state: FSMContext) -> None:
                  "Напиши, пожалуйста, в формате <code>HH:MM-HH:MM</code>.\n"
                  "Например: <code>10:00-19:00</code>",
             bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
         )
         return
 
@@ -265,6 +322,7 @@ async def process_master_work_time(message: Message, state: FSMContext) -> None:
              "Напиши количество минут.\n\n"
              "Например: <code>30</code>, <code>60</code> или <code>90</code>.",
         bucket=MASTER_REGISTRATION_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(MasterRegistration.slot_size)
 
@@ -287,6 +345,7 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
             text="Хмм, не похоже на подходящую длительность слота ⏱️\n\n"
                  "Напиши количество минут, например: <code>30</code>, <code>60</code> или <code>90</code>.",
             bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
         )
         return
 
@@ -296,6 +355,7 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
     text = (
         "Проверь, пожалуйста, данные 👇\n\n"
         f"<b>Имя:</b> {data['name']}\n"
+        f"<b>Телефон:</b> {data['phone']}\n"
         f"<b>Рабочие дни:</b> {', '.join(str(day + 1) for day in data['work_days'])}\n"
         f"<b>Время работы:</b> {data['start_time'].strftime('%H:%M')}–{data['end_time'].strftime('%H:%M')}\n"
         f"<b>Длительность слота:</b> {data['slot_size_min']} мин.\n\n"
@@ -339,6 +399,7 @@ async def master_reg_confirm(
     master_create = MasterCreate(
         telegram_id=telegram_id,
         name=data["name"],
+        phone=data["phone"],
         work_days=data["work_days"],
         start_time=data["start_time"],
         end_time=data["end_time"],
@@ -385,3 +446,20 @@ async def master_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
     await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
     await state.clear()
     await start_master_registration(callback.message, state, token=token)
+
+
+@router.callback_query(
+    StateFilter(
+        MasterRegistration.name,
+        MasterRegistration.phone,
+        MasterRegistration.work_days,
+        MasterRegistration.work_time,
+        MasterRegistration.slot_size,
+        MasterRegistration.confirm,
+    ),
+    F.data == "master_reg_cancel",
+)
+async def master_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer("Окей, отменил.", show_alert=True)
+    await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
+    await state.clear()

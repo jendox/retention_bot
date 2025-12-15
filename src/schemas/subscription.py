@@ -24,4 +24,3 @@ class Subscription(BaseModel):
     @classmethod
     def from_db_entity(cls, entity) -> Self:
         return cls.model_validate(entity)
-

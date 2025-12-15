@@ -5,8 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from src.models import Subscription as SubscriptionEntity
-from src.models import SubscriptionPlan
+from src.models import Subscription as SubscriptionEntity, SubscriptionPlan
 from src.repositories.base import BaseRepository
 from src.schemas import Subscription
 

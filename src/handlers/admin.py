@@ -3,13 +3,18 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 from src.core.sa import active_session, session_local
 from src.filters.admin import AdminOnly
-from src.plans import FREE_BOOKINGS_PER_MONTH_LIMIT, FREE_BOOKING_HORIZON_DAYS, FREE_CLIENTS_LIMIT, PRO_BOOKING_HORIZON_DAYS
+from src.plans import (
+    FREE_BOOKING_HORIZON_DAYS,
+    FREE_BOOKINGS_PER_MONTH_LIMIT,
+    FREE_CLIENTS_LIMIT,
+    PRO_BOOKING_HORIZON_DAYS,
+)
 from src.repositories import MasterNotFound, MasterRepository, SubscriptionRepository
 from src.settings import get_settings
 from src.use_cases.entitlements import EntitlementsService
@@ -89,7 +94,9 @@ async def grant_pro(message: Message, command: CommandObject) -> None:
 
     logger.info("admin.grant_pro", extra={"master_id": master.id, "paid_until": paid_until.isoformat()})
     await message.answer(
-        f"✅ Pro активирован\n\n<b>Мастер:</b> {master.name} ({master_telegram_id})\n<b>До:</b> {_format_dt(paid_until)}"
+        f"✅ Pro активирован\n\n"
+        f"<b>Мастер:</b> {master.name} ({master_telegram_id})\n"
+        f"<b>До:</b> {_format_dt(paid_until)}",
     )
 
 
@@ -116,11 +123,15 @@ async def revoke_pro(message: Message, command: CommandObject) -> None:
         changed = await subs_repo.revoke_pro(master.id)
 
     await message.answer(
-        "✅ Pro отключён." if changed else "ℹ️ Подписка не найдена (ничего не изменил)."
+        "✅ Pro отключён." if changed else "ℹ️ Подписка не найдена (ничего не изменил).",
     )
 
 
-@router.message(AdminOnly(), Command("plan"))
+@router.message(
+    AdminOnly(),
+    F.text.regexp(r"^/plan(?:@\w+)?\s+"),
+    Command("plan"),
+)
 async def admin_plan(message: Message, command: CommandObject) -> None:
     parts = (command.args or "").split()
     if len(parts) != 1:  # noqa: PLR2004

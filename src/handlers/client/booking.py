@@ -12,17 +12,19 @@ from sqlalchemy.exc import IntegrityError
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
 from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.repositories import ClientNotFound, ClientRepository, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, Master
 from src.schemas.enums import Timezone
-from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
+
+BOOKING_BUCKET = "client_booking"
 
 
 class ClientBooking(StatesGroup):
@@ -38,6 +40,7 @@ def build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
         rows.append([
             InlineKeyboardButton(text=master.name, callback_data=f"book:master:{master.id}"),
         ])
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -50,6 +53,7 @@ def build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=label, callback_data=f"book:slot:{index}"),
         ])
 
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -77,7 +81,7 @@ def build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMarku
 
 @router.message(F.text == "➕ Записаться")
 async def client_add_booking(message: Message, state: FSMContext) -> None:
-    await track_message(state, message)
+    await track_message(state, message, bucket=BOOKING_BUCKET)
     telegram_id = message.from_user.id
     async with session_local() as session:
         repo = ClientRepository(session)
@@ -111,6 +115,7 @@ async def client_add_booking(message: Message, state: FSMContext) -> None:
         state,
         text="Выбери мастера, к которому хочешь записаться 💇‍♀️",
         reply_markup=build_masters_keyboard(masters),
+        bucket=BOOKING_BUCKET,
     )
     await state.set_state(ClientBooking.selecting_master)
 
@@ -121,7 +126,7 @@ async def client_add_booking(message: Message, state: FSMContext) -> None:
 )
 async def booking_select_master(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await track_callback_message(state, callback)
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     _, _, master_id = callback.data.split(":")
     master_id = int(master_id)
@@ -143,6 +148,7 @@ async def start_booking_for_master(
         state,
         text="Выбери дату для записи 📅",
         reply_markup=reply_markup,
+        bucket=BOOKING_BUCKET,
     )
     await state.set_state(ClientBooking.selecting_date)
 
@@ -156,7 +162,7 @@ async def process_booking_calendar(
     callback_data: SimpleCalendarCallback,
     state: FSMContext,
 ) -> None:
-    await track_callback_message(state, callback)
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     calendar = SimpleCalendar()
     selected, picked_date = await calendar.process_selection(callback, callback_data)
@@ -220,7 +226,7 @@ async def process_booking_calendar(
     F.data.startswith("book:slot:"),
 )
 async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> None:
-    await track_callback_message(state, callback)
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     _, _, index = callback.data.split(":")
     index = int(index)
@@ -260,7 +266,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 )
 async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Запись не сохранена.")
-    await cleanup_messages(state, callback.bot)
+    await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
     await callback.message.answer(
         text="Окей, запись отменена. Если передумаешь — просто нажми «➕ Записаться» 🙂",
@@ -268,11 +274,30 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(
+    StateFilter(
+        ClientBooking.selecting_master,
+        ClientBooking.selecting_date,
+        ClientBooking.selecting_slot,
+        ClientBooking.confirm,
+    ),
+    F.data == "book:cancel_flow",
+)
+async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer("Запись не сохранена.")
+    await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
+    await state.clear()
+    if callback.message:
+        await callback.message.answer(
+            text="Окей, запись отменена. Если передумаешь — просто нажми «➕ Записаться» 🙂",
+        )
+
+
+@router.callback_query(
     StateFilter(ClientBooking.confirm),
     F.data == "book:confirm",
 )
 async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
-    await track_callback_message(state, callback)
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     data = await state.get_data()
     slots_iso: list[str] = data.get("booking_slots_utc", [])
@@ -332,14 +357,15 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
             warn_bookings = (check.current + 1) >= int(check.limit * 0.8)  # noqa: PLR2004
     await callback.answer()
 
-    await cleanup_messages(state, callback.bot)
+    await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
 
     await callback.message.answer(
         "Готово! 🎉\n\n"
         "Запись создана и отправлена мастеру на подтверждение.\n"
-        "Как только мастер подтвердит (или отклонит) — я сразу сообщу.\n\n"
-        "Статус можно посмотреть в разделе «📋 Мои записи».",
+        "Статус можно посмотреть в разделе «📋 Мои записи».\n"
+        "Если у мастера подключён Pro и включены уведомления — я дополнительно сообщу.\n\n"
+        "Чтобы записаться ещё раз — нажми «➕ Записаться».",
     )
 
     # Send a notification to the master

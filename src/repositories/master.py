@@ -1,4 +1,4 @@
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
@@ -117,6 +117,18 @@ class MasterRepository(BaseRepository):
         )
         await self._session.execute(stmt)
         await self._session.flush()
+
+    async def detach_client(self, master_id: int, client_id: int) -> bool:
+        stmt = (
+            delete(master_clients)
+            .where(
+                master_clients.c.master_id == master_id,
+                master_clients.c.client_id == client_id,
+            )
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return (result.rowcount or 0) > 0
 
     async def count_clients(self, master_id: int) -> int:
         stmt = (

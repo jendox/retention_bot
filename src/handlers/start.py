@@ -13,8 +13,8 @@ from src.handlers.client.register import start_client_registration
 from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
-from src.user_context import ActiveRole, UserContextStorage
 from src.settings import get_settings
+from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_message
 
 router = Router(name=__name__)
@@ -107,6 +107,7 @@ async def resolve_role_and_dispatch(
             state,
             text="Похоже, у тебя есть две роли 🙂\nВыбери, как зайти сейчас:",
             reply_markup=_build_role_keyboard(),
+            bucket=START_BOT_BUCKET,
         )
         return
 
@@ -153,6 +154,7 @@ async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_stora
             state,
             text="Не понял роль 😅 Выбери, пожалуйста, ещё раз:",
             reply_markup=_build_role_keyboard(),
+            bucket=START_BOT_BUCKET,
         )
         return
 
@@ -160,5 +162,5 @@ async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_stora
     await user_ctx_storage.set_role(telegram_id, role)
     await ROLE_MENU_MAP[role](callback.message, True)
 
-    await cleanup_messages(state, callback.bot)
+    await cleanup_messages(state, callback.bot, bucket=START_BOT_BUCKET)
     await state.clear()

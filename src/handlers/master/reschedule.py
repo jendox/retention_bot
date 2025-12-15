@@ -12,15 +12,15 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import active_session, session_local
-from src.datetime_utils import get_timezone, utc_range_for_master_day
+from src.datetime_utils import get_timezone, to_zone, utc_range_for_master_day
 from src.filters.user_role import UserRole
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
-from src.schemas.enums import BookingStatus, Timezone
 from src.schedule import get_free_slots_for_date
+from src.schemas.enums import BookingStatus, Timezone
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
-from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -264,20 +264,41 @@ async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Запись перенесена ✅", show_alert=True)
 
     if client_tg:
-        slot_local = new_start_at.astimezone(get_timezone(master_tz_name))
-        notification = NotificationService(callback.bot)
-        await notification.send_booking(
-            event=NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
-            recipient=RecipientKind.CLIENT,
-            chat_id=client_tg,
-            context=BookingContext(
-                booking_id=booking_id,
-                master_name="",
-                client_name="",
-                slot_str=slot_local.strftime("%d.%m.%Y %H:%M"),
-                duration_min=0,
-            ),
+        async with session_local() as session:
+            booking_repo = BookingRepository(session)
+            entitlements = EntitlementsService(session)
+            booking = await booking_repo.get_for_review(booking_id)
+            plan = await entitlements.get_plan(master_id=booking.master.id)
+
+        allow_client_notifications = (
+            plan.is_pro
+            and bool(getattr(booking.master, "notify_clients", True))
+            and bool(getattr(booking.client, "notifications_enabled", True))
         )
+        if allow_client_notifications:
+            slot_client = to_zone(new_start_at.astimezone(UTC), booking.client.timezone)
+
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+            reply_markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking.id}:cancel")],
+                ],
+            )
+
+            notification = NotificationService(callback.bot)
+            await notification.send_booking(
+                event=NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
+                recipient=RecipientKind.CLIENT,
+                chat_id=client_tg,
+                context=BookingContext(
+                    booking_id=booking.id,
+                    master_name=booking.master.name,
+                    client_name=booking.client.name,
+                    slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
+                    duration_min=booking.duration_min,
+                ),
+                reply_markup=reply_markup,
+            )
 
     await state.clear()
     if callback.message and return_scope and return_page:

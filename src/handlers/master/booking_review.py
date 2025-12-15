@@ -1,8 +1,8 @@
 import logging
-from datetime import UTC
+from datetime import UTC, datetime
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import active_session
 from src.datetime_utils import to_zone
@@ -11,9 +11,18 @@ from src.repositories import (
     BookingRepository,
 )
 from src.schemas.enums import BookingStatus
+from src.use_cases.entitlements import EntitlementsService
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
+
+
+def _build_client_cancel_keyboard(booking_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking_id}:cancel")],
+        ],
+    )
 
 
 def _parse_review_callback(data: str) -> tuple[int, str] | None:
@@ -45,6 +54,7 @@ async def master_review_booking(callback: CallbackQuery) -> None:
 
     async with active_session() as session:
         repo = BookingRepository(session)
+        entitlements = EntitlementsService(session)
 
         booking = await repo.get_for_review(booking_id)
 
@@ -53,13 +63,22 @@ async def master_review_booking(callback: CallbackQuery) -> None:
             await callback.answer("Это не твоя запись.", show_alert=True)
             return
 
-        # Не даём обработать повторно
-        if booking.status != BookingStatus.PENDING:
+        new_status = BookingStatus.CONFIRMED if action == "confirm" else BookingStatus.DECLINED
+        changed = await repo.set_status_if_pending_for_master(
+            booking_id=booking_id,
+            master_id=booking.master.id,
+            status=new_status,
+        )
+        if not changed:
             await callback.answer("Эта запись уже обработана.", show_alert=True)
             return
 
-        new_status = BookingStatus.CONFIRMED if action == "confirm" else BookingStatus.DECLINED
-        await repo.set_status(booking_id, new_status)
+        plan = await entitlements.get_plan(master_id=booking.master.id)
+        allow_client_notifications = (
+            plan.is_pro
+            and bool(getattr(booking.master, "notify_clients", True))
+            and bool(getattr(booking.client, "notifications_enabled", True))
+        )
 
     await callback.answer("Готово ✅")
 
@@ -97,20 +116,24 @@ async def master_review_booking(callback: CallbackQuery) -> None:
     if callback.message:
         await callback.message.edit_text(master_text)
 
-    # Уведомляем клиента
-    notification = NotificationService(callback.bot)
-    await notification.send_booking(
-        event=NotificationEvent.BOOKING_CONFIRMED if new_status == BookingStatus.CONFIRMED else NotificationEvent.BOOKING_DECLINED,
-        recipient=RecipientKind.CLIENT,
-        chat_id=booking.client.telegram_id,
-        context=BookingContext(
-            booking_id=booking.id,
-            master_name=booking.master.name,
-            client_name=booking.client.name,
-            slot_str=slot_client_str,
-            duration_min=booking.duration_min,
-        ),
-    )
+    if allow_client_notifications:
+        reply_markup = None
+        if new_status == BookingStatus.CONFIRMED and booking.start_at > datetime.now(UTC):
+            reply_markup = _build_client_cancel_keyboard(booking.id)
+        notification = NotificationService(callback.bot)
+        await notification.send_booking(
+            event=NotificationEvent.BOOKING_CONFIRMED if new_status == BookingStatus.CONFIRMED else NotificationEvent.BOOKING_DECLINED,
+            recipient=RecipientKind.CLIENT,
+            chat_id=booking.client.telegram_id,
+            context=BookingContext(
+                booking_id=booking.id,
+                master_name=booking.master.name,
+                client_name=booking.client.name,
+                slot_str=slot_client_str,
+                duration_min=booking.duration_min,
+            ),
+            reply_markup=reply_markup,
+        )
 
     logger.info(
         "booking.reviewed",

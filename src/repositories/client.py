@@ -108,3 +108,23 @@ class ClientRepository(BaseRepository):
         if entity is None:
             raise ClientNotFound(f"Client with phone={phone} for master_id={master_id} not found.")
         return Client.model_validate(entity)
+
+    async def find_for_master_by_phone(
+        self,
+        *,
+        master_id: int,
+        phone: str,
+    ) -> Client:
+        stmt = (
+            select(ClientEntity)
+            .join(master_clients, ClientEntity.id == master_clients.c.client_id)
+            .where(
+                master_clients.c.master_id == master_id,
+                ClientEntity.phone == phone,
+            )
+            .limit(1)
+        )
+        entity = await self._session.scalar(stmt)
+        if entity is None:
+            raise ClientNotFound(f"Client with phone={phone} for master_id={master_id} not found.")
+        return Client.model_validate(entity)

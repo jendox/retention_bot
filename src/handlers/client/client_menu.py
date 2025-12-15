@@ -1,13 +1,13 @@
 import logging
 from textwrap import dedent
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from src.filters.user_role import UserRole
+from src.handlers.client.settings import open_client_settings
 from src.user_context import ActiveRole, UserContextStorage
-from src.utils import answer_tracked
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -41,10 +41,12 @@ def build_client_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
 
 
 async def send_client_main_menu(
-    message: Message,
+    bot: Bot,
+    chat_id: int,
     show_switch_role: bool = False,
 ) -> None:
-    await message.answer(
+    await bot.send_message(
+        chat_id=chat_id,
         text=CLIENT_MAIN_MENU_TEXT,
         reply_markup=build_client_main_keyboard(show_switch_role),
     )
@@ -66,8 +68,5 @@ async def client_switch_role(
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == "⚙️ Настройки")
 async def client_settings(message: Message, state: FSMContext) -> None:
-    await answer_tracked(
-        message,
-        state,
-        text="Тут позже добавим настройки профиля и уведомлений ⚙️",
-    )
+    await state.clear()
+    await open_client_settings(message, state)

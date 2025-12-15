@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
-from src.repositories import ClientRepository, MasterRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterRepository
 from src.schemas import ClientCreate
 from src.use_cases.entitlements import EntitlementsService
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
@@ -31,13 +31,32 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="✅ Всё верно", callback_data="master_add_client_confirm"),
                 InlineKeyboardButton(text="🔁 Заполнить заново", callback_data="master_add_client_restart"),
             ],
+            [
+                InlineKeyboardButton(text="❌ Отмена", callback_data="master_add_client_cancel"),
+            ],
         ],
     )
 
 
-async def _create_client(master_id: int, name: str, phone: str) -> int:
+def _build_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="master_add_client_cancel")]],
+    )
+
+
+async def _create_client(master_id: int, name: str, phone: str) -> int | None:
     async with active_session() as session:
         client_repo = ClientRepository(session)
+        try:
+            existing = await client_repo.find_for_master_by_phone(master_id=master_id, phone=phone)
+        except ClientNotFound:
+            existing = None
+        if existing is not None:
+            logger.info(
+                "master.add_client.duplicate_phone",
+                extra={"master_id": master_id, "client_id": existing.id, "phone": phone},
+            )
+            return None
         client = await client_repo.create(
             ClientCreate(
                 telegram_id=None,
@@ -92,6 +111,7 @@ async def start_add_client(callback: CallbackQuery, state: FSMContext) -> None:
         text="Добавим клиента ✍️\n\nКак зовут клиента?"
              f"{warning}",
         bucket=ADD_CLIENT_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(AddClientStates.name)
 
@@ -110,6 +130,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
             state,
             text="Имя не понял 😅 Введи, пожалуйста, имя клиента.",
             bucket=ADD_CLIENT_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
         )
         return
 
@@ -119,6 +140,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
         state,
         text="Записал. Теперь номер телефона (для связи):",
         bucket=ADD_CLIENT_BUCKET,
+        reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(AddClientStates.phone)
 
@@ -141,6 +163,7 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
             state,
             text="Нужен реальный номер в формате 375291234567, чтобы связаться с клиентом.",
             bucket=ADD_CLIENT_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
         )
         return
 
@@ -200,9 +223,22 @@ async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) 
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(callback.from_user.id)
 
-    await _create_client(master.id, name, phone)
-    text = "✅ Готово! Клиент добавлен (🔴 оффлайн)"
+    created_client_id = await _create_client(master.id, name, phone)
+    if created_client_id is None:
+        text = "ℹ️ Клиент с таким телефоном уже есть в твоей базе."
+    else:
+        text = "✅ Готово! Клиент добавлен (🔴 оффлайн)"
     await callback.answer(text=text, show_alert=True)
 
+    await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+    await state.clear()
+
+
+@router.callback_query(
+    StateFilter(AddClientStates.name, AddClientStates.phone, AddClientStates.confirm),
+    F.data == "master_add_client_cancel",
+)
+async def master_add_client_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer("Окей, отменил.", show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()

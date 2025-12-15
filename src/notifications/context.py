@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.use_cases.entitlements import Usage
+
 
 @dataclass(frozen=True)
 class BookingContext:
@@ -11,3 +13,9 @@ class BookingContext:
     slot_str: str  # already formatted in the recipient's timezone
     duration_min: int
 
+
+@dataclass(frozen=True)
+class LimitsContext:
+    usage: Usage
+    clients_limit: int | None = None
+    bookings_limit: int | None = None

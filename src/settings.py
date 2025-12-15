@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from contextvars import ContextVar
 from functools import lru_cache
+from typing import Self
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -59,7 +60,7 @@ class AppSettings(BaseSettings):
     )
 
     @classmethod
-    def load(cls, *, env_file: str | None = None) -> "AppSettings":
+    def load(cls, *, env_file: str | None = None) -> Self:
         env_file = env_file or os.getenv("ENV_FILE") or ".env.local"
         file_values = _read_env_file(env_file)
         raw_admin_ids = (

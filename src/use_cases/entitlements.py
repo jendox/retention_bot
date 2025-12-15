@@ -8,14 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.subscription import SubscriptionPlan
 from src.plans import (
-    FREE_BOOKINGS_PER_MONTH_LIMIT,
     FREE_BOOKING_HORIZON_DAYS,
+    FREE_BOOKINGS_PER_MONTH_LIMIT,
     FREE_CLIENTS_LIMIT,
     PRO_BOOKING_HORIZON_DAYS,
 )
 from src.repositories import BookingRepository, MasterRepository
 from src.repositories.subscription import SubscriptionRepository
-
 
 EntitlementSource = Literal["paid", "trial", "pro", "free"]
 
@@ -190,4 +189,3 @@ class EntitlementsService:
             close.add("bookings")
 
         return close
-

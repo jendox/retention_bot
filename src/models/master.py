@@ -5,6 +5,7 @@ from datetime import date as date_type, datetime, time
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     Date,
     DateTime,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Time,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, ENUM
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -46,6 +48,12 @@ class Master(Base):
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
     slot_size_min: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     timezone: Mapped[Timezone] = mapped_column(timezone_enum, default=Timezone.EUROPE_MINSK, nullable=False)
+    notify_clients: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        nullable=False,
+    )
 
     clients: Mapped[list[Client]] = relationship(
         "Client",

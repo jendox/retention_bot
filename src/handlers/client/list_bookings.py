@@ -9,11 +9,11 @@ from aiogram.types import CallbackQuery, Message
 from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone
 from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.repositories import ClientNotFound, ClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, status_badge
-from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)

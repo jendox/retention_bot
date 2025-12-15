@@ -97,6 +97,9 @@ async def start_add_booking(message: Message, state: FSMContext) -> None:
         state,
         text="Введи имя или телефон клиента, чтобы создать запись:",
         bucket=ADD_BOOKING_BUCKET,
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel")]],
+        ),
     )
     await state.set_state(AddBookingStates.search_client)
 
@@ -387,22 +390,42 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.message.answer(warn_text)
 
     if client_has_tg:
-        client_tz_val = client.get("timezone")
-        client_tz_enum = Timezone(client_tz_val) if client_tz_val else None
-        slot_client = to_zone(slot_dt, client_tz_enum) if client_tz_enum else slot_dt
-        notification = NotificationService(callback.bot)
-        await notification.send_booking(
-            event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
-            recipient=RecipientKind.CLIENT,
-            chat_id=client["telegram_id"],
-            context=BookingContext(
-                booking_id=booking.id,
-                master_name="",
-                client_name=client.get("name") or "",
-                slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
-                duration_min=master_slot_size,
-            ),
-        )
+        allow_client_notifications = False
+        async with session_local() as session:
+            master_repo = MasterRepository(session)
+            entitlements = EntitlementsService(session)
+            master = await master_repo.get_by_id(master_id)
+            plan = await entitlements.get_plan(master_id=master.id)
+            allow_client_notifications = (
+                plan.is_pro
+                and bool(getattr(master, "notify_clients", True))
+                and bool(client.get("notifications_enabled", True))
+            )
+
+        if allow_client_notifications:
+            client_tz_val = client.get("timezone")
+            client_tz_enum = Timezone(client_tz_val) if client_tz_val else None
+            slot_client = to_zone(slot_dt, client_tz_enum) if client_tz_enum else slot_dt
+
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+            reply_markup = InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking.id}:cancel")]],
+            )
+
+            notification = NotificationService(callback.bot)
+            await notification.send_booking(
+                event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
+                recipient=RecipientKind.CLIENT,
+                chat_id=client["telegram_id"],
+                context=BookingContext(
+                    booking_id=booking.id,
+                    master_name=master.name,
+                    client_name=client.get("name") or "",
+                    slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
+                    duration_min=master_slot_size,
+                ),
+                reply_markup=reply_markup,
+            )
 
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
     await state.clear()

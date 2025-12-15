@@ -4,14 +4,15 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict
 
 
-class BaseWorkdayOverride(BaseModel):
+class WorkdayOverrideBase(BaseModel):
     master_id: int
     date: date_type
+    # None = выходной
     start_time: time | None
     end_time: time | None
 
 
-class WorkdayOverrideCreate(BaseWorkdayOverride):
+class WorkdayOverrideCreate(WorkdayOverrideBase):
     def to_db_entity(self):
         from src.models import WorkdayOverride as WorkdayOverrideEntity
         return WorkdayOverrideEntity(**self.model_dump())
@@ -30,7 +31,7 @@ class WorkdayOverrideUpdate(BaseModel):
         return self.model_dump(exclude_unset=True)
 
 
-class WorkdayOverride(BaseWorkdayOverride):
+class WorkdayOverride(WorkdayOverrideBase):
     id: int
 
     model_config = ConfigDict(

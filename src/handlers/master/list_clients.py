@@ -13,6 +13,7 @@ router = Router(name=__name__)
 
 PAGE_SIZE = 10
 CLIENTS_PAGE_PREFIX = "master_clients_page:"
+BACK_TO_CLIENTS_MENU_CB = "m:clients:back"
 
 
 async def _fetch_master_clients(telegram_id: int) -> Sequence:
@@ -88,6 +89,14 @@ def _build_clients_pagination_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _build_empty_clients_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад", callback_data=BACK_TO_CLIENTS_MENU_CB)],
+        ],
+    )
+
+
 async def start_clients_entry(callback: CallbackQuery) -> None:
     telegram_id = callback.from_user.id
     all_clients = await _fetch_master_clients(telegram_id)
@@ -96,6 +105,7 @@ async def start_clients_entry(callback: CallbackQuery) -> None:
         await callback.message.answer(
             text="У тебя пока нет клиентов 👀\n\n"
                  "Пригласи клиента по ссылке или добавь вручную, и они появятся здесь.",
+            reply_markup=_build_empty_clients_keyboard(),
         )
         return
 
@@ -138,7 +148,10 @@ async def master_clients_pagination(callback: CallbackQuery) -> None:
     all_clients = await _fetch_master_clients(telegram_id)
 
     if not all_clients:
-        await callback.message.edit_text("Клиентов пока нет 👀")
+        await callback.message.edit_text(
+            "Клиентов пока нет 👀",
+            reply_markup=_build_empty_clients_keyboard(),
+        )
         return
 
     total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))

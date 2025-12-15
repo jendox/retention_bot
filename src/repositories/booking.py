@@ -176,6 +176,38 @@ class BookingRepository(BaseRepository):
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
 
+    async def set_status_if_pending_for_master(
+        self,
+        *,
+        booking_id: int,
+        master_id: int,
+        status: BookingStatus,
+    ) -> bool:
+        stmt = (
+            update(BookingEntity)
+            .where(
+                BookingEntity.id == booking_id,
+                BookingEntity.master_id == master_id,
+                BookingEntity.status == BookingStatus.PENDING,
+            )
+            .values(status=status)
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
+
+    async def cancel_by_master(self, *, booking_id: int, master_id: int) -> bool:
+        stmt = (
+            update(BookingEntity)
+            .where(
+                BookingEntity.id == booking_id,
+                BookingEntity.master_id == master_id,
+                BookingEntity.status.in_(BookingStatus.active()),
+            )
+            .values(status=BookingStatus.CANCELLED)
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
+
     async def get_for_client(
         self,
         *,
@@ -219,6 +251,24 @@ class BookingRepository(BaseRepository):
         )
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
+
+    async def reassign_client_for_master(
+        self,
+        *,
+        master_id: int,
+        from_client_id: int,
+        to_client_id: int,
+    ) -> int:
+        stmt = (
+            update(BookingEntity)
+            .where(
+                BookingEntity.master_id == master_id,
+                BookingEntity.client_id == from_client_id,
+            )
+            .values(client_id=to_client_id)
+        )
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)
 
     async def count_created_for_master_in_range(
         self,

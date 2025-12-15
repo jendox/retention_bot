@@ -6,7 +6,6 @@ from textwrap import dedent
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
-from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -16,6 +15,7 @@ from src.filters.user_role import UserRole
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, status_badge
+from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ TITLE_MAP: dict[Scope, str] = {
 }
 
 # ---------- callback builders (short + stable) ----------
+
 
 def cb_schedule(scope: Scope, page: int) -> str:
     # m:s:<scope>:p:<page>
@@ -161,21 +162,24 @@ def _build_booking_card_keyboard(
     status: BookingStatus,
     scope: Scope,
     page: int,
+    allow_reschedule: bool,
 ) -> InlineKeyboardMarkup:
     inline_keyboard: list[list[InlineKeyboardButton]] = []
     if status in BookingStatus.active():
-        inline_keyboard.append(
-            [
-                InlineKeyboardButton(
-                    text="❌ Отменить",
-                    callback_data=cb_action("cancel", booking_id, scope, page),
-                ),
+        actions: list[InlineKeyboardButton] = [
+            InlineKeyboardButton(
+                text="❌ Отменить",
+                callback_data=cb_action("cancel", booking_id, scope, page),
+            ),
+        ]
+        if allow_reschedule:
+            actions.append(
                 InlineKeyboardButton(
                     text="🔄 Перенести",
                     callback_data=cb_action("reschedule", booking_id, scope, page),
                 ),
-            ],
-        )
+            )
+        inline_keyboard.append(actions)
     inline_keyboard.append(
         [
             InlineKeyboardButton(
@@ -242,10 +246,10 @@ def _compute_range(master_tz: ZoneInfo, scope: Scope) -> tuple[datetime, datetim
     return start_local, end_local, cutoff_local
 
 
-async def _cancel_booking(booking_id: int) -> bool:
+async def _cancel_booking(*, booking_id: int, master_id: int) -> bool:
     async with active_session() as session:
         repo = BookingRepository(session)
-        return await repo.set_status(booking_id, BookingStatus.CANCELLED)
+        return await repo.cancel_by_master(booking_id=booking_id, master_id=master_id)
 
 
 # ---------- rendering ----------
@@ -293,6 +297,13 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
     async with session_local() as session:
         repo = BookingRepository(session)
         booking = await repo.get_for_review(booking_id)
+        entitlements = EntitlementsService(session)
+        plan = await entitlements.get_plan(master_id=master.id)
+
+    if booking.master.id != master.id:
+        await callback.answer("Нет доступа к этой записи.", show_alert=True)
+        await _send_schedule(callback, scope=scope, page=page)
+        return
 
     client = getattr(booking, "client", None)
     client_name = getattr(client, "name", None) or f"Клиент #{getattr(booking, 'client_id', '')}"
@@ -316,7 +327,13 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
 
     await callback.message.edit_text(
         text=text,
-        reply_markup=_build_booking_card_keyboard(booking_id=booking_id, scope=scope, page=page),
+        reply_markup=_build_booking_card_keyboard(
+            booking_id=booking_id,
+            status=booking.status,
+            scope=scope,
+            page=page,
+            allow_reschedule=plan.is_pro,
+        ),
         parse_mode="HTML",
     )
 
@@ -412,9 +429,9 @@ async def master_booking_actions(callback: CallbackQuery, state: FSMContext) -> 
         return
 
     if action == "cancel":
-        if not await _cancel_booking(booking_id):
-            await callback.answer("Не удалось отменить запись.", show_alert=True)
-            logger.error("schedule.cancel_failed", exc_info=True)
+        master = await _fetch_master(callback.from_user.id)
+        if not await _cancel_booking(booking_id=booking_id, master_id=master.id):
+            await callback.answer("Не удалось отменить запись (нет доступа или уже неактуальна).", show_alert=True)
             return
 
         await callback.answer("Запись отменена ✅", show_alert=True)

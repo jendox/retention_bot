@@ -20,3 +20,4 @@ class NotificationEvent(StrEnum):
     BOOKING_CANCELLED_BY_CLIENT = "booking_cancelled_by_client"
     BOOKING_RESCHEDULED_BY_MASTER = "booking_rescheduled_by_master"
 
+    WARNING_NEAR_CLIENTS_LIMIT = "warning_near_clients_limit"

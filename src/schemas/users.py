@@ -8,7 +8,7 @@ from typing import Any, Self
 from pydantic import BaseModel, ConfigDict, Field
 
 if typing.TYPE_CHECKING:
-    from src.schemas import Booking
+    from src.schemas import Booking, WorkdayOverride
 from src.schemas.enums import Timezone
 
 # ---------- Master ----------
@@ -17,11 +17,13 @@ from src.schemas.enums import Timezone
 class MasterBase(BaseModel):
     telegram_id: int
     name: str
+    phone: str
     work_days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
     start_time: time
     end_time: time
     slot_size_min: int = Field(default=60)
     timezone: Timezone = Field(default=Timezone.EUROPE_MINSK)
+    notify_clients: bool = Field(default=True)
 
 
 class MasterCreate(MasterBase):
@@ -32,11 +34,13 @@ class MasterCreate(MasterBase):
 
 class MasterUpdate(BaseModel):
     name: str | None = None
+    phone: str | None = None
     work_days: list[int] | None = None
     start_time: time | None = None
     end_time: time | None = None
     slot_size_min: int | None = None
     timezone: Timezone | None = None
+    notify_clients: bool | None = None
 
     model_config = ConfigDict(
         extra="ignore",
@@ -92,31 +96,6 @@ class MasterWithClients(Master):
     clients: list[Client] = Field(default_factory=list)
 
 
-class WorkdayOverrideBase(BaseModel):
-    master_id: int
-    date: date
-    # None = выходной
-    start_time: time | None = None
-    end_time: time | None = None
-
-
-class WorkdayOverrideCreate(WorkdayOverrideBase):
-    pass
-
-
-class WorkdayOverride(WorkdayOverrideBase):
-    id: int
-
-    model_config = ConfigDict(
-        from_attributes=True,
-        extra="ignore",
-    )
-
-    @classmethod
-    def from_db_entity(cls, entity) -> Self:
-        return cls.model_validate(entity)
-
-
 # ---------- Client ----------
 
 class BaseClient(BaseModel):
@@ -124,6 +103,7 @@ class BaseClient(BaseModel):
     name: str
     phone: str
     timezone: Timezone = Field(default=Timezone.EUROPE_MINSK)
+    notifications_enabled: bool = Field(default=True)
 
 
 class ClientCreate(BaseClient):
@@ -137,6 +117,7 @@ class ClientUpdate(BaseModel):
     name: str | None = None
     phone: str | None = None
     timezone: Timezone | None = None
+    notifications_enabled: bool | None = None
 
     model_config = ConfigDict(
         extra="ignore",
