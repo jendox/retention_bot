@@ -1,8 +1,8 @@
 """add booking overlap exclusion
 
-Revision ID: da67604ccc4b
-Revises: a7069b1709d8
-Create Date: 2025-12-12 16:57:48.037851
+Revision ID: 7abdbed47c3a
+Revises: 8e97ddfe6b8f
+Create Date: 2025-12-15 16:10:17.279094
 
 """
 from typing import Sequence, Union
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'da67604ccc4b'
-down_revision: Union[str, Sequence[str], None] = 'a7069b1709d8'
+revision: str = '7abdbed47c3a'
+down_revision: Union[str, Sequence[str], None] = '8e97ddfe6b8f'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

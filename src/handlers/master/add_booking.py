@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, MasterWithClients
@@ -389,12 +390,17 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
         client_tz_val = client.get("timezone")
         client_tz_enum = Timezone(client_tz_val) if client_tz_val else None
         slot_client = to_zone(slot_dt, client_tz_enum) if client_tz_enum else slot_dt
-        await callback.bot.send_message(
+        notification = NotificationService(callback.bot)
+        await notification.send_booking(
+            event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
+            recipient=RecipientKind.CLIENT,
             chat_id=client["telegram_id"],
-            text=(
-                "Вам назначена запись ✔️\n\n"
-                f"<b>Дата/время:</b> {slot_client.strftime('%d.%m.%Y %H:%M')}\n"
-                "Если время не подходит — свяжитесь с мастером."
+            context=BookingContext(
+                booking_id=booking.id,
+                master_name="",
+                client_name=client.get("name") or "",
+                slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
+                duration_min=master_slot_size,
             ),
         )
 

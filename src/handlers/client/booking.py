@@ -16,6 +16,7 @@ from src.repositories import ClientNotFound, ClientRepository, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, Master
 from src.schemas.enums import Timezone
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
@@ -344,15 +345,25 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
     # Send a notification to the master
     slot_dt_master = to_zone(slot_dt_utc, master.timezone)
     slot_master_str = slot_dt_master.strftime("%d.%m.%Y %H:%M")
-    await callback.bot.send_message(
+    notification = NotificationService(callback.bot)
+    await notification.send_booking(
+        event=NotificationEvent.BOOKING_CREATED_PENDING,
+        recipient=RecipientKind.MASTER,
         chat_id=master.telegram_id,
-        text=(
-            "Новая запись на подтверждение 📩\n\n"
-            f"<b>Клиент:</b> {client_name}\n"
-            f"<b>Дата/время:</b> {slot_master_str}\n"
-            f"<b>Длительность:</b> {master.slot_size_min} мин\n\n"
-            "Подтвердить запись?"
-            + ("\n\n⚠️ Лимит записей Free почти исчерпан. В Pro лимитов нет." if warn_bookings else "")
+        context=BookingContext(
+            booking_id=booking.id,
+            master_name=master.name,
+            client_name=client_name,
+            slot_str=slot_master_str,
+            duration_min=master.slot_size_min,
         ),
         reply_markup=build_master_booking_review_keyboard(booking.id),
     )
+    if warn_bookings:
+        try:
+            await callback.bot.send_message(
+                chat_id=master.telegram_id,
+                text="⚠️ Лимит записей Free почти исчерпан. В Pro лимитов нет.",
+            )
+        except Exception:
+            logger.debug("booking.warn_master_failed", exc_info=True)

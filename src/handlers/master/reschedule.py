@@ -20,6 +20,7 @@ from src.schemas.enums import BookingStatus, Timezone
 from src.schedule import get_free_slots_for_date
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -264,17 +265,19 @@ async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
 
     if client_tg:
         slot_local = new_start_at.astimezone(get_timezone(master_tz_name))
-        try:
-            await callback.bot.send_message(
-                chat_id=client_tg,
-                text=(
-                    "Ваша запись перенесена 🔄\n\n"
-                    f"<b>Новая дата/время:</b> {slot_local:%d.%m.%Y %H:%M}\n"
-                    "Если время не подходит — свяжитесь с мастером."
-                ),
-            )
-        except Exception:
-            logger.debug("reschedule.client_notify_failed", exc_info=True)
+        notification = NotificationService(callback.bot)
+        await notification.send_booking(
+            event=NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
+            recipient=RecipientKind.CLIENT,
+            chat_id=client_tg,
+            context=BookingContext(
+                booking_id=booking_id,
+                master_name="",
+                client_name="",
+                slot_str=slot_local.strftime("%d.%m.%Y %H:%M"),
+                duration_min=0,
+            ),
+        )
 
     await state.clear()
     if callback.message and return_scope and return_page:
@@ -296,4 +299,3 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Окей, перенос отменён.", show_alert=True)
     if callback.message and return_scope and return_page:
         await _send_schedule(callback, scope=Scope(return_scope), page=int(return_page))
-

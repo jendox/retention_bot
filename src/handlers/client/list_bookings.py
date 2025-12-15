@@ -13,6 +13,7 @@ from src.repositories import ClientNotFound, ClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, status_badge
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -142,11 +143,16 @@ async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
     slot_master = to_zone(booking.start_at, booking.master.timezone)
     slot_master_str = slot_master.strftime("%d.%m.%Y %H:%M")
 
-    await callback.bot.send_message(
+    notification = NotificationService(callback.bot)
+    await notification.send_booking(
+        event=NotificationEvent.BOOKING_CANCELLED_BY_CLIENT,
+        recipient=RecipientKind.MASTER,
         chat_id=booking.master.telegram_id,
-        text=(
-            "❌ Запись отменена клиентом\n\n"
-            f"<b>Клиент:</b> {booking.client.name}\n"
-            f"<b>Дата/время:</b> {slot_master_str}"
+        context=BookingContext(
+            booking_id=booking.id,
+            master_name=booking.master.name,
+            client_name=booking.client.name,
+            slot_str=slot_master_str,
+            duration_min=booking.duration_min,
         ),
     )

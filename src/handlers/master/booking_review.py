@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery
 
 from src.core.sa import active_session
 from src.datetime_utils import to_zone
+from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.repositories import (
     BookingRepository,
 )
@@ -97,9 +98,18 @@ async def master_review_booking(callback: CallbackQuery) -> None:
         await callback.message.edit_text(master_text)
 
     # Уведомляем клиента
-    await callback.bot.send_message(
+    notification = NotificationService(callback.bot)
+    await notification.send_booking(
+        event=NotificationEvent.BOOKING_CONFIRMED if new_status == BookingStatus.CONFIRMED else NotificationEvent.BOOKING_DECLINED,
+        recipient=RecipientKind.CLIENT,
         chat_id=booking.client.telegram_id,
-        text=client_text,
+        context=BookingContext(
+            booking_id=booking.id,
+            master_name=booking.master.name,
+            client_name=booking.client.name,
+            slot_str=slot_client_str,
+            duration_min=booking.duration_min,
+        ),
     )
 
     logger.info(
