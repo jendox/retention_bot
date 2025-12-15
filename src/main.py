@@ -1,15 +1,14 @@
 import asyncio
 import logging
-import os
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from dotenv import load_dotenv
 from redis.asyncio import Redis
 
 from src.core.sa import Database
 from src.handlers import routers
 from src.middlewares import UserContextMiddleware
+from src.settings import AppSettings, app_settings
 from src.user_context import UserContextStorage
 
 logger = logging.getLogger("retention_bot")
@@ -25,8 +24,9 @@ def build_dispatcher(redis: Redis) -> Dispatcher:
 
 
 async def main():
-    load_dotenv(".env.local")
-    debug = os.getenv("DEBUG", "false").lower() == "true"
+    settings = AppSettings.load()
+    app_settings.set(settings)
+    debug = settings.debug
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -34,9 +34,9 @@ async def main():
     redis: Redis | None = None
 
     try:
-        token = os.environ["TELEGRAM__BOT_TOKEN"]
-        postgres_url = os.environ["DATABASE__POSTGRES_URL"]
-        redis_url = os.environ["DATABASE__REDIS_URL"]
+        token = settings.telegram.bot_token.get_secret_value()
+        postgres_url = settings.database.postgres_url
+        redis_url = settings.database.redis_url
 
         redis = Redis.from_url(redis_url)
 

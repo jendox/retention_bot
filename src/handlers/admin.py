@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 
 from aiogram import Router
@@ -12,6 +11,7 @@ from src.core.sa import active_session, session_local
 from src.filters.admin import AdminOnly
 from src.plans import FREE_BOOKINGS_PER_MONTH_LIMIT, FREE_BOOKING_HORIZON_DAYS, FREE_CLIENTS_LIMIT, PRO_BOOKING_HORIZON_DAYS
 from src.repositories import MasterNotFound, MasterRepository, SubscriptionRepository
+from src.settings import get_settings
 from src.use_cases.entitlements import EntitlementsService
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ router = Router(name=__name__)
 
 
 def _billing_contact() -> str:
-    return os.getenv("BILLING__CONTACT", "@admin")
+    return get_settings().billing.contact
 
 
 def _format_dt(dt: datetime | None) -> str:
@@ -188,4 +188,3 @@ async def my_plan(message: Message) -> None:
             horizon_days=horizon,
         ),
     )
-

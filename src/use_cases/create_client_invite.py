@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.repositories import InviteRepository, MasterRepository
 from src.schemas import Invite
 from src.schemas.enums import InviteType
+from src.settings import get_settings
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class CreateClientInvite:
                 master_id=master.id,
             ),
         )
-        bot_username = self._bot_username or os.getenv("TELEGRAM__BOT_USERNAME", "beautydesk_bot")
+        bot_username = self._bot_username or get_settings().telegram.bot_username
         link = f"https://t.me/{bot_username}?start=c_{invite.token}"
 
         return CreateClientInviteResult(

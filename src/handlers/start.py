@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import Awaitable, Callable
 
 from aiogram import F, Router
@@ -15,6 +14,7 @@ from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.user_context import ActiveRole, UserContextStorage
+from src.settings import get_settings
 from src.utils import answer_tracked, cleanup_messages, track_message
 
 router = Router(name=__name__)
@@ -120,7 +120,7 @@ async def resolve_role_and_dispatch(
         await ROLE_MENU_MAP[ActiveRole.CLIENT](message, is_master)
         return
 
-    bot_username = os.getenv("TELEGRAM__BOT_USERNAME", "beautydesk_bot")
+    bot_username = get_settings().telegram.bot_username
     link = f"https://t.me/{bot_username}?start=registration"
 
     await answer_tracked(
