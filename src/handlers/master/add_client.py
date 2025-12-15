@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from src.core.sa import active_session, session_local
 from src.repositories import ClientRepository, MasterRepository
 from src.schemas import ClientCreate
+from src.use_cases.entitlements import EntitlementsService
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 logger = logging.getLogger(__name__)
@@ -58,10 +59,38 @@ async def start_add_client(callback: CallbackQuery, state: FSMContext) -> None:
         "master.add_client.start",
         extra={"telegram_id": callback.from_user.id if callback.from_user else None},
     )
+    async with session_local() as session:
+        master_repo = MasterRepository(session)
+        master = await master_repo.get_by_telegram_id(callback.from_user.id)
+        entitlements = EntitlementsService(session)
+        check = await entitlements.can_attach_client(master_id=master.id)
+
+    if not check.allowed:
+        await answer_tracked(
+            callback.message,
+            state,
+            text=(
+                "Похоже, у тебя закончился лимит клиентов на Free.\n\n"
+                f"<b>Клиенты:</b> {check.current}/{check.limit}\n\n"
+                "Чтобы добавить больше клиентов — подключи Pro."
+            ),
+            bucket=ADD_CLIENT_BUCKET,
+        )
+        return
+
+    warning = ""
+    if check.limit is not None and check.current >= int(check.limit * 0.8):  # noqa: PLR2004
+        warning = (
+            "\n\n⚠️ Лимит клиентов на Free почти исчерпан:\n"
+            f"<b>{check.current}</b> из <b>{check.limit}</b>.\n"
+            "В Pro лимитов нет."
+        )
+
     await answer_tracked(
         callback.message,
         state,
-        text="Добавим клиента ✍️\n\nКак зовут клиента?",
+        text="Добавим клиента ✍️\n\nКак зовут клиента?"
+             f"{warning}",
         bucket=ADD_CLIENT_BUCKET,
     )
     await state.set_state(AddClientStates.name)
@@ -139,7 +168,7 @@ async def master_add_client_restart(callback: CallbackQuery, state: FSMContext) 
     await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()
-    await start_add_client(callback.message, state)
+    await start_add_client(callback, state)
 
 
 @router.callback_query(StateFilter(AddClientStates.confirm), F.data == "master_add_client_confirm")

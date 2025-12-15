@@ -8,7 +8,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import active_session
+from src.repositories import MasterRepository
 from src.use_cases.create_client_invite import CreateClientInvite
+from src.use_cases.entitlements import EntitlementsService
 from src.utils import answer_tracked, cleanup_messages
 
 logger = logging.getLogger(__name__)
@@ -85,6 +87,24 @@ def render_invite_message(
 async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
     telegram_id = callback.from_user.id
     async with active_session() as session:
+        master_repo = MasterRepository(session)
+        master = await master_repo.get_by_telegram_id(telegram_id)
+
+        entitlements = EntitlementsService(session)
+        check = await entitlements.can_attach_client(master_id=master.id)
+        if not check.allowed:
+            await answer_tracked(
+                callback.message,
+                state,
+                text=(
+                    "Похоже, у тебя закончился лимит клиентов на Free.\n\n"
+                    f"<b>Клиенты:</b> {check.current}/{check.limit}\n\n"
+                    "Чтобы приглашать больше клиентов — подключи Pro."
+                ),
+                bucket=INVITE_CLIENT_BUCKET,
+            )
+            return
+
         use_case = CreateClientInvite(session)
         result = await use_case.execute_for_telegram(master_telegram_id=telegram_id)
 
@@ -93,11 +113,20 @@ async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> Non
         master_name=result.master_name,
     )
 
+    warning = ""
+    if check.limit is not None and check.current >= int(check.limit * 0.8):  # noqa: PLR2004
+        warning = (
+            "\n\n⚠️ Лимит клиентов на Free почти исчерпан:\n"
+            f"<b>{check.current}</b> из <b>{check.limit}</b>.\n"
+            "В Pro лимитов нет."
+        )
+
     await answer_tracked(
         callback.message,
         state,
         text="Готово ✅ Ссылка для клиента создана.\n\n"
-             "Что отправить клиенту?",
+             "Что отправить клиенту?"
+             f"{warning}",
         bucket=INVITE_CLIENT_BUCKET,
         reply_markup=_build_invite_format_keyboard(),
     )
