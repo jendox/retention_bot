@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, time
+from datetime import UTC, datetime, time, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -9,7 +9,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
-from src.repositories import ClientNotFound, ClientRepository, MasterRepository
+from src.plans import TRIAL_DAYS
+from src.repositories import ClientNotFound, ClientRepository, MasterRepository, SubscriptionRepository
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
 from src.user_context import UserContextStorage
@@ -348,6 +349,10 @@ async def master_reg_confirm(
     async with active_session() as session:
         repo = MasterRepository(session)
         master = await repo.create(master_create)
+        subscription_repo = SubscriptionRepository(session)
+        if await subscription_repo.get_by_master_id(master.id) is None:
+            trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
+            await subscription_repo.upsert_trial(master.id, trial_until)
         logger.info(
             "master.created",
             extra={"master_id": master.id, "telegram_id": telegram_id},
