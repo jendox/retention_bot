@@ -2,7 +2,7 @@ from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, overload
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from src.models import Booking as BookingEntity
@@ -219,3 +219,18 @@ class BookingRepository(BaseRepository):
         )
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
+
+    async def count_created_for_master_in_range(
+        self,
+        *,
+        master_id: int,
+        start_at_utc: datetime,
+        end_at_utc: datetime,
+    ) -> int:
+        stmt = select(func.count()).select_from(BookingEntity).where(
+            BookingEntity.master_id == master_id,
+            BookingEntity.created_at >= start_at_utc,
+            BookingEntity.created_at < end_at_utc,
+        )
+        count = await self._session.scalar(stmt)
+        return int(count or 0)

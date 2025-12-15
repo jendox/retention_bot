@@ -1,4 +1,4 @@
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import selectinload
 
@@ -117,3 +117,12 @@ class MasterRepository(BaseRepository):
         )
         await self._session.execute(stmt)
         await self._session.flush()
+
+    async def count_clients(self, master_id: int) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(master_clients)
+            .where(master_clients.c.master_id == master_id)
+        )
+        count = await self._session.scalar(stmt)
+        return int(count or 0)
