@@ -126,3 +126,15 @@ class MasterRepository(BaseRepository):
         )
         count = await self._session.scalar(stmt)
         return int(count or 0)
+
+    async def is_client_attached(self, *, master_id: int, client_id: int) -> bool:
+        stmt = (
+            select(func.count())
+            .select_from(master_clients)
+            .where(
+                master_clients.c.master_id == master_id,
+                master_clients.c.client_id == client_id,
+            )
+        )
+        count = await self._session.scalar(stmt)
+        return int(count or 0) > 0

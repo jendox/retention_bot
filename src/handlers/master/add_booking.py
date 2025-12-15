@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -11,11 +11,12 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import active_session, session_local
-from src.datetime_utils import to_zone
+from src.datetime_utils import get_timezone, to_zone
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, MasterWithClients
 from src.schemas.enums import BookingStatus, Timezone
+from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
 
@@ -218,8 +219,22 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     master_tz_enum = Timezone(master_timezone)
 
     async with session_local() as session:
+        entitlements = EntitlementsService(session)
+        horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
+        master_tz_info = get_timezone(str(master_tz_enum.value))
+        today_master = datetime.now(tz=master_tz_info).date()
+        picked_day = picked_date.date() if picked_date.tzinfo is None else picked_date.astimezone(master_tz_info).date()
+        max_date = today_master + timedelta(days=horizon_days)
+        if not (today_master <= picked_day <= max_date):
+            await callback.answer(
+                text=f"Можно выбрать дату с {today_master.strftime('%d.%m.%Y')} "
+                     f"по {max_date.strftime('%d.%m.%Y')}",
+                show_alert=True,
+            )
+            return
+
         use_case = GetMasterFreeSlots(session)
-        result = await use_case.execute(master_id=master_id, client_day=picked_date.date(), client_tz=master_tz_enum)
+        result = await use_case.execute(master_id=master_id, client_day=picked_day, client_tz=master_tz_enum)
 
     slots = result.slots_utc
     if not slots:
@@ -313,8 +328,28 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
 
     slot_dt = datetime.fromisoformat(slot_iso)
 
+    warn_bookings = False
+    warn_text: str | None = None
     async with active_session() as session:
         booking_repo = BookingRepository(session)
+        entitlements = EntitlementsService(session)
+        check = await entitlements.can_create_booking(master_id=master_id)
+        if not check.allowed:
+            await callback.answer(
+                text="Лимит записей на Free исчерпан. Подключи Pro, чтобы создавать больше записей.",
+                show_alert=True,
+            )
+            return
+
+        if check.limit is not None:
+            new_count = check.current + 1
+            warn_bookings = new_count >= int(check.limit * 0.8)  # noqa: PLR2004
+            if warn_bookings:
+                warn_text = (
+                    "⚠️ Лимит записей на Free почти исчерпан.\n\n"
+                    f"<b>{new_count}</b> из <b>{check.limit}</b> записей в этом месяце.\n"
+                    "В Pro лимитов нет."
+                )
         booking_create = BookingCreate(
             master_id=master_id,
             client_id=client["id"],
@@ -346,6 +381,9 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
     text = "✅ Запись создана" + (" (🔴 оффлайн)" if not client_has_tg else "")
 
     await callback.answer(text=text, show_alert=True)
+
+    if warn_text:
+        await callback.message.answer(warn_text)
 
     if client_has_tg:
         client_tz_val = client.get("timezone")

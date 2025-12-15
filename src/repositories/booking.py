@@ -234,3 +234,27 @@ class BookingRepository(BaseRepository):
         )
         count = await self._session.scalar(stmt)
         return int(count or 0)
+
+    async def reschedule(
+        self,
+        *,
+        booking_id: int,
+        master_id: int,
+        start_at: datetime,
+    ) -> bool:
+        """
+        Updates booking start time.
+
+        May raise IntegrityError if the new time overlaps an existing active booking
+        due to the DB exclusion constraint.
+        """
+        stmt = (
+            update(BookingEntity)
+            .where(
+                BookingEntity.id == booking_id,
+                BookingEntity.master_id == master_id,
+            )
+            .values(start_at=start_at)
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0

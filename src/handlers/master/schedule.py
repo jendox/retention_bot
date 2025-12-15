@@ -6,6 +6,8 @@ from textwrap import dedent
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
@@ -52,7 +54,6 @@ TITLE_MAP: dict[Scope, str] = {
     Scope.WEEK: "Расписание на неделю",
     Scope.MONTH: "Расписание на месяц",
 }
-
 
 # ---------- callback builders (short + stable) ----------
 
@@ -397,7 +398,7 @@ async def master_open_booking_card(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:a:"))
-async def master_booking_actions(callback: CallbackQuery) -> None:
+async def master_booking_actions(callback: CallbackQuery, state: FSMContext) -> None:
     # m:a:<action>:<booking_id>:s:<scope>:p:<page>
     parts = (callback.data or "").split(":")
     try:
@@ -421,8 +422,9 @@ async def master_booking_actions(callback: CallbackQuery) -> None:
         return
 
     if action == "reschedule":
-        # Placeholder: start your FSM/calendar/time-slot flow here.
-        await callback.answer("Перенос: тут запускаем выбор новой даты/времени (TODO).", show_alert=True)
+        from src.handlers.master.reschedule import start_reschedule
+
+        await start_reschedule(callback, state, booking_id=booking_id, scope=scope, page=page)
         return
 
     await callback.answer("Неизвестное действие.", show_alert=False)

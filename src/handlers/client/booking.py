@@ -16,6 +16,7 @@ from src.repositories import ClientNotFound, ClientRepository, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, Master
 from src.schemas.enums import Timezone
+from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
 
@@ -174,18 +175,19 @@ async def process_booking_calendar(
 
     today_client = datetime.now(tz=client_tz_info).date()
     min_date = today_client + timedelta(days=1)
-    max_date = today_client + timedelta(days=45)
-    if not (min_date <= client_day <= max_date):
-        await callback.answer(
-            text=f"Можно выбрать дату с {min_date.strftime('%d.%m.%Y')} "
-                 f"по {max_date.strftime('%d.%m.%Y')}",
-            show_alert=True,
-        )
-        return
-
-    await callback.answer()
-
     async with session_local() as session:
+        entitlements = EntitlementsService(session)
+        horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
+        max_date = today_client + timedelta(days=horizon_days)
+        if not (min_date <= client_day <= max_date):
+            await callback.answer(
+                text=f"Можно выбрать дату с {min_date.strftime('%d.%m.%Y')} "
+                     f"по {max_date.strftime('%d.%m.%Y')}",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer()
         use_case = GetMasterFreeSlots(session)
         result = await use_case.execute(
             master_id=master_id, client_day=client_day, client_tz=client_timezone,
@@ -284,11 +286,22 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
 
     slot_dt_utc = datetime.fromisoformat(slots_iso[index])
 
+    warn_bookings = False
     async with active_session() as session:
         master_repo = MasterRepository(session)
         booking_repo = BookingRepository(session)
+        entitlements = EntitlementsService(session)
 
         master = await master_repo.get_by_id(master_id)
+
+        check = await entitlements.can_create_booking(master_id=master_id)
+        if not check.allowed:
+            await callback.answer(
+                text="Сейчас у мастера временно ограничено количество онлайн-записей.\n"
+                     "Попроси мастера подключить Pro или попробуй позже.",
+                show_alert=True,
+            )
+            return
 
         booking_create = BookingCreate(
             master_id=master_id,
@@ -314,6 +327,8 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
                 "client_id": client_id,
             },
         )
+        if check.limit is not None:
+            warn_bookings = (check.current + 1) >= int(check.limit * 0.8)  # noqa: PLR2004
     await callback.answer()
 
     await cleanup_messages(state, callback.bot)
@@ -337,6 +352,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
             f"<b>Дата/время:</b> {slot_master_str}\n"
             f"<b>Длительность:</b> {master.slot_size_min} мин\n\n"
             "Подтвердить запись?"
+            + ("\n\n⚠️ Лимит записей Free почти исчерпан. В Pro лимитов нет." if warn_bookings else "")
         ),
         reply_markup=build_master_booking_review_keyboard(booking.id),
     )
