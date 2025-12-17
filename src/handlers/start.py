@@ -59,7 +59,7 @@ async def cmd_start(
         return
     if command.args and command.args.startswith("c_"):
         logger.debug("process client with invite link")
-        await start_client_registration(message, state, command.args)
+        await start_client_registration(message, state, user_ctx_storage, command.args)
         return
     if command.args and command.args.startswith("m_"):
         logger.debug("process master with invite link")

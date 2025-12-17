@@ -17,6 +17,7 @@ from src.repositories import (
     MasterRepository,
 )
 from src.use_cases.accept_client_invite import AcceptClientInvite, AcceptClientInviteRequest, AcceptInviteError
+from src.user_context import UserContextStorage, ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 router = Router(name=__name__)
@@ -115,6 +116,7 @@ class InviteData(BaseModel):
 async def start_client_registration(
     message: Message,
     state: FSMContext,
+    user_ctx_storage: UserContextStorage,
     invite_link: str,
 ) -> None:
     await track_message(state, message, bucket=CLIENT_REGISTRATION_BUCKET)
@@ -130,6 +132,7 @@ async def start_client_registration(
 
     if result.ok:
         is_master = await _check_if_master(telegram_id)
+        await user_ctx_storage.set_role(telegram_id, ActiveRole.CLIENT)
         await send_client_main_menu(message.bot, telegram_id, show_switch_role=is_master)
         return
 
@@ -141,7 +144,6 @@ async def start_client_registration(
         return
 
     await _send_error_message(message.bot, telegram_id, result.error)
-
     await cleanup_messages(state, message.bot, bucket=CLIENT_REGISTRATION_BUCKET)
 
 
@@ -231,6 +233,7 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
 async def client_reg_confirm(
     callback: CallbackQuery,
     state: FSMContext,
+    user_ctx_storage: UserContextStorage,
 ) -> None:
     await callback.answer()
     await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
@@ -291,7 +294,7 @@ async def client_reg_confirm(
 
     if result.warn_master_clients_near_limit:
         notification = NotificationService(bot)
-        await notification.send_limits(
+        await notification.send(
             event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
             recipient=RecipientKind.MASTER,
             chat_id=result.master_telegram_id,
@@ -302,6 +305,7 @@ async def client_reg_confirm(
         )
 
     is_master = await _check_if_master(telegram_id)
+    await user_ctx_storage.set_role(telegram_id, ActiveRole.CLIENT)
     await send_client_main_menu(bot, telegram_id, show_switch_role=is_master)
 
 

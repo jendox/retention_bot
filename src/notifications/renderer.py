@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from html import escape as html_escape
 
 from aiogram.types import InlineKeyboardMarkup
 
-from src.notifications.context import BookingContext, LimitsContext
-from src.notifications.templates import render_booking_template, render_limits_template
+from src.notifications.context import BookingContext, LimitsContext, ReminderContext
+from src.notifications.templates import render_booking_template, render_limits_template, render_reminder_template
 from src.notifications.types import NotificationEvent, RecipientKind
 
 
@@ -16,16 +17,43 @@ class RenderedMessage:
     reply_markup: InlineKeyboardMarkup | None = None
 
 
+def _e(value: str | None) -> str:
+    return html_escape(value or "", quote=False)
+
+
+def _escape_context(
+    context: BookingContext | LimitsContext | ReminderContext,
+) -> BookingContext | LimitsContext | ReminderContext:
+    if isinstance(context, BookingContext):
+        return replace(
+            context,
+            master_name=_e(context.master_name),
+            client_name=_e(context.client_name),
+            slot_str=_e(context.slot_str),
+        )
+    if isinstance(context, ReminderContext):
+        return replace(
+            context,
+            master_name=_e(context.master_name),
+            slot_str=_e(context.slot_str),
+        )
+    return context
+
+
 def render(
     *,
     event: NotificationEvent,
     recipient: RecipientKind,
-    context: BookingContext | LimitsContext,
+    context: BookingContext | LimitsContext | ReminderContext,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> RenderedMessage:
-    text = " "
-    if isinstance(context, BookingContext):
-        text = render_booking_template(event=event, recipient=recipient, context=context)
-    if isinstance(context, LimitsContext):
-        text = render_limits_template(event=event, recipient=recipient, context=context)
+    safe_context = _escape_context(context)
+    if isinstance(safe_context, BookingContext):
+        text = render_booking_template(event=event, recipient=recipient, context=safe_context)
+    elif isinstance(safe_context, LimitsContext):
+        text = render_limits_template(event=event, recipient=recipient, context=safe_context)
+    elif isinstance(safe_context, ReminderContext):
+        text = render_reminder_template(event=event, recipient=recipient, context=safe_context)
+    else:
+        text = ""
     return RenderedMessage(text=text, parse_mode="HTML", reply_markup=reply_markup)

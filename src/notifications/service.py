@@ -6,7 +6,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup
 
-from src.notifications.context import BookingContext, LimitsContext
+from src.notifications.context import BookingContext, LimitsContext, ReminderContext
 from src.notifications.renderer import render, RenderedMessage
 from src.notifications.types import NotificationEvent, RecipientKind
 
@@ -35,6 +35,10 @@ class NotificationService:
                 reply_markup=message.reply_markup,
                 parse_mode=message.parse_mode,
             )
+            logger.info(
+                "notifications.send_success",
+                extra={"event": event, "recipient": recipient, "chat_id": chat_id},
+            )
         except TelegramAPIError:
             logger.warning(
                 "notifications.send_failed",
@@ -42,36 +46,26 @@ class NotificationService:
                 exc_info=True,
             )
 
-    async def send_booking(
+    async def send(
         self,
         *,
         event: NotificationEvent,
         recipient: RecipientKind,
         chat_id: int | None,
-        context: BookingContext,
+        context: BookingContext | LimitsContext | ReminderContext,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
         message = render(event=event, recipient=recipient, context=context, reply_markup=reply_markup)
-        await self._send_message(
-            chat_id=chat_id,
-            message=message,
-            event=event,
-            recipient=recipient,
-        )
+        if not message.text.strip():
+            logger.warning(
+                "notifications.empty_message",
+                extra={"event": event.value, "recipient": recipient.value},
+            )
+            return
 
-    async def send_limits(
-        self,
-        *,
-        event: NotificationEvent,
-        recipient: RecipientKind,
-        chat_id: int | None,
-        context: LimitsContext,
-        reply_markup: InlineKeyboardMarkup | None = None,
-    ) -> None:
-        message = render(event=event, recipient=recipient, context=context, reply_markup=reply_markup)
         await self._send_message(
             chat_id=chat_id,
             message=message,
-            event=event,
-            recipient=recipient,
+            event=str(event.value),
+            recipient=str(recipient.value),
         )

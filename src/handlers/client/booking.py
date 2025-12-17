@@ -79,8 +79,7 @@ def build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMarku
     )
 
 
-@router.message(F.text == "➕ Записаться")
-async def client_add_booking(message: Message, state: FSMContext) -> None:
+async def start_client_add_booking(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=BOOKING_BUCKET)
     telegram_id = message.from_user.id
     async with session_local() as session:

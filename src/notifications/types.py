@@ -14,10 +14,19 @@ class RecipientKind(StrEnum):
 
 class NotificationEvent(StrEnum):
     BOOKING_CREATED_PENDING = "booking_created_pending"
-    BOOKING_CREATED_CONFIRMED = "booking_created_confirmed"
     BOOKING_CONFIRMED = "booking_confirmed"
     BOOKING_DECLINED = "booking_declined"
+    BOOKING_CREATED_CONFIRMED = "booking_created_confirmed"
     BOOKING_CANCELLED_BY_CLIENT = "booking_cancelled_by_client"
+    BOOKING_CANCELLED_BY_MASTER = "booking_cancelled_by_master"
     BOOKING_RESCHEDULED_BY_MASTER = "booking_rescheduled_by_master"
+    BOOKING_RESCHEDULED_BY_MASTER_NOTICE = "booking_rescheduled_by_master_notice"
 
     WARNING_NEAR_CLIENTS_LIMIT = "warning_near_clients_limit"
+    WARNING_NEAR_BOOKINGS_LIMIT = "warning_near_bookings_limit"
+    LIMIT_CLIENTS_REACHED = "limit_clients_reached"
+    LIMIT_BOOKINGS_REACHED = "limit_bookings_reached"
+
+    REMINDER_24H = "reminder_24h"
+    REMINDER_2H = "reminder_2h"
+    FOLLOWUP_THANK_YOU = "followup_thank_you"

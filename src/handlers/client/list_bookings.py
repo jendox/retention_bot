@@ -62,8 +62,7 @@ async def _list_bookings(
         await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
 
 
-@router.message(F.text == "📋 Мои записи")
-async def client_list_bookings(message: Message, state: FSMContext) -> None:
+async def start_client_list_bookings(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
 
     async with session_local() as session:

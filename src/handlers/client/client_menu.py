@@ -6,6 +6,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from src.filters.user_role import UserRole
+from src.handlers.client.booking import start_client_add_booking
+from src.handlers.client.list_bookings import start_client_list_bookings
+from src.handlers.client.list_masters import start_client_list_masters
 from src.handlers.client.settings import open_client_settings
 from src.user_context import ActiveRole, UserContextStorage
 
@@ -50,6 +53,21 @@ async def send_client_main_menu(
         text=CLIENT_MAIN_MENU_TEXT,
         reply_markup=build_client_main_keyboard(show_switch_role),
     )
+
+
+@router.message(UserRole(ActiveRole.CLIENT), F.text == "➕ Записаться")
+async def client_add_booking(message: Message, state: FSMContext) -> None:
+    await start_client_add_booking(message, state)
+
+
+@router.message(UserRole(ActiveRole.CLIENT), F.text == "📋 Мои записи")
+async def client_list_bookings(message: Message, state: FSMContext) -> None:
+    await start_client_list_bookings(message, state)
+
+
+@router.message(UserRole(ActiveRole.CLIENT), F.text == "💇‍♀️ Мои мастера")
+async def client_list_masters(message: Message, state: FSMContext) -> None:
+    await start_client_list_masters(message, state)
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == "🔄 Сменить роль")

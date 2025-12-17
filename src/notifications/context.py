@@ -19,3 +19,9 @@ class LimitsContext:
     usage: Usage
     clients_limit: int | None = None
     bookings_limit: int | None = None
+
+
+@dataclass(frozen=True)
+class ReminderContext:
+    master_name: str
+    slot_str: str

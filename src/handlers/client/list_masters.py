@@ -1,6 +1,6 @@
 import logging
 
-from aiogram import F, Router
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
@@ -12,8 +12,7 @@ logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 
 
-@router.message(F.text == "💇‍♀️ Мои мастера")
-async def client_list_masters(message: Message, state: FSMContext) -> None:
+async def start_client_list_masters(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     async with session_local() as session:
         repo = ClientRepository(session)

@@ -13,7 +13,7 @@ from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterRepository, SubscriptionRepository
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
-from src.user_context import UserContextStorage
+from src.user_context import UserContextStorage, ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 router = Router(name=__name__)
@@ -428,6 +428,7 @@ async def master_reg_confirm(
     await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
     await state.clear()
     is_client = await _check_if_client(telegram_id)
+    await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
     await send_master_main_menu(callback.message, show_switch_role=is_client)
 
 
