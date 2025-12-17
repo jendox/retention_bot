@@ -8,6 +8,8 @@ from redis.asyncio import Redis
 from src.core.sa import Database
 from src.handlers import routers
 from src.middlewares import LoggingMiddleware, UserContextMiddleware
+from src.notifications.notifier import Notifier
+from src.notifications.policy import DefaultNotificationPolicy
 from src.observability import setup_logging
 from src.settings import AppSettings, app_settings
 from src.user_context import UserContextStorage
@@ -44,8 +46,12 @@ async def main():
             default=DefaultBotProperties(parse_mode="HTML"),
         )
         dp = build_dispatcher(redis)
+        notifier = Notifier(
+            bot=bot,
+            policy=DefaultNotificationPolicy(),
+        )
         async with Database.lifespan(url=postgres_url):
-            await dp.start_polling(bot)
+            await dp.start_polling(bot, notifier=notifier)
 
     except Exception as exc:
         logger.error("app.error", exc_info=True, extra={"error_type": type(exc).__name__})

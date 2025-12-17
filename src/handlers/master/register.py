@@ -13,7 +13,7 @@ from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterRepository, SubscriptionRepository
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
-from src.user_context import UserContextStorage, ActiveRole
+from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 router = Router(name=__name__)

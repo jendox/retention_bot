@@ -6,16 +6,34 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from src.core.sa import active_session, session_local
-from src.repositories import ClientNotFound, ClientRepository, MasterRepository
-from src.schemas import ClientCreate
-from src.use_cases.entitlements import EntitlementsService
+from src.core.sa import active_session
+from src.filters.user_role import UserRole
+from src.notifications import NotificationEvent, RecipientKind
+from src.notifications.context import LimitsContext
+from src.notifications.notifier import NotificationRequest, Notifier
+from src.use_cases.create_client_offline import CreateClientOffline, CreateClientOfflineError
+from src.use_cases.entitlements import Usage
+from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 
 ADD_CLIENT_BUCKET = "master_add_client"
+
+CLIENT_ADD_CB = {
+    "confirm": "m:add_client:confirm",
+    "restart": "m:add_client:restart",
+    "cancel": "m:add_client:cancel",
+}
+
+ERROR_MESSAGE: dict[CreateClientOfflineError | None, str] = {
+    CreateClientOfflineError.MASTER_NOT_FOUND: "⚠️ Профиль мастера не найден. Пройдите регистрацию.",
+    CreateClientOfflineError.INVALID_REQUEST: "❌ Возникла ошибка. Попробуйте ещё раз.",
+    CreateClientOfflineError.PHONE_CONFLICT: "ℹ️ Клиент с таким телефоном уже есть в вашей базе.\n"
+                                             "Проверьте правильность введённого номера",
+    None: "Неизвестная ошибка.",
+}
 
 
 class AddClientStates(StatesGroup):
@@ -28,11 +46,11 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Всё верно", callback_data="master_add_client_confirm"),
-                InlineKeyboardButton(text="🔁 Заполнить заново", callback_data="master_add_client_restart"),
+                InlineKeyboardButton(text="✅ Всё верно", callback_data=CLIENT_ADD_CB["confirm"]),
+                InlineKeyboardButton(text="🔁 Заполнить заново", callback_data=CLIENT_ADD_CB["restart"]),
             ],
             [
-                InlineKeyboardButton(text="❌ Отмена", callback_data="master_add_client_cancel"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=CLIENT_ADD_CB["cancel"]),
             ],
         ],
     )
@@ -40,83 +58,91 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
 
 def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="master_add_client_cancel")]],
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="❌ Отмена", callback_data=CLIENT_ADD_CB["cancel"]),
+            ],
+        ],
     )
 
 
-async def _create_client(master_id: int, name: str, phone: str) -> int | None:
+async def _send_warning_message(
+    *,
+    chat_id: int,
+    event: NotificationEvent,
+    usage: Usage | None,
+    clients_limit: int | None,
+    notifier: Notifier,
+) -> bool:
+    if clients_limit is None or usage is None:
+        return False
+
+    request = NotificationRequest(
+        chat_id=chat_id,
+        event=event,
+        recipient=RecipientKind.MASTER,
+        context=LimitsContext(usage=usage, clients_limit=clients_limit),
+    )
+    return await notifier.maybe_send(request)
+
+
+async def start_add_client(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+) -> None:
+    telegram_id = callback.from_user.id
+    await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
+    logger.debug("master.add_client_offline.start", extra={"telegram_id": telegram_id})
+
     async with active_session() as session:
-        client_repo = ClientRepository(session)
-        try:
-            existing = await client_repo.find_for_master_by_phone(master_id=master_id, phone=phone)
-        except ClientNotFound:
-            existing = None
-        if existing is not None:
-            logger.info(
-                "master.add_client.duplicate_phone",
-                extra={"master_id": master_id, "client_id": existing.id, "phone": phone},
-            )
-            return None
-        client = await client_repo.create(
-            ClientCreate(
-                telegram_id=None,
-                name=name,
-                phone=phone,
-            ),
-        )
-        master_repo = MasterRepository(session)
-        await master_repo.attach_client(master_id, client.id)
-        logger.info(
-            "master.add_client.created",
-            extra={"master_id": master_id, "client_id": client.id, "phone": phone},
-        )
-        return client.id
+        result = await CreateClientOffline(session).preflight(telegram_master_id=telegram_id)
 
-
-async def start_add_client(callback: CallbackQuery, state: FSMContext) -> None:
-    logger.info(
-        "master.add_client.start",
-        extra={"telegram_id": callback.from_user.id if callback.from_user else None},
-    )
-    async with session_local() as session:
-        master_repo = MasterRepository(session)
-        master = await master_repo.get_by_telegram_id(callback.from_user.id)
-        entitlements = EntitlementsService(session)
-        check = await entitlements.can_attach_client(master_id=master.id)
-
-    if not check.allowed:
-        await answer_tracked(
-            callback.message,
-            state,
-            text=(
-                "Похоже, у тебя закончился лимит клиентов на Free.\n\n"
-                f"<b>Клиенты:</b> {check.current}/{check.limit}\n\n"
-                "Чтобы добавить больше клиентов — подключи Pro."
-            ),
-            bucket=ADD_CLIENT_BUCKET,
+    if not result.ok:
+        logger.error(
+            "master.add_client_offline.failed",
+            extra={"telegram_id": telegram_id, "error": result.error_detail},
         )
+        await callback.answer(ERROR_MESSAGE.get(result.error, "Неожиданная ошибка."), show_alert=True)
+        await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+        await state.clear()
         return
 
-    warning = ""
-    if check.limit is not None and check.current >= int(check.limit * 0.8):  # noqa: PLR2004
-        warning = (
-            "\n\n⚠️ Лимит клиентов на Free почти исчерпан:\n"
-            f"<b>{check.current}</b> из <b>{check.limit}</b>.\n"
-            "В Pro лимитов нет."
+    if not result.allowed:
+        assert result.usage is not None
+        logger.warning(
+            "master.add_client_offline.limit_clients_reached",
+            extra={
+                "telegram_id": telegram_id,
+                "clients_count": result.usage.clients_count,
+                "clients_limit": result.clients_limit,
+                "error": "quota_exceeded",
+            },
         )
+        if not await _send_warning_message(
+            chat_id=telegram_id,
+            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
+            usage=result.usage,
+            clients_limit=result.clients_limit,
+            notifier=notifier,
+        ):
+            await callback.answer("Лимит клиентов исчерпан.", show_alert=True)
+
+        await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+        await state.clear()
+        return
 
     await answer_tracked(
         callback.message,
         state,
-        text="Добавим клиента ✍️\n\nКак зовут клиента?"
-             f"{warning}",
+        text="Добавим клиента ✍️\n\nКак зовут клиента?",
         bucket=ADD_CLIENT_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
     await state.set_state(AddClientStates.name)
 
 
-@router.message(StateFilter(AddClientStates.name))
+@router.message(UserRole(ActiveRole.MASTER), StateFilter(AddClientStates.name))
 async def process_client_name(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=ADD_CLIENT_BUCKET)
     name = (message.text or "").strip()
@@ -145,7 +171,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
     await state.set_state(AddClientStates.phone)
 
 
-@router.message(StateFilter(AddClientStates.phone))
+@router.message(UserRole(ActiveRole.MASTER), StateFilter(AddClientStates.phone))
 async def process_client_phone(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=ADD_CLIENT_BUCKET)
     raw_phone = (message.text or "").strip()
@@ -185,21 +211,49 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
     await state.set_state(AddClientStates.confirm)
 
 
-@router.callback_query(StateFilter(AddClientStates.confirm), F.data == "master_add_client_restart")
-async def master_add_client_restart(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(AddClientStates.confirm),
+    F.data == CLIENT_ADD_CB["restart"],
+)
+async def master_add_client_restart(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+) -> None:
     await callback.answer()
     await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()
-    await start_add_client(callback, state)
+    await start_add_client(callback, state, notifier)
 
 
-@router.callback_query(StateFilter(AddClientStates.confirm), F.data == "master_add_client_confirm")
-async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) -> None:
-    logger.info(
-        "master.add_client.confirm",
-        extra={"telegram_id": callback.from_user.id if callback.from_user else None},
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(AddClientStates.name, AddClientStates.phone, AddClientStates.confirm),
+    F.data == CLIENT_ADD_CB["cancel"],
+)
+async def master_add_client_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    logger.debug(
+        "master.add_client_offline.cancelled",
+        extra={"telegram_id": callback.from_user.id},
     )
+    await callback.answer("Добавление клиента отменено.", show_alert=True)
+    await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+    await state.clear()
+
+
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(AddClientStates.confirm),
+    F.data == CLIENT_ADD_CB["confirm"],
+)
+async def master_add_client_confirm(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+) -> None:
+    telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
 
     data = await state.get_data()
@@ -207,38 +261,91 @@ async def master_add_client_confirm(callback: CallbackQuery, state: FSMContext) 
     phone = data.get("phone")
     if not name or not phone:
         logger.warning(
-            "master.add_client.missing_data",
+            "master.add_client_offline.missing_data",
             extra={
-                "telegram_id": callback.from_user.id if callback.from_user else None,
+                "telegram_id": telegram_id,
                 "name": bool(name),
                 "phone": bool(phone),
             },
         )
-        await callback.answer("Не хватает данных, попробуйте заново", show_alert=True)
+        await callback.answer("Не хватает данных, попробуйте заново.", show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         await state.clear()
         return
 
-    async with session_local() as session:
-        master_repo = MasterRepository(session)
-        master = await master_repo.get_by_telegram_id(callback.from_user.id)
+    async with active_session() as session:
+        result = await CreateClientOffline(session).create(
+            telegram_master_id=telegram_id,
+            phone_e164=phone,
+            name=name,
+        )
 
-    created_client_id = await _create_client(master.id, name, phone)
-    if created_client_id is None:
-        text = "ℹ️ Клиент с таким телефоном уже есть в твоей базе."
+    if result.ok:
+        logger.info(
+            "master.add_client_offline.success",
+            extra={"master_id": result.master_id, "client_id": result.client_id},
+        )
+        await callback.answer("✅ Готово! Клиент добавлен (🔴 оффлайн)", show_alert=True)
+        await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+        await state.clear()
+
+        if result.warn_master_clients_near_limit:
+            await _send_warning_message(
+                chat_id=telegram_id,
+                event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+                usage=result.usage,
+                clients_limit=result.clients_limit,
+                notifier=notifier,
+            )
+        return
+
+    if result.error == CreateClientOfflineError.PHONE_CONFLICT:
+        logger.warning(
+            "master.add_client_offline.conflict",
+            extra={"telegram_id": telegram_id, "conflict_phone": phone},
+        )
+        await callback.answer(text=ERROR_MESSAGE.get(result.error, ERROR_MESSAGE[None]), show_alert=True)
+        await answer_tracked(
+            callback.message,
+            state,
+            text="Укажите номер телефона:",
+            bucket=ADD_CLIENT_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
+        )
+        await state.set_state(AddClientStates.phone)
+        return
+
+    if result.error == CreateClientOfflineError.MASTER_NOT_FOUND:
+        logger.warning(
+            "master.add_client_offline.master_not_found",
+            extra={"telegram_id": telegram_id},
+        )
+        await callback.answer(text=ERROR_MESSAGE.get(result.error, ERROR_MESSAGE[None]), show_alert=True)
+    elif result.error == CreateClientOfflineError.QUOTA_EXCEEDED:
+        logger.warning(
+            "master.add_client_offline.limit_clients_reached",
+            extra={
+                "telegram_id": telegram_id,
+                "clients_count": result.usage.clients_count if getattr(result, "usage", None) else None,
+                "clients_limit": result.clients_limit,
+                "error": "quota_exceeded",
+            },
+        )
+        if not await _send_warning_message(
+            chat_id=telegram_id,
+            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
+            usage=result.usage,
+            clients_limit=result.clients_limit,
+            notifier=notifier,
+        ):
+            await callback.answer("Лимит клиентов исчерпан.", show_alert=True)
     else:
-        text = "✅ Готово! Клиент добавлен (🔴 оффлайн)"
-    await callback.answer(text=text, show_alert=True)
+        logger.warning(
+            "master.add_client_offline.invalid_request",
+            extra={"telegram_id": telegram_id, "error": str(result.error)},
+        )
+        await callback.answer(
+            text=ERROR_MESSAGE.get(result.error, ERROR_MESSAGE[None]), show_alert=True)
 
-    await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
-    await state.clear()
-
-
-@router.callback_query(
-    StateFilter(AddClientStates.name, AddClientStates.phone, AddClientStates.confirm),
-    F.data == "master_add_client_cancel",
-)
-async def master_add_client_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Окей, отменил.", show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()

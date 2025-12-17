@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from src.notifications.context import BookingContext, LimitsContext, ReminderContext
 from src.notifications.types import NotificationEvent, RecipientKind
@@ -8,144 +9,135 @@ from src.notifications.types import NotificationEvent, RecipientKind
 logger = logging.getLogger("notification_template")
 
 
-def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind, context: LimitsContext) -> str:
-    # Free
-    if event == NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT and recipient == RecipientKind.MASTER:
-        return (
-            "⚠️ Лимит клиентов на Free почти исчерпан.\n\n"
-            f"<b>{context.usage.clients_count}</b> из <b>{context.clients_limit}</b> клиентов.\n"
-            "В Pro лимитов нет."
-        )
-    # Free
-    if event == NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT and recipient == RecipientKind.MASTER:
-        return (
-            "⚠️ Лимит записей на Free почти исчерпан.\n\n"
-            f"<b>{context.usage.bookings_created_this_month}</b> из "
-            f"<b>{context.bookings_limit}</b> новых записей в этом месяце.\n"
-            "В Pro лимитов нет."
-        )
-    # Free
-    if event == NotificationEvent.LIMIT_CLIENTS_REACHED and recipient == RecipientKind.MASTER:
-        return (
-            "🚫 Лимит клиентов на Free исчерпан.\n\n"
-            f"<b>{context.usage.clients_count}</b> из <b>{context.clients_limit}</b>.\n"
-            "Чтобы приглашать и добавлять больше клиентов — подключите Pro."
-        )
-    # Free
-    if event == NotificationEvent.LIMIT_BOOKINGS_REACHED and recipient == RecipientKind.MASTER:
-        return (
-            "🚫 Лимит записей на Free исчерпан.\n\n"
-            f"<b>{context.usage.bookings_created_this_month}</b> из <b>{context.bookings_limit}</b>.\n"
-            "Чтобы создавать больше записей — подключите Pro."
-        )
+def _limit_str(value: int | None) -> str:
+    return "∞" if value is None else str(value)
 
-    logger.warning(
-        "unsupported_template",
-        extra={"event": event.value, "recipient": recipient.value},
-    )
-    return ""
+
+LIMITS_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[LimitsContext], str]] = {
+    # Free
+    (NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT, RecipientKind.MASTER): lambda context: (
+        "⚠️ Лимит клиентов на Free почти исчерпан.\n\n"
+        f"<b>{context.usage.clients_count}</b> из <b>{_limit_str(context.clients_limit)}</b> клиентов.\n"
+        "В Pro лимитов нет."
+    ),
+    (NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT, RecipientKind.MASTER): lambda context: (
+        "⚠️ Лимит записей на Free почти исчерпан.\n\n"
+        f"<b>{context.usage.bookings_created_this_month}</b> из "
+        f"<b>{context.bookings_limit}</b> новых записей в этом месяце.\n"
+        "В Pro лимитов нет."
+    ),
+    (NotificationEvent.LIMIT_CLIENTS_REACHED, RecipientKind.MASTER): lambda context: (
+        "🚫 Лимит клиентов на Free исчерпан.\n\n"
+        f"<b>{context.usage.clients_count}</b> из <b>{_limit_str(context.clients_limit)}</b>.\n"
+        "Чтобы приглашать и добавлять больше клиентов — подключите Pro."
+    ),
+    (NotificationEvent.LIMIT_BOOKINGS_REACHED, RecipientKind.MASTER): lambda context: (
+        "🚫 Лимит записей на Free исчерпан.\n\n"
+        f"<b>{context.usage.bookings_created_this_month}</b> из <b>{_limit_str(context.bookings_limit)}</b>.\n"
+        "Чтобы создавать больше записей — подключите Pro."
+    ),
+}
+
+BOOKING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[BookingContext], str]] = {
+    # Free
+    (NotificationEvent.BOOKING_CREATED_PENDING, RecipientKind.MASTER): lambda context: (
+        "📩 Новая запись на подтверждение\n\n"
+        f"<b>Клиент:</b> {context.client_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        f"<b>Длительность:</b> {context.duration_min} мин.\n\n"
+        "Подтвердить запись?"
+    ),
+    (NotificationEvent.BOOKING_CANCELLED_BY_CLIENT, RecipientKind.MASTER): lambda context: (
+        "❌ Запись отменена клиентом\n\n"
+        f"<b>Клиент:</b> {context.client_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}"
+    ),
+    (NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER_NOTICE, RecipientKind.MASTER): lambda context: (
+        "✅ Запись перенесена.\n\n"
+        f"<b>Клиент:</b> {context.client_name}\n"
+        f"<b>Новая дата и время:</b> {context.slot_str}"
+    ),
+    # Pro
+    (NotificationEvent.BOOKING_CONFIRMED, RecipientKind.CLIENT): lambda context: (
+        "✅ Запись подтверждена мастером.\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        "Ждём вас 🙂"
+    ),
+    (NotificationEvent.BOOKING_DECLINED, RecipientKind.CLIENT): lambda context: (
+        "❌ Мастер отклонил запись.\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        "Пожалуйста, выберите другое время в разделе «➕ Записаться»."
+    ),
+    (NotificationEvent.BOOKING_CREATED_CONFIRMED, RecipientKind.CLIENT): lambda context: (
+        "✔️ Вам назначена запись\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        f"<b>Длительность:</b> {context.duration_min} мин.\n"
+        "Если время не подходит — свяжитесь с мастером."
+    ),
+    (NotificationEvent.BOOKING_CANCELLED_BY_MASTER, RecipientKind.CLIENT): lambda context: (
+        "🚫 Запись отменена мастером.\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        "Если нужно — выберите другое время в разделе «➕ Записаться»."
+    ),
+    (NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER, RecipientKind.CLIENT): lambda context: (
+        "🔄 Ваша запись перенесена.\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Новая дата и время:</b> {context.slot_str}\n"
+        f"<b>Длительность:</b> {context.duration_min} мин.\n"
+        "Если время не подходит — свяжитесь с мастером."
+    ),
+}
+
+REMINDER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[ReminderContext], str]] = {
+    # Pro
+    (NotificationEvent.REMINDER_24H, RecipientKind.CLIENT): lambda context: (
+        "Напоминание о записи ⏰\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        "До встречи 🙂"
+    ),
+    (NotificationEvent.REMINDER_2H, RecipientKind.CLIENT): lambda context: (
+        "Скоро запись ⏳\n\n"
+        f"<b>Мастер:</b> {context.master_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n"
+        "Ждём вас 🙂"
+    ),
+    (NotificationEvent.FOLLOWUP_THANK_YOU, RecipientKind.CLIENT): lambda context: (
+        "Спасибо за визит 💛\n\n"
+        "Если захотите записаться снова — откройте «➕ Записаться» в BeautyDesk."
+    ),
+}
+
+
+def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind, context: LimitsContext) -> str:
+    fn = LIMITS_TEMPLATES.get((event, recipient))
+    if fn is None:
+        logger.debug(
+            "unsupported_template",
+            extra={"event": event.value, "recipient": recipient.value},
+        )
+    return fn(context) if fn else ""
 
 
 def render_booking_template(*, event: NotificationEvent, recipient: RecipientKind, context: BookingContext) -> str:
-    # Free
-    if event == NotificationEvent.BOOKING_CREATED_PENDING and recipient == RecipientKind.MASTER:
-        return (
-            "📩 Новая запись на подтверждение\n\n"
-            f"<b>Клиент:</b> {context.client_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            f"<b>Длительность:</b> {context.duration_min} мин.\n\n"
-            "Подтвердить запись?"
+    fn = BOOKING_TEMPLATES.get((event, recipient))
+    if fn is None:
+        logger.debug(
+            "unsupported_template",
+            extra={"event": event.value, "recipient": recipient.value},
         )
-    # Pro
-    if event == NotificationEvent.BOOKING_CONFIRMED and recipient == RecipientKind.CLIENT:
-        return (
-            "✅ Запись подтверждена мастером.\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            "Ждём вас 🙂"
-        )
-    # Pro
-    if event == NotificationEvent.BOOKING_DECLINED and recipient == RecipientKind.CLIENT:
-        return (
-            "❌ Мастер отклонил запись.\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            "Пожалуйста, выберите другое время в разделе «➕ Записаться»."
-        )
-    # Pro
-    if event == NotificationEvent.BOOKING_CREATED_CONFIRMED and recipient == RecipientKind.CLIENT:
-        return (
-            "✔️ Вам назначена запись\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            f"<b>Длительность:</b> {context.duration_min} мин.\n"
-            "Если время не подходит — свяжитесь с мастером."
-        )
-    # Free
-    if event == NotificationEvent.BOOKING_CANCELLED_BY_CLIENT and recipient == RecipientKind.MASTER:
-        return (
-            "❌ Запись отменена клиентом\n\n"
-            f"<b>Клиент:</b> {context.client_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}"
-        )
-    # Pro
-    if event == NotificationEvent.BOOKING_CANCELLED_BY_MASTER and recipient == RecipientKind.CLIENT:
-        return (
-            "🚫 Запись отменена мастером.\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            "Если нужно — выберите другое время в разделе «➕ Записаться»."
-        )
-    # Pro
-    if event == NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER and recipient == RecipientKind.CLIENT:
-        return (
-            "🔄 Ваша запись перенесена.\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Новая дата и время:</b> {context.slot_str}\n"
-            f"<b>Длительность:</b> {context.duration_min} мин.\n"
-            "Если время не подходит — свяжитесь с мастером."
-        )
-    # Free
-    if event == NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER_NOTICE and recipient == RecipientKind.MASTER:
-        return (
-            "✅ Запись перенесена.\n\n"
-            f"<b>Клиент:</b> {context.client_name}\n"
-            f"<b>Новая дата и время:</b> {context.slot_str}"
-        )
-
-    logger.warning(
-        "unsupported_template",
-        extra={"event": event.value, "recipient": recipient.value},
-    )
-    return ""
+    return fn(context) if fn else ""
 
 
 def render_reminder_template(*, event: NotificationEvent, recipient: RecipientKind, context: ReminderContext) -> str:
-    # Pro
-    if event == NotificationEvent.REMINDER_24H and recipient == RecipientKind.CLIENT:
-        return (
-            "Напоминание о записи ⏰\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            "До встречи 🙂"
+    fn = REMINDER_TEMPLATES.get((event, recipient))
+    if fn is None:
+        logger.debug(
+            "unsupported_template",
+            extra={"event": event.value, "recipient": recipient.value},
         )
-    # Pro
-    if event == NotificationEvent.REMINDER_2H and recipient == RecipientKind.CLIENT:
-        return (
-            "Скоро запись ⏳\n\n"
-            f"<b>Мастер:</b> {context.master_name}\n"
-            f"<b>Дата и время:</b> {context.slot_str}\n"
-            "Ждём вас 🙂"
-        )
-    # Pro
-    if event == NotificationEvent.FOLLOWUP_THANK_YOU and recipient == RecipientKind.CLIENT:
-        return (
-            "Спасибо за визит 💛\n\n"
-            "Если захотите записаться снова — откройте «➕ Записаться» в BeautyDesk."
-        )
-
-    logger.warning(
-        "unsupported_template",
-        extra={"event": event.value, "recipient": recipient.value},
-    )
-    return ""
+    return fn(context) if fn else ""

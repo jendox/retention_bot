@@ -9,15 +9,16 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.sa import active_session, session_local
 from src.handlers.client.client_menu import send_client_main_menu
-from src.notifications import NotificationService, NotificationEvent, RecipientKind
+from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
+from src.notifications.notifier import NotificationRequest, Notifier
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import (
     MasterNotFound,
     MasterRepository,
 )
 from src.use_cases.accept_client_invite import AcceptClientInvite, AcceptClientInviteRequest, AcceptInviteError
-from src.user_context import UserContextStorage, ActiveRole
+from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
 router = Router(name=__name__)
@@ -83,27 +84,27 @@ async def _send_error_message(
 
     if error in {AcceptInviteError.INVITE_INVALID, AcceptInviteError.INVITE_NOT_FOUND}:
         await bot.send_message(
-            chat_id,
-            "Эта ссылка на регистрацию больше не активна 😕\n"
-            "Она могла истечь или быть использована ранее.\n\n"
-            "Попроси мастера отправить новую ссылку ✨",
+            chat_id=chat_id,
+            text="Эта ссылка на регистрацию больше не активна 😕\n"
+                 "Она могла истечь или быть использована ранее.\n\n"
+                 "Попросите мастера отправить новую ссылку ✨",
         )
         return
 
     if error == AcceptInviteError.QUOTA_EXCEEDED:
         await bot.send_message(
-            chat_id,
-            "Похоже, у мастера закончился лимит клиентов на Free 😕\n\n"
-            "Попроси мастера подключить Pro или прислать ссылку позже.",
+            chat_id=chat_id,
+            text="Похоже, у мастера закончился лимит клиентов на Free 😕\n\n"
+                 "Попросите мастера подключить Pro или прислать ссылку позже.",
         )
         return
 
     if error == AcceptInviteError.PHONE_CONFLICT:
         await bot.send_message(
-            chat_id,
-            "Не получилось подключиться по ссылке 😕\n"
-            "Похоже, у мастера уже есть клиент с таким телефоном.\n\n"
-            "Попроси мастера помочь тебе подключиться.",
+            chat_id=chat_id,
+            text="Не получилось подключиться по ссылке 😕\n"
+                 "Похоже, у мастера уже есть клиент с таким телефоном.\n\n"
+                 "Попросите мастера помочь вам подключиться.",
         )
         return
 
@@ -152,8 +153,8 @@ async def process_name_question(message: Message, state: FSMContext) -> None:
         message,
         state,
         text="Привет! 👋\n"
-             "Давай настроим твой профиль клиента в BeautyDesk.\n\n"
-             "Как тебя зовут? (Например: Маша)",
+             "Давайте настроим ваш профиль клиента в BeautyDesk.\n\n"
+             "Как вас зовут? (Например: Маша)",
         bucket=CLIENT_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -169,7 +170,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
             message,
             state,
             text="Я не понял имя 🤔\n"
-                 "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Маша</b>",
+                 "Пожалуйста, напишите, как к вам обращаться. Например: <b>Маша</b>",
             bucket=CLIENT_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -198,8 +199,8 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
             message,
             state,
             text="Не смог разобрать телефонный номер 🤔\n\n"
-                 "Пожалуйста, введи реальный номер в формате 375291234567, "
-                 "чтобы мастер мог с тобой связаться:",
+                 "Пожалуйста, введите реальный номер в формате 375291234567, "
+                 "чтобы мастер мог с вами связаться:",
             bucket=CLIENT_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -234,6 +235,7 @@ async def client_reg_confirm(
     callback: CallbackQuery,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
+    notifier: Notifier,
 ) -> None:
     await callback.answer()
     await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
@@ -241,7 +243,7 @@ async def client_reg_confirm(
         callback.message,
         state,
         text="⏳ Создаю профиль клиента…\n"
-             "Пожалуйста, подожди несколько секунд.",
+             "Пожалуйста, подождите несколько секунд.",
         bucket=CLIENT_REGISTRATION_BUCKET,
     )
 
@@ -251,7 +253,7 @@ async def client_reg_confirm(
     try:
         invite_data = InviteData.model_validate(data.get("invite_data"))
     except ValidationError:
-        await callback.answer(text="Что-то пошло не так, попробуй ещё раз", show_alert=True)
+        await callback.answer("Что-то пошло не так, попробуйте ещё раз", show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
         await state.clear()
         return
@@ -288,19 +290,20 @@ async def client_reg_confirm(
     await bot.send_message(
         chat_id=telegram_id,
         text="Готово! 🎉\n\n"
-             "Твой профиль клиента создан.\n"
-             "Теперь ты можешь управлять записями в BeautyDesk.",
+             "Ваш профиль клиента создан.\n"
+             "Теперь вы можете управлять записями в BeautyDesk.",
     )
 
     if result.warn_master_clients_near_limit:
-        notification = NotificationService(bot)
-        await notification.send(
-            event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
-            recipient=RecipientKind.MASTER,
-            chat_id=result.master_telegram_id,
-            context=LimitsContext(
-                usage=result.usage,
-                clients_limit=FREE_CLIENTS_LIMIT,
+        await notifier.maybe_send(
+            NotificationRequest(
+                event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+                recipient=RecipientKind.MASTER,
+                chat_id=result.master_telegram_id,
+                context=LimitsContext(
+                    usage=result.usage,
+                    clients_limit=FREE_CLIENTS_LIMIT,
+                ),
             ),
         )
 
@@ -332,6 +335,6 @@ async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
     F.data == "client_reg_cancel",
 )
 async def client_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Окей, отменил.", show_alert=True)
+    await callback.answer("Регистрация отменена.", show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
     await state.clear()

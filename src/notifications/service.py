@@ -7,7 +7,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup
 
 from src.notifications.context import BookingContext, LimitsContext, ReminderContext
-from src.notifications.renderer import render, RenderedMessage
+from src.notifications.renderer import RenderedMessage, render
 from src.notifications.types import NotificationEvent, RecipientKind
 
 logger = logging.getLogger(__name__)

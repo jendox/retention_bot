@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol
 
-from src.notifications import NotificationEvent, RecipientKind
+from src.notifications.types import NotificationEvent, RecipientKind
 
 
 class DenyReason(StrEnum):
     NO_CHAT_ID = "no_chat_id"
-    RECIPIENT_OFFLINE = "recipient_offline"
     CLIENT_NOTIFICATIONS_DISABLED = "client_notifications_disabled"
     MASTER_NOTIFICATIONS_DISABLED = "master_notifications_disabled"
     PRO_REQUIRED = "pro_required"
@@ -66,10 +65,17 @@ class DefaultNotificationPolicy:
     - reminders: Pro-only + оба тумблера + только для будущих записей
     """
 
-    MASTER_EVENTS_FREE: set[NotificationEvent] = {
+    MASTER_ALLOWED_EVENTS: set[NotificationEvent] = {
         NotificationEvent.BOOKING_CREATED_PENDING,
         NotificationEvent.BOOKING_CANCELLED_BY_CLIENT,
         NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER_NOTICE,
+        NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+        NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
+        NotificationEvent.LIMIT_CLIENTS_REACHED,
+        NotificationEvent.LIMIT_BOOKINGS_REACHED,
+    }
+
+    MASTER_FREE_ONLY_EVENTS: set[NotificationEvent] = {
         NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
         NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
         NotificationEvent.LIMIT_CLIENTS_REACHED,
@@ -93,14 +99,19 @@ class DefaultNotificationPolicy:
 
         # 1) Master-facing: разрешаем только известные события мастеру
         if facts.recipient == RecipientKind.MASTER:
-            if facts.event in self.MASTER_EVENTS_FREE:
-                return PolicyDecision.allow()
-            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event}")
+            if facts.event not in self.MASTER_ALLOWED_EVENTS:
+                return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
+            if facts.event in self.MASTER_FREE_ONLY_EVENTS:
+                if facts.plan_is_pro is None:
+                    return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_only_event_requires_plan")
+                if facts.plan_is_pro:
+                    return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_only_event_for_pro_master")
+            return PolicyDecision.allow()
 
         # 2) Client-facing: только определённые события
         if facts.recipient == RecipientKind.CLIENT:
             if facts.event not in self.CLIENT_EVENTS_PRO:
-                return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event}")
+                return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
 
             # Pro required
             if not facts.plan_is_pro:
@@ -120,4 +131,4 @@ class DefaultNotificationPolicy:
 
             return PolicyDecision.allow()
 
-        return PolicyDecision.deny(DenyReason.UNKNOWN, detail=f"recipient={facts.recipient}")
+        return PolicyDecision.deny(DenyReason.UNKNOWN, detail=f"recipient={facts.recipient.value}")
