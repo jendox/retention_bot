@@ -12,7 +12,7 @@ from src.repositories import (
     InviteRepository,
     MasterRepository,
 )
-from src.schemas import ClientCreate, ClientUpdate, Invite, Master, Client
+from src.schemas import Client, ClientCreate, ClientUpdate, Invite, Master
 from src.schemas.enums import InviteType, Timezone
 from src.use_cases.entitlements import EntitlementsService, Usage
 
@@ -89,6 +89,17 @@ class QuotaDecision:
     already_attached: bool = False
 
 
+@dataclass
+class _FlowState:
+    request: AcceptClientInviteRequest
+    valid: ValidInviteCtx | None = None
+    master_id: int | None = None
+    resolved: ResolvedClientCtx | None = None
+    quota: QuotaDecision | None = None
+    invite_consumed: bool = False
+    invite_burned_noop: bool = False
+
+
 class AcceptClientInvite:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -158,7 +169,7 @@ class AcceptClientInvite:
                 )
                 return AcceptClientInviteResult(
                     ok=False,
-                    error_detail=AcceptInviteError.MISSING_PHONE,
+                    error=AcceptInviteError.MISSING_PHONE,
                     master_id=master_id,
                     master_telegram_id=master.telegram_id,
                 )
@@ -184,50 +195,91 @@ class AcceptClientInvite:
         request: AcceptClientInviteRequest,
         resolved: ResolvedClientCtx,
     ) -> AcceptClientInviteResult | None:
-        master = resolved.master
-        existing_client = resolved.existing_client
-        phone = resolved.phone
+        conflict = self._check_phone_conflict_with_client_for_phone(
+            master_id=master_id,
+            request=request,
+            resolved=resolved,
+        )
+        if conflict is not None:
+            return conflict
+        return await self._check_phone_conflict_with_existing_client_phone(
+            master_id=master_id,
+            request=request,
+            resolved=resolved,
+        )
+
+    @staticmethod
+    def _check_phone_conflict_with_client_for_phone(
+        *,
+        master_id: int,
+        request: AcceptClientInviteRequest,
+        resolved: ResolvedClientCtx,
+    ) -> AcceptClientInviteResult | None:
         client_for_phone = resolved.client_for_phone
+        if client_for_phone is None:
+            return None
 
-        if client_for_phone is not None:
-            tg_id = getattr(client_for_phone, "telegram_id", None)
-            if tg_id is not None and tg_id != request.telegram_id:
-                logger.error(
-                    "client.phone_conflict",
-                    extra={"phone": phone, "telegram_id": request.telegram_id, "conflict_telegram_id": tg_id},
-                )
-                return AcceptClientInviteResult(
-                    ok=False,
-                    error=AcceptInviteError.PHONE_CONFLICT,
-                    master_id=master_id,
-                    master_telegram_id=master.telegram_id,
-                    error_detail="client_for_phone already bound to another telegram_id",
-                )
+        tg_id = getattr(client_for_phone, "telegram_id", None)
+        if tg_id is None or tg_id == request.telegram_id:
+            return None
 
-        if existing_client is not None and phone is not None:
-            if getattr(existing_client, "phone", None):
-                try:
-                    other_for_phone = await self._client_repo.find_for_master_by_phone(
-                        master_id=master_id, phone=existing_client.phone,
-                    )
-                    if other_for_phone.id != existing_client.id:
-                        if getattr(other_for_phone, "telegram_id", None) is not None \
-                            and other_for_phone.telegram_id != request.telegram_id:
-                            logger.error(
-                                "client.phone_conflict",
-                                extra={"phone": phone, "telegram_id": request.telegram_id,
-                                       "conflict_telegram_id": other_for_phone.telegram_id},
-                            )
-                            return AcceptClientInviteResult(
-                                ok=False,
-                                error=AcceptInviteError.PHONE_CONFLICT,
-                                master_id=master_id,
-                                master_telegram_id=master.telegram_id,
-                                error_detail="existing_client phone already taken by another online client for master",
-                            )
-                except ClientNotFound:
-                    pass
-        return None
+        logger.error(
+            "client.phone_conflict",
+            extra={"phone": resolved.phone, "telegram_id": request.telegram_id, "conflict_telegram_id": tg_id},
+        )
+        return AcceptClientInviteResult(
+            ok=False,
+            error=AcceptInviteError.PHONE_CONFLICT,
+            master_id=master_id,
+            master_telegram_id=resolved.master.telegram_id,
+            error_detail="client_for_phone already bound to another telegram_id",
+        )
+
+    async def _check_phone_conflict_with_existing_client_phone(
+        self,
+        *,
+        master_id: int,
+        request: AcceptClientInviteRequest,
+        resolved: ResolvedClientCtx,
+    ) -> AcceptClientInviteResult | None:
+        existing_client = resolved.existing_client
+        if existing_client is None:
+            return None
+
+        phone = resolved.phone
+        if phone is None or not getattr(existing_client, "phone", None):
+            return None
+
+        try:
+            other_for_phone = await self._client_repo.find_for_master_by_phone(
+                master_id=master_id,
+                phone=existing_client.phone,
+            )
+        except ClientNotFound:
+            return None
+
+        if other_for_phone.id == existing_client.id:
+            return None
+
+        other_tg = getattr(other_for_phone, "telegram_id", None)
+        if other_tg is None or other_tg == request.telegram_id:
+            return None
+
+        logger.error(
+            "client.phone_conflict",
+            extra={
+                "phone": phone,
+                "telegram_id": request.telegram_id,
+                "conflict_telegram_id": other_for_phone.telegram_id,
+            },
+        )
+        return AcceptClientInviteResult(
+            ok=False,
+            error=AcceptInviteError.PHONE_CONFLICT,
+            master_id=master_id,
+            master_telegram_id=resolved.master.telegram_id,
+            error_detail="existing_client phone already taken by another online client for master",
+        )
 
     async def _decide_quota(
         self,
@@ -374,77 +426,167 @@ class AcceptClientInvite:
         return "clients" in close
 
     async def execute(self, request: AcceptClientInviteRequest) -> AcceptClientInviteResult:
-        valid, error = await self._validate_invite(request.telegram_id, request.invite_token)
+        return await self._execute_flow(_FlowState(request=request))
+
+    async def _execute_flow(self, state: _FlowState) -> AcceptClientInviteResult:
+        for step in (
+                self._step_validate_invite,
+                self._step_check_master_mismatch,
+                self._step_resolve_client,
+                self._step_check_conflicts,
+                self._step_decide_quota,
+                self._step_noop_if_already_attached,
+                self._step_consume_invite,
+        ):
+            result = await step(state)
+            if result is not None:
+                return result
+
+        assert state.master_id is not None
+        assert state.resolved is not None
+
+        result = await self._apply_attach(
+            master_id=state.master_id,
+            master_telegram_id=state.resolved.master.telegram_id,
+            request=state.request,
+            resolved=state.resolved,
+        )
+
+        warn = await self._should_warn_clients_limit(state.master_id)
+        usage = await self._entitlements.get_usage(master_id=state.master_id) if warn else None
+        final = replace(result, warn_master_clients_near_limit=warn, usage=usage)
+
+        self._log_success(
+            extra={
+                "telegram_id": state.request.telegram_id,
+                "master_id": state.master_id,
+                "client_id": final.client_id,
+                "outcome": final.outcome.value if final.outcome else None,
+                "warn_master_clients_near_limit": warn,
+                "invite_max_uses": state.valid.invite.max_uses if state.valid else None,
+                "invite_consumed": state.invite_consumed,
+                "invite_burned_noop": False,
+            },
+        )
+        return final
+
+    @staticmethod
+    def _log_success(*, extra: dict[str, object]) -> None:
+        logger.info(
+            "invite.accepted",
+            extra=extra,
+        )
+
+    async def _step_validate_invite(self, state: _FlowState) -> AcceptClientInviteResult | None:
+        valid, error = await self._validate_invite(state.request.telegram_id, state.request.invite_token)
         if valid is None:
             return AcceptClientInviteResult(ok=False, error=error)
+        state.valid = valid
+        state.master_id = valid.master_id
+        return None
 
-        master_id = valid.master_id
-        if request.expected_master_id is not None and request.expected_master_id != master_id:
-            logger.warning(
-                "invite.master_mismatch",
-                extra={"master_id": master_id, "expected_master_id": request.expected_master_id},
-            )
-            return AcceptClientInviteResult(
-                ok=False,
-                error=AcceptInviteError.INVITE_MASTER_MISMATCH,
-                master_id=master_id,
-                error_detail=f"expected={request.expected_master_id} actual={master_id}",
-            )
+    @staticmethod
+    async def _step_check_master_mismatch(state: _FlowState) -> AcceptClientInviteResult | None:
+        assert state.master_id is not None
+        expected = state.request.expected_master_id
+        if expected is None or expected == state.master_id:
+            return None
 
-        resolved = await self._resolve_client_ctx(master_id=master_id, request=request)
+        logger.warning(
+            "invite.master_mismatch",
+            extra={"master_id": state.master_id, "expected_master_id": expected},
+        )
+        return AcceptClientInviteResult(
+            ok=False,
+            error=AcceptInviteError.INVITE_MASTER_MISMATCH,
+            master_id=state.master_id,
+            error_detail=f"expected={expected} actual={state.master_id}",
+        )
+
+    async def _step_resolve_client(self, state: _FlowState) -> AcceptClientInviteResult | None:
+        assert state.master_id is not None
+        resolved = await self._resolve_client_ctx(master_id=state.master_id, request=state.request)
         if isinstance(resolved, AcceptClientInviteResult):
             return resolved
+        state.resolved = resolved
+        return None
 
-        master = resolved.master
-        conflict = await self._check_phone_conflicts(
-            master_id=master_id, request=request, resolved=resolved,
+    async def _step_check_conflicts(self, state: _FlowState) -> AcceptClientInviteResult | None:
+        assert state.master_id is not None
+        assert state.resolved is not None
+        return await self._check_phone_conflicts(
+            master_id=state.master_id,
+            request=state.request,
+            resolved=state.resolved,
         )
-        if conflict is not None:
-            return conflict
 
-        quota = await self._decide_quota(
-            master_id=master_id, request=request, resolved=resolved,
+    async def _step_decide_quota(self, state: _FlowState) -> AcceptClientInviteResult | None:
+        assert state.master_id is not None
+        assert state.resolved is not None
+        quota = await self._decide_quota(master_id=state.master_id, request=state.request, resolved=state.resolved)
+        state.quota = quota
+        if quota.allowed:
+            return None
+        return AcceptClientInviteResult(
+            ok=False,
+            error=quota.error,
+            error_detail=quota.error_detail,
+            master_id=state.master_id,
+            master_telegram_id=state.resolved.master.telegram_id,
         )
-        if not quota.allowed:
-            return AcceptClientInviteResult(
-                ok=False,
-                error=quota.error,
-                error_detail=quota.error_detail,
-                master_id=master_id,
-                master_telegram_id=resolved.master.telegram_id,
-            )
-        if resolved.existing_client is not None and quota.already_attached:
-            if resolved.client_for_phone is None or resolved.client_for_phone.id == resolved.existing_client.id:
-                invite = valid.invite
-                if invite.max_uses == 1 and invite.used_count == 0 and invite.is_invite_valid():
-                    consumed = await self._invite_repo.increment_used_count_if_valid(request.invite_token)
-                    if not consumed:
-                        logger.info(
-                            "invite.noop_burn_failed",
-                            extra={"telegram_id": request.telegram_id, "master_id": master_id},
-                        )
-                return AcceptClientInviteResult(
-                    ok=True,
-                    outcome=AcceptInviteOutcome.ATTACHED_EXISTING,
-                    master_id=master_id,
-                    master_telegram_id=resolved.master.telegram_id,
-                    client_id=resolved.existing_client.id,
+
+    async def _step_noop_if_already_attached(self, state: _FlowState) -> AcceptClientInviteResult | None:
+        assert state.master_id is not None
+        assert state.resolved is not None
+        assert state.valid is not None
+        assert state.quota is not None
+
+        existing_client = state.resolved.existing_client
+        if existing_client is None or not state.quota.already_attached:
+            return None
+        if state.resolved.client_for_phone is not None and state.resolved.client_for_phone.id != existing_client.id:
+            return None
+
+        invite = state.valid.invite
+        if invite.max_uses == 1 and invite.used_count == 0 and invite.is_invite_valid():
+            consumed = await self._invite_repo.increment_used_count_if_valid(state.request.invite_token)
+            state.invite_burned_noop = bool(consumed)
+            if not consumed:
+                logger.info(
+                    "invite.noop_burn_failed",
+                    extra={"telegram_id": state.request.telegram_id, "master_id": state.master_id},
                 )
 
+        result = AcceptClientInviteResult(
+            ok=True,
+            outcome=AcceptInviteOutcome.ATTACHED_EXISTING,
+            master_id=state.master_id,
+            master_telegram_id=state.resolved.master.telegram_id,
+            client_id=existing_client.id,
+        )
+        self._log_success(
+            extra={
+                "telegram_id": state.request.telegram_id,
+                "master_id": state.master_id,
+                "client_id": result.client_id,
+                "outcome": result.outcome.value if result.outcome else None,
+                "warn_master_clients_near_limit": False,
+                "invite_max_uses": invite.max_uses,
+                "invite_consumed": False,
+                "invite_burned_noop": state.invite_burned_noop,
+            },
+        )
+        return result
+
+    async def _step_consume_invite(self, state: _FlowState) -> AcceptClientInviteResult | None:
+        assert state.master_id is not None
+        assert state.resolved is not None
         consume_result = await self._consume_invite(
-            master_id=master_id, master_telegram_id=master.telegram_id, request=request,
+            master_id=state.master_id,
+            master_telegram_id=state.resolved.master.telegram_id,
+            request=state.request,
         )
         if consume_result is not None:
             return consume_result
-
-        result = await self._apply_attach(
-            master_id=master_id,
-            master_telegram_id=master.telegram_id,
-            request=request,
-            resolved=resolved,
-        )
-
-        warn = await self._should_warn_clients_limit(master_id)
-        usage = await self._entitlements.get_usage(master_id=master_id) if warn else None
-
-        return replace(result, warn_master_clients_near_limit=warn, usage=usage)
+        state.invite_consumed = True
+        return None

@@ -100,6 +100,14 @@ async def _send_error_message(
         )
         return
 
+    if error in {AcceptInviteError.INVITE_WRONG_TYPE, AcceptInviteError.INVITE_MASTER_MISMATCH}:
+        await bot.send_message(
+            chat_id=chat_id,
+            text="Эта ссылка не подходит для регистрации клиента 😕\n\n"
+                 "Попросите мастера прислать актуальную ссылку на регистрацию ✨",
+        )
+        return
+
     if error == AcceptInviteError.QUOTA_EXCEEDED:
         await bot.send_message(
             chat_id=chat_id,
@@ -116,6 +124,12 @@ async def _send_error_message(
                  "Попросите мастера помочь вам подключиться.",
         )
         return
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text="Не получилось зарегистрироваться по ссылке 😕\n\n"
+             "Попробуйте ещё раз или попросите мастера прислать новую ссылку.",
+    )
 
 
 class InviteData(BaseModel):
