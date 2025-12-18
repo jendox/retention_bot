@@ -23,6 +23,7 @@ class CreateClientOfflinePreflightResult:
 
     # quota
     allowed: bool = False
+    plan_is_pro: bool | None = None
     clients_limit: int | None = None  # None == ∞ (Pro)
     usage: Usage | None = None
 
@@ -38,6 +39,7 @@ class CreateClientOfflineCreateResult:
     client_id: int | None = None
 
     # UX hints (после успешного создания полезно предупредить “почти лимит”)
+    plan_is_pro: bool | None = None
     clients_limit: int | None = None
     usage: Usage | None = None
     warn_master_clients_near_limit: bool = False
@@ -69,6 +71,7 @@ class CreateClientOffline:
             return CreateClientOfflinePreflightResult(
                 ok=True,
                 allowed=True,
+                plan_is_pro=True,
                 master_id=master.id,
                 clients_limit=None,
             )
@@ -78,6 +81,7 @@ class CreateClientOffline:
         return CreateClientOfflinePreflightResult(
             ok=True,
             master_id=master.id,
+            plan_is_pro=False,
             allowed=allowed,
             error=None if allowed else CreateClientOfflineError.QUOTA_EXCEEDED,
             usage=usage,
@@ -90,19 +94,24 @@ class CreateClientOffline:
         if not result.ok:
             return CreateClientOfflineCreateResult(
                 ok=False,
+                plan_is_pro=result.plan_is_pro,
                 master_id=master_id,
                 error=result.error or CreateClientOfflineError.INVALID_REQUEST,
                 error_detail=result.error_detail,
             )
+
         if master_id is None:
             return CreateClientOfflineCreateResult(
                 ok=False,
+                plan_is_pro=result.plan_is_pro,
                 master_id=master_id,
                 error=CreateClientOfflineError.INVALID_REQUEST,
             )
+
         if not result.allowed:
             return CreateClientOfflineCreateResult(
                 ok=False,
+                plan_is_pro=result.plan_is_pro,
                 master_id=master_id,
                 error=result.error or CreateClientOfflineError.QUOTA_EXCEEDED,
                 usage=result.usage,
@@ -115,6 +124,7 @@ class CreateClientOffline:
             )
             return CreateClientOfflineCreateResult(
                 ok=False,
+                plan_is_pro=result.plan_is_pro,
                 master_id=master_id,
                 error=CreateClientOfflineError.PHONE_CONFLICT,
                 error_detail=f"phone={phone_e164}",
@@ -141,6 +151,7 @@ class CreateClientOffline:
             ok=True,
             master_id=master_id,
             client_id=client.id,
+            plan_is_pro=result.plan_is_pro,
             warn_master_clients_near_limit=warn,
             usage=usage,
             clients_limit=result.clients_limit,

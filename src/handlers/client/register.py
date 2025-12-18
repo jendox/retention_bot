@@ -12,6 +12,7 @@ from src.handlers.client.client_menu import send_client_main_menu
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
+from src.notifications.policy import NotificationFacts
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import (
     MasterNotFound,
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 CLIENT_REGISTRATION_BUCKET = "client_registration"
 
+CLIENT_REGISTRATION_CB = {
+    "confirm": "c:registration:confirm",
+    "restart": "c:registration:restart",
+    "cancel": "c:registration:cancel",
+}
+
 
 class ClientRegistration(StatesGroup):
     name = State()
@@ -39,17 +46,17 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text="✅ Всё верно",
-                    callback_data="client_reg_confirm",
+                    callback_data=CLIENT_REGISTRATION_CB["confirm"],
                 ),
                 InlineKeyboardButton(
                     text="🔁 Заполнить заново",
-                    callback_data="client_reg_restart",
+                    callback_data=CLIENT_REGISTRATION_CB["restart"],
                 ),
             ],
             [
                 InlineKeyboardButton(
                     text="❌ Отмена",
-                    callback_data="client_reg_cancel",
+                    callback_data=CLIENT_REGISTRATION_CB["cancel"],
                 ),
             ],
         ],
@@ -59,7 +66,9 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
 def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="client_reg_cancel")],
+            [
+                InlineKeyboardButton(text="❌ Отмена", callback_data=CLIENT_REGISTRATION_CB["cancel"]),
+            ],
         ],
     )
 
@@ -229,7 +238,7 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(
     StateFilter(ClientRegistration.confirm),
-    F.data == "client_reg_confirm",
+    F.data == CLIENT_REGISTRATION_CB["confirm"],
 )
 async def client_reg_confirm(
     callback: CallbackQuery,
@@ -268,6 +277,7 @@ async def client_reg_confirm(
                 invite_token=invite_data.invite_token,
                 name=name,
                 phone_e164=phone,
+                expected_master_id=invite_data.invite_master_id,
             ),
         )
 
@@ -304,6 +314,12 @@ async def client_reg_confirm(
                     usage=result.usage,
                     clients_limit=FREE_CLIENTS_LIMIT,
                 ),
+                facts=NotificationFacts(
+                    event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=result.master_telegram_id,
+                    plan_is_pro=False,
+                ),
             ),
         )
 
@@ -314,7 +330,7 @@ async def client_reg_confirm(
 
 @router.callback_query(
     StateFilter(ClientRegistration.confirm),
-    F.data == "client_reg_restart",
+    F.data == CLIENT_REGISTRATION_CB["restart"],
 )
 async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
@@ -332,7 +348,7 @@ async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
 
 @router.callback_query(
     StateFilter(ClientRegistration.name, ClientRegistration.phone, ClientRegistration.confirm),
-    F.data == "client_reg_cancel",
+    F.data == CLIENT_REGISTRATION_CB["cancel"],
 )
 async def client_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer("Регистрация отменена.", show_alert=True)

@@ -20,6 +20,7 @@ from src.handlers.master.invite_client import start_invite_client
 from src.handlers.master.list_clients import start_clients_entry
 from src.handlers.master.schedule import master_schedule
 from src.handlers.master.settings import open_master_settings
+from src.notifications.notifier import Notifier
 from src.user_context import ActiveRole, UserContextStorage
 
 logger = logging.getLogger(__name__)
@@ -107,9 +108,9 @@ async def master_clients_list(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["add"])
-async def master_add_client(callback: CallbackQuery, state: FSMContext) -> None:
+async def master_add_client(callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
     await callback.answer()
-    await start_add_client(callback, state)
+    await start_add_client(callback, state, notifier)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["search"])

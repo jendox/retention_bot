@@ -11,6 +11,7 @@ from src.filters.user_role import UserRole
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
+from src.notifications.policy import NotificationFacts
 from src.use_cases.create_client_offline import CreateClientOffline, CreateClientOfflineError
 from src.use_cases.entitlements import Usage
 from src.user_context import ActiveRole
@@ -71,6 +72,7 @@ async def _send_warning_message(
     chat_id: int,
     event: NotificationEvent,
     usage: Usage | None,
+    plan_is_pro: bool | None,
     clients_limit: int | None,
     notifier: Notifier,
 ) -> bool:
@@ -82,6 +84,12 @@ async def _send_warning_message(
         event=event,
         recipient=RecipientKind.MASTER,
         context=LimitsContext(usage=usage, clients_limit=clients_limit),
+        facts=NotificationFacts(
+            event=event,
+            recipient=RecipientKind.MASTER,
+            chat_id=chat_id,
+            plan_is_pro=plan_is_pro,
+        ),
     )
     return await notifier.maybe_send(request)
 
@@ -123,6 +131,7 @@ async def start_add_client(
             chat_id=telegram_id,
             event=NotificationEvent.LIMIT_CLIENTS_REACHED,
             usage=result.usage,
+            plan_is_pro=result.plan_is_pro,
             clients_limit=result.clients_limit,
             notifier=notifier,
         ):
@@ -294,6 +303,7 @@ async def master_add_client_confirm(
                 chat_id=telegram_id,
                 event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
                 usage=result.usage,
+                plan_is_pro=result.plan_is_pro,
                 clients_limit=result.clients_limit,
                 notifier=notifier,
             )
@@ -335,6 +345,7 @@ async def master_add_client_confirm(
             chat_id=telegram_id,
             event=NotificationEvent.LIMIT_CLIENTS_REACHED,
             usage=result.usage,
+            plan_is_pro=result.plan_is_pro,
             clients_limit=result.clients_limit,
             notifier=notifier,
         ):
