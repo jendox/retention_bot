@@ -12,6 +12,8 @@ from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
+from src.texts import master_add_client as txt
+from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
 from src.use_cases.create_client_offline import CreateClientOffline, CreateClientOfflineError
 from src.use_cases.entitlements import Usage
 from src.user_context import ActiveRole
@@ -28,14 +30,6 @@ CLIENT_ADD_CB = {
     "cancel": "m:add_client:cancel",
 }
 
-ERROR_MESSAGE: dict[CreateClientOfflineError | None, str] = {
-    CreateClientOfflineError.MASTER_NOT_FOUND: "⚠️ Профиль мастера не найден. Пройдите регистрацию.",
-    CreateClientOfflineError.INVALID_REQUEST: "❌ Возникла ошибка. Попробуйте ещё раз.",
-    CreateClientOfflineError.PHONE_CONFLICT: "ℹ️ Клиент с таким телефоном уже есть в вашей базе.\n"
-                                             "Проверьте правильность введённого номера",
-    None: "Неизвестная ошибка.",
-}
-
 
 class AddClientStates(StatesGroup):
     name = State()
@@ -47,11 +41,11 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Всё верно", callback_data=CLIENT_ADD_CB["confirm"]),
-                InlineKeyboardButton(text="🔁 Заполнить заново", callback_data=CLIENT_ADD_CB["restart"]),
+                InlineKeyboardButton(text=btn_confirm(), callback_data=CLIENT_ADD_CB["confirm"]),
+                InlineKeyboardButton(text=btn_restart(), callback_data=CLIENT_ADD_CB["restart"]),
             ],
             [
-                InlineKeyboardButton(text="❌ Отмена", callback_data=CLIENT_ADD_CB["cancel"]),
+                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_ADD_CB["cancel"]),
             ],
         ],
     )
@@ -61,7 +55,7 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="❌ Отмена", callback_data=CLIENT_ADD_CB["cancel"]),
+                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_ADD_CB["cancel"]),
             ],
         ],
     )
@@ -111,7 +105,7 @@ async def start_add_client(
             "master.add_client_offline.failed",
             extra={"telegram_id": telegram_id, "error": result.error_detail},
         )
-        await callback.answer(ERROR_MESSAGE.get(result.error, "Неожиданная ошибка."), show_alert=True)
+        await callback.answer(txt.err_for_preflight(result.error), show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         await state.clear()
         return
@@ -135,7 +129,7 @@ async def start_add_client(
             clients_limit=result.clients_limit,
             notifier=notifier,
         ):
-            await callback.answer("Лимит клиентов исчерпан.", show_alert=True)
+            await callback.answer(txt.quota_reached(), show_alert=True)
 
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         await state.clear()
@@ -144,7 +138,7 @@ async def start_add_client(
     await answer_tracked(
         callback.message,
         state,
-        text="Добавим клиента ✍️\n\nКак зовут клиента?",
+        text=txt.ask_name(),
         bucket=ADD_CLIENT_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -163,7 +157,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Имя не понял 😅 Введи, пожалуйста, имя клиента.",
+            text=txt.name_not_recognized(),
             bucket=ADD_CLIENT_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -173,7 +167,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Записал. Теперь номер телефона (для связи):",
+        text=txt.ask_phone(),
         bucket=ADD_CLIENT_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -196,7 +190,7 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Нужен реальный номер в формате 375291234567, чтобы связаться с клиентом.",
+            text=txt.phone_not_recognized(),
             bucket=ADD_CLIENT_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -204,16 +198,10 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
 
     await state.update_data(phone=phone)
     data = await state.get_data()
-    text = (
-        "Проверь, пожалуйста:\n\n"
-        f"<b>Имя:</b> {data['name']}\n"
-        f"<b>Телефон:</b> {phone}\n"
-        "Всё верно?"
-    )
     await answer_tracked(
         message,
         state,
-        text=text,
+        text=txt.confirm(name=data["name"], phone=phone),
         reply_markup=_build_confirm_keyboard(),
         bucket=ADD_CLIENT_BUCKET,
     )
@@ -247,7 +235,7 @@ async def master_add_client_cancel(callback: CallbackQuery, state: FSMContext) -
         "master.add_client_offline.cancelled",
         extra={"telegram_id": callback.from_user.id},
     )
-    await callback.answer("Добавление клиента отменено.", show_alert=True)
+    await callback.answer(txt.cancelled(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()
 
@@ -277,7 +265,7 @@ async def master_add_client_confirm(
                 "phone": bool(phone),
             },
         )
-        await callback.answer("Не хватает данных, попробуйте заново.", show_alert=True)
+        await callback.answer(txt.missing_data(), show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         await state.clear()
         return
@@ -294,7 +282,7 @@ async def master_add_client_confirm(
             "master.add_client_offline.success",
             extra={"master_id": result.master_id, "client_id": result.client_id},
         )
-        await callback.answer("✅ Готово! Клиент добавлен (🔴 оффлайн)", show_alert=True)
+        await callback.answer(txt.done_offline(), show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         await state.clear()
 
@@ -314,11 +302,11 @@ async def master_add_client_confirm(
             "master.add_client_offline.conflict",
             extra={"telegram_id": telegram_id, "conflict_phone": phone},
         )
-        await callback.answer(text=ERROR_MESSAGE.get(result.error, ERROR_MESSAGE[None]), show_alert=True)
+        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
         await answer_tracked(
             callback.message,
             state,
-            text="Укажите номер телефона:",
+            text=txt.ask_phone_conflict_retry(),
             bucket=ADD_CLIENT_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -330,7 +318,7 @@ async def master_add_client_confirm(
             "master.add_client_offline.master_not_found",
             extra={"telegram_id": telegram_id},
         )
-        await callback.answer(text=ERROR_MESSAGE.get(result.error, ERROR_MESSAGE[None]), show_alert=True)
+        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
     elif result.error == CreateClientOfflineError.QUOTA_EXCEEDED:
         logger.warning(
             "master.add_client_offline.limit_clients_reached",
@@ -349,14 +337,13 @@ async def master_add_client_confirm(
             clients_limit=result.clients_limit,
             notifier=notifier,
         ):
-            await callback.answer("Лимит клиентов исчерпан.", show_alert=True)
+            await callback.answer(txt.quota_reached(), show_alert=True)
     else:
         logger.warning(
             "master.add_client_offline.invalid_request",
             extra={"telegram_id": telegram_id, "error": str(result.error)},
         )
-        await callback.answer(
-            text=ERROR_MESSAGE.get(result.error, ERROR_MESSAGE[None]), show_alert=True)
+        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
 
     await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
     await state.clear()

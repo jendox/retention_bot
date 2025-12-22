@@ -9,6 +9,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session
 from src.repositories import MasterRepository
+from src.texts import common as common_txt, master_invite_client as txt
+from src.texts.buttons import btn_cancel
 from src.use_cases.create_client_invite import CreateClientInvite
 from src.use_cases.entitlements import EntitlementsService
 from src.utils import answer_tracked, cleanup_messages
@@ -32,11 +34,11 @@ class MasterInviteClient(StatesGroup):
 def _build_invite_format_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔗 Только ссылка", callback_data=f"m:invite:{InviteMessageType.LINK_ONLY}")],
-            [InlineKeyboardButton(text="💬 Текст (дружелюбный)",
+            [InlineKeyboardButton(text=txt.btn_link_only(), callback_data=f"m:invite:{InviteMessageType.LINK_ONLY}")],
+            [InlineKeyboardButton(text=txt.btn_friendly(),
                                   callback_data=f"m:invite:{InviteMessageType.FRIENDLY}")],
-            [InlineKeyboardButton(text="📝 Текст (официальный)", callback_data=f"m:invite:{InviteMessageType.FORMAL}")],
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="m:invite:cancel")],
+            [InlineKeyboardButton(text=txt.btn_formal(), callback_data=f"m:invite:{InviteMessageType.FORMAL}")],
+            [InlineKeyboardButton(text=btn_cancel(), callback_data="m:invite:cancel")],
         ],
     )
 
@@ -52,38 +54,6 @@ def _parse_invite_type(callback: CallbackQuery) -> InviteMessageType | None:
         return None
 
 
-def render_invite_message(
-    *,
-    kind: InviteMessageType,
-    master_name: str,
-    invite_link: str,
-) -> str:
-    if kind == InviteMessageType.LINK_ONLY:
-        return (
-            "🔗 Ссылка для клиента:\n\n"
-            f"{invite_link}"
-        )
-
-    if kind == InviteMessageType.FRIENDLY:
-        return (
-            f"Привет! 😊 Это {master_name}\n\n"
-            "Хочу пригласить тебя пользоваться удобной записью через BeautyDesk.\n"
-            "По ссылке ниже ты сможешь быстро перейти в чат и выбрать время ✨\n"
-            "Ничего скачивать не нужно — всё работает прямо в Telegram.\n\n"
-            f"<a href='{invite_link}'>🔗 Записаться к мастеру</a>\n\n"
-            "Если будут вопросы — пиши 💛"
-        )
-
-    return (
-        "Здравствуйте.\n\n"
-        f"Меня зовут {master_name}. Приглашаю вас воспользоваться системой записи BeautyDesk "
-        "для удобного согласования времени визита.\n"
-        "Пожалуйста, перейдите по ссылке ниже, чтобы начать онлайн-запись:\n\n"
-        f"<a href='{invite_link}'>🔗 Перейти к записи</a>\n\n"
-        "Если возникнут вопросы — буду рад помочь."
-    )
-
-
 async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
     telegram_id = callback.from_user.id
     async with active_session() as session:
@@ -96,11 +66,7 @@ async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> Non
             await answer_tracked(
                 callback.message,
                 state,
-                text=(
-                    "Похоже, у тебя закончился лимит клиентов на Free.\n\n"
-                    f"<b>Клиенты:</b> {check.current}/{check.limit}\n\n"
-                    "Чтобы приглашать больше клиентов — подключи Pro."
-                ),
+                text=txt.quota_reached(current=check.current, limit=check.limit),
                 bucket=INVITE_CLIENT_BUCKET,
             )
             return
@@ -115,18 +81,12 @@ async def start_invite_client(callback: CallbackQuery, state: FSMContext) -> Non
 
     warning = ""
     if check.limit is not None and check.current >= int(check.limit * 0.8):  # noqa: PLR2004
-        warning = (
-            "\n\n⚠️ Лимит клиентов на Free почти исчерпан:\n"
-            f"<b>{check.current}</b> из <b>{check.limit}</b>.\n"
-            "В Pro лимитов нет."
-        )
+        warning = txt.warn_near_limit(current=check.current, limit=int(check.limit))
 
     await answer_tracked(
         callback.message,
         state,
-        text="Готово ✅ Ссылка для клиента создана.\n\n"
-             "Что отправить клиенту?"
-             f"{warning}",
+        text=txt.invite_created(warning=warning),
         bucket=INVITE_CLIENT_BUCKET,
         reply_markup=_build_invite_format_keyboard(),
     )
@@ -142,14 +102,14 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
         await cleanup_messages(state, callback.bot, bucket=INVITE_CLIENT_BUCKET)
         await state.set_state(None)
         await callback.answer(
-            text="Окей, отменил. Если нужно — нажми «📨 Пригласить» ещё раз 🙂",
+            text=txt.cancelled_hint(),
             show_alert=True,
         )
         return
 
     kind = _parse_invite_type(callback)
     if kind is None:
-        await callback.answer(text="Некорректный формат.", show_alert=True)
+        await callback.answer(text=txt.invalid_format(), show_alert=True)
         return
 
     data = await state.get_data()
@@ -157,15 +117,15 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
     master_name: str | None = data.get("master_name")
 
     if not invite_link or not master_name:
-        await callback.answer(text="Что-то пошло не так, попробуй ещё раз.", show_alert=True)
+        await callback.answer(text=common_txt.generic_error(), show_alert=True)
         return
 
     await callback.answer()
-    text = render_invite_message(kind=kind, master_name=master_name, invite_link=invite_link)
+    text = txt.render_invite_message(kind=str(kind.value), master_name=master_name, invite_link=invite_link)
 
     # Убираем клавиатуру выбора формата (редактируем сообщение)
     await callback.message.edit_text(
-        "Готово ✨ Скопируй и отправь клиенту сообщение ниже 👇",
+        txt.done_copy_prompt(),
     )
 
     await callback.message.answer(text)

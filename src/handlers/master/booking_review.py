@@ -11,6 +11,8 @@ from src.repositories import (
     BookingRepository,
 )
 from src.schemas.enums import BookingStatus
+from src.texts import master_booking_review as txt
+from src.texts.buttons import btn_cancel_booking
 from src.use_cases.entitlements import EntitlementsService
 
 router = Router(name=__name__)
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 def _build_client_cancel_keyboard(booking_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking_id}:cancel")],
+            [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking_id}:cancel")],
         ],
     )
 
@@ -46,7 +48,7 @@ def _parse_review_callback(data: str) -> tuple[int, str] | None:
 async def master_review_booking(callback: CallbackQuery) -> None:
     parsed = _parse_review_callback(callback.data or "")
     if parsed is None:
-        await callback.answer("Некорректная команда.", show_alert=True)
+        await callback.answer(txt.invalid_command(), show_alert=True)
         return
 
     booking_id, action = parsed
@@ -60,7 +62,7 @@ async def master_review_booking(callback: CallbackQuery) -> None:
 
         # Безопасность: мастер может подтверждать только свои записи
         if booking.master.telegram_id != master_telegram_id:
-            await callback.answer("Это не твоя запись.", show_alert=True)
+            await callback.answer(txt.not_your_booking(), show_alert=True)
             return
 
         new_status = BookingStatus.CONFIRMED if action == "confirm" else BookingStatus.DECLINED
@@ -70,7 +72,7 @@ async def master_review_booking(callback: CallbackQuery) -> None:
             status=new_status,
         )
         if not changed:
-            await callback.answer("Эта запись уже обработана.", show_alert=True)
+            await callback.answer(txt.already_handled(), show_alert=True)
             return
 
         plan = await entitlements.get_plan(master_id=booking.master.id)
@@ -80,7 +82,7 @@ async def master_review_booking(callback: CallbackQuery) -> None:
             and bool(getattr(booking.client, "notifications_enabled", True))
         )
 
-    await callback.answer("Готово ✅")
+    await callback.answer(txt.done())
 
     # Тексты (мастеру — в его TZ, клиенту — в его TZ)
     slot_master = to_zone(booking.start_at.astimezone(UTC), booking.master.timezone)
@@ -90,27 +92,11 @@ async def master_review_booking(callback: CallbackQuery) -> None:
     slot_client_str = slot_client.strftime("%d.%m.%Y %H:%M")
 
     if new_status == BookingStatus.CONFIRMED:
-        master_text = (
-            "✅ Запись подтверждена.\n\n"
-            f"<b>Клиент:</b> {booking.client.name}\n"
-            f"<b>Дата/время:</b> {slot_master_str}\n"
-        )
-        client_text = (
-            "✅ Запись подтверждена мастером.\n\n"
-            f"<b>Дата/время:</b> {slot_client_str}\n"
-            "Ждём вас 🙂"
-        )
+        master_text = txt.master_confirmed(client_name=booking.client.name, slot_str=slot_master_str)
+        client_text = txt.client_confirmed(slot_str=slot_client_str)
     else:
-        master_text = (
-            "❌ Запись отклонена.\n\n"
-            f"<b>Клиент:</b> {booking.client.name}\n"
-            f"<b>Дата/время:</b> {slot_master_str}\n"
-        )
-        client_text = (
-            "❌ Мастер отклонил запись.\n\n"
-            f"<b>Дата/время:</b> {slot_client_str}\n"
-            "Пожалуйста, выбери другое время в разделе «➕ Записаться»."
-        )
+        master_text = txt.master_declined(client_name=booking.client.name, slot_str=slot_master_str)
+        client_text = txt.client_declined(slot_str=slot_client_str)
 
     # Обновляем сообщение мастеру (убираем кнопки)
     if callback.message:

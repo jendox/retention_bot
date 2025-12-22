@@ -9,6 +9,8 @@ from src.filters.user_role import UserRole
 from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import Timezone
+from src.texts import client_settings as txt
+from src.texts.buttons import btn_back
 from src.user_context import ActiveRole
 
 logger = logging.getLogger(__name__)
@@ -19,12 +21,12 @@ SETTINGS_MAIN_KEY = "client_settings_main"
 
 
 def _kb_settings(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
-    notify_text = "🔔 Уведомления: включены ✅" if notifications_enabled else "🔕 Уведомления: выключены 🚫"
+    notify_text = txt.btn_notifications(enabled=notifications_enabled)
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🌍 Таймзона", callback_data=f"{SETTINGS_CB_PREFIX}tz")],
+            [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
             [InlineKeyboardButton(text=notify_text, callback_data=f"{SETTINGS_CB_PREFIX}toggle_notify")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"{SETTINGS_CB_PREFIX}back")],
+            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
 
@@ -43,19 +45,12 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for tz in common:
         rows.append([InlineKeyboardButton(text=str(tz.value), callback_data=f"{SETTINGS_CB_PREFIX}set_tz:{tz.value}")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _render(*, name: str, tz: Timezone, notifications_enabled: bool) -> str:
-    notify_line = "включены ✅" if notifications_enabled else "выключены 🚫"
-    return (
-        "Настройки клиента ⚙️\n\n"
-        f"<b>Профиль:</b> {name}\n"
-        f"<b>Таймзона:</b> {tz.value}\n"
-        f"<b>Уведомления:</b> {notify_line}\n\n"
-        "Что настроим?"
-    )
+    return txt.render_settings(name=name, tz_value=str(tz.value), notifications_enabled=notifications_enabled)
 
 
 async def open_client_settings(message: Message, state: FSMContext) -> None:
@@ -65,7 +60,7 @@ async def open_client_settings(message: Message, state: FSMContext) -> None:
         try:
             client = await repo.get_by_telegram_id(telegram_id)
         except ClientNotFound:
-            await message.answer("Команда доступна клиентам после регистрации по ссылке мастера.")
+            await message.answer(txt.client_only())
             return
 
     data = await state.get_data()
@@ -141,13 +136,13 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         try:
             client = await repo.get_by_telegram_id(telegram_id)
         except ClientNotFound:
-            await callback.answer("Команда доступна клиентам после регистрации.", show_alert=True)
+            await callback.answer(txt.client_only_alert(), show_alert=True)
             return
 
     if data == f"{SETTINGS_CB_PREFIX}tz":
         await callback.answer()
         await callback.message.edit_text(
-            text="Выбери таймзону:",
+            text=txt.choose_timezone(),
             reply_markup=_kb_timezones(),
         )
         return
@@ -157,14 +152,14 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         try:
             tz = Timezone(raw)
         except ValueError:
-            await callback.answer("Некорректная таймзона.", show_alert=True)
+            await callback.answer(txt.invalid_timezone(), show_alert=True)
             return
 
         async with active_session() as session:
             repo = ClientRepository(session)
             await repo.update_by_id(client.id, ClientUpdate(timezone=tz))
 
-        await callback.answer("Таймзона обновлена ✅", show_alert=True)
+        await callback.answer(txt.timezone_updated(), show_alert=True)
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
@@ -175,7 +170,7 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
             repo = ClientRepository(session)
             await repo.update_by_id(client.id, ClientUpdate(notifications_enabled=new_value))
 
-        await callback.answer("Сохранено ✅", show_alert=True)
+        await callback.answer(txt.saved(), show_alert=True)
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 

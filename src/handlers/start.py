@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Awaitable, Callable
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import CommandObject, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -14,6 +14,7 @@ from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.settings import get_settings
+from src.texts import start as txt
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_message
 
@@ -30,13 +31,13 @@ class RoleStates(StatesGroup):
 def _build_role_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="💇 Я мастер", callback_data=f"role:{ActiveRole.MASTER.value}")],
-            [InlineKeyboardButton(text="👤 Я клиент", callback_data=f"role:{ActiveRole.CLIENT.value}")],
+            [InlineKeyboardButton(text=txt.btn_role_master(), callback_data=f"role:{ActiveRole.MASTER.value}")],
+            [InlineKeyboardButton(text=txt.btn_role_client(), callback_data=f"role:{ActiveRole.CLIENT.value}")],
         ],
     )
 
 
-RoleHandler = Callable[[Message, bool], Awaitable[None]]
+RoleHandler = Callable[[Bot, int, bool], Awaitable[None]]
 
 ROLE_MENU_MAP: dict[ActiveRole, RoleHandler] = {
     ActiveRole.MASTER: send_master_main_menu,
@@ -105,7 +106,7 @@ async def resolve_role_and_dispatch(
         await answer_tracked(
             message,
             state,
-            text="Похоже, у тебя есть две роли 🙂\nВыбери, как зайти сейчас:",
+            text=txt.choose_role(),
             reply_markup=_build_role_keyboard(),
             bucket=START_BOT_BUCKET,
         )
@@ -127,11 +128,7 @@ async def resolve_role_and_dispatch(
     await answer_tracked(
         message,
         state,
-        text="Привет! 👋\n"
-             "Я BeautyDesk — бот для записи к мастерам.\n\n"
-             "Чтобы записаться, возьми ссылку у своего мастера.\n"
-             "Если ты мастер и хочешь подключить бота — "
-             f"<a href='{link}'>жми сюда</a>.",
+        text=txt.greet_unknown(link=link),
         bucket=START_BOT_BUCKET,
     )
 
@@ -152,7 +149,7 @@ async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_stora
         await answer_tracked(
             callback.message,
             state,
-            text="Не понял роль 😅 Выбери, пожалуйста, ещё раз:",
+            text=txt.role_not_recognized(),
             reply_markup=_build_role_keyboard(),
             bucket=START_BOT_BUCKET,
         )
@@ -160,7 +157,7 @@ async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_stora
 
     logger.info("choose_role.success", extra={"telegram_id": telegram_id, "role": role})
     await user_ctx_storage.set_role(telegram_id, role)
-    await ROLE_MENU_MAP[role](callback.message, True)
+    await ROLE_MENU_MAP[role](callback.bot, telegram_id, True)
 
     await cleanup_messages(state, callback.bot, bucket=START_BOT_BUCKET)
     await state.clear()

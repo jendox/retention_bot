@@ -1,5 +1,4 @@
 import logging
-from textwrap import dedent
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -10,36 +9,28 @@ from src.handlers.client.booking import start_client_add_booking
 from src.handlers.client.list_bookings import start_client_list_bookings
 from src.handlers.client.list_masters import start_client_list_masters
 from src.handlers.client.settings import open_client_settings
+from src.texts import client_menu as txt, common as common_txt
 from src.user_context import ActiveRole, UserContextStorage
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 
-CLIENT_MAIN_MENU_TEXT = dedent("""
-    Главное меню клиента 💛
-    Здесь ты можешь:
-    • записаться к мастеру
-    • посмотреть и управлять своими записями
-    • увидеть список мастеров
-    • настроить профиль
-""").strip()
-
 
 def build_client_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
     rows = [
-        [KeyboardButton(text="➕ Записаться")],
+        [KeyboardButton(text=txt.MENU_BOOK)],
         [
-            KeyboardButton(text="📋 Мои записи"),
-            KeyboardButton(text="💇‍♀️ Мои мастера"),
+            KeyboardButton(text=txt.MENU_BOOKINGS),
+            KeyboardButton(text=txt.MENU_MASTERS),
         ],
-        [KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text=txt.MENU_SETTINGS)],
     ]
     if show_switch_role:
-        rows.append([KeyboardButton(text="🔄 Сменить роль")])
+        rows.append([KeyboardButton(text=txt.MENU_SWITCH_ROLE)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
-        input_field_placeholder="Выберите действие",
+        input_field_placeholder=common_txt.input_choose_action(),
     )
 
 
@@ -50,27 +41,27 @@ async def send_client_main_menu(
 ) -> None:
     await bot.send_message(
         chat_id=chat_id,
-        text=CLIENT_MAIN_MENU_TEXT,
+        text=txt.MAIN_MENU_TEXT,
         reply_markup=build_client_main_keyboard(show_switch_role),
     )
 
 
-@router.message(UserRole(ActiveRole.CLIENT), F.text == "➕ Записаться")
+@router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOK)
 async def client_add_booking(message: Message, state: FSMContext) -> None:
     await start_client_add_booking(message, state)
 
 
-@router.message(UserRole(ActiveRole.CLIENT), F.text == "📋 Мои записи")
+@router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOKINGS)
 async def client_list_bookings(message: Message, state: FSMContext) -> None:
     await start_client_list_bookings(message, state)
 
 
-@router.message(UserRole(ActiveRole.CLIENT), F.text == "💇‍♀️ Мои мастера")
+@router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_MASTERS)
 async def client_list_masters(message: Message, state: FSMContext) -> None:
     await start_client_list_masters(message, state)
 
 
-@router.message(UserRole(ActiveRole.CLIENT), F.text == "🔄 Сменить роль")
+@router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_SWITCH_ROLE)
 async def client_switch_role(
     message: Message,
     state: FSMContext,
@@ -78,13 +69,14 @@ async def client_switch_role(
 ) -> None:
     from src.handlers.master.master_menu import send_master_main_menu
 
-    await user_ctx_storage.set_role(message.from_user.id, ActiveRole.MASTER)
+    telegram_id = message.from_user.id
+    await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
     await state.clear()
-    await send_master_main_menu(message, show_switch_role=True)
+    await send_master_main_menu(message.bot, telegram_id, show_switch_role=True)
     await message.delete()
 
 
-@router.message(UserRole(ActiveRole.CLIENT), F.text == "⚙️ Настройки")
+@router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_SETTINGS)
 async def client_settings(message: Message, state: FSMContext) -> None:
     await state.clear()
     await open_client_settings(message, state)

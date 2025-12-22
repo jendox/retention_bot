@@ -7,16 +7,39 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
-from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
 from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
-from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
-from src.repositories import ClientNotFound, ClientRepository, MasterRepository
-from src.repositories.booking import BookingRepository
-from src.schemas import BookingCreate, Master
+from src.notifications import BookingContext, NotificationEvent, RecipientKind
+from src.notifications.context import LimitsContext
+from src.notifications.notifier import NotificationRequest, Notifier
+from src.notifications.policy import NotificationFacts
+from src.repositories import ClientNotFound, ClientRepository
+from src.schemas import Master
 from src.schemas.enums import Timezone
+from src.texts.buttons import btn_cancel, btn_confirm, btn_decline
+from src.texts.client_booking import (
+    available_dates,
+    booking_cancelled,
+    booking_limit_reached,
+    booking_not_saved,
+    choose_date,
+    choose_master,
+    choose_time,
+    confirm_details,
+    done,
+    incorrect_slot,
+    no_available_slots,
+    no_masters,
+    slot_not_available,
+    state_broken_alert,
+)
+from src.use_cases.create_client_booking import (
+    CreateClientBooking,
+    CreateClientBookingError,
+    CreateClientBookingRequest,
+)
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
@@ -40,7 +63,7 @@ def build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
         rows.append([
             InlineKeyboardButton(text=master.name, callback_data=f"book:master:{master.id}"),
         ])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel_flow")])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -53,7 +76,7 @@ def build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=label, callback_data=f"book:slot:{index}"),
         ])
 
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="book:cancel_flow")])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -61,8 +84,8 @@ def build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data="book:confirm"),
-                InlineKeyboardButton(text="❌ Отменить", callback_data="book:cancel"),
+                InlineKeyboardButton(text=btn_confirm(), callback_data="book:confirm"),
+                InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel"),
             ],
         ],
     )
@@ -72,8 +95,8 @@ def build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"m:booking:{booking_id}:confirm"),
-                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"m:booking:{booking_id}:decline"),
+                InlineKeyboardButton(text=btn_confirm(), callback_data=f"m:booking:{booking_id}:confirm"),
+                InlineKeyboardButton(text=btn_decline(), callback_data=f"m:booking:{booking_id}:decline"),
             ],
         ],
     )
@@ -92,10 +115,7 @@ async def start_client_add_booking(message: Message, state: FSMContext) -> None:
         masters = client.masters
 
     if not masters:
-        await message.answer(
-            "У тебя пока нет подключенных мастеров 👀\n"
-            "Попроси мастера прислать тебе ссылку для записи в BeautyDesk.",
-        )
+        await message.answer(no_masters())
         return
 
     await state.update_data(
@@ -112,7 +132,7 @@ async def start_client_add_booking(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Выбери мастера, к которому хочешь записаться 💇‍♀️",
+        text=choose_master(),
         reply_markup=build_masters_keyboard(masters),
         bucket=BOOKING_BUCKET,
     )
@@ -139,13 +159,22 @@ async def start_booking_for_master(
 ) -> None:
     await state.update_data(master_id=master_id)
 
+    async with session_local() as session:
+        entitlements = EntitlementsService(session)
+        check = await entitlements.can_create_booking(master_id=master_id)
+        if not check.allowed:
+            await cleanup_messages(state, message.bot, bucket=BOOKING_BUCKET)
+            await state.clear()
+            await message.answer(booking_limit_reached())
+            return
+
     calendar = SimpleCalendar()
     reply_markup = await calendar.start_calendar()
 
     await answer_tracked(
         message,
         state,
-        text="Выбери дату для записи 📅",
+        text=choose_date(),
         reply_markup=reply_markup,
         bucket=BOOKING_BUCKET,
     )
@@ -172,7 +201,7 @@ async def process_booking_calendar(
     master_id = data.get("master_id")
     client_timezone: Timezone = data.get("client_timezone")
     if master_id is None or client_timezone is None:
-        await callback.answer("Что-то пошло не так, попробуй ещё раз", show_alert=True)
+        await callback.answer(state_broken_alert(), show_alert=True)
         return
 
     client_tz_info = get_timezone(str(client_timezone.value))
@@ -187,8 +216,7 @@ async def process_booking_calendar(
         max_date = today_client + timedelta(days=horizon_days)
         if not (min_date <= client_day <= max_date):
             await callback.answer(
-                text=f"Можно выбрать дату с {min_date.strftime('%d.%m.%Y')} "
-                     f"по {max_date.strftime('%d.%m.%Y')}",
+                text=available_dates(min_date=min_date, max_date=max_date),
                 show_alert=True,
             )
             return
@@ -200,21 +228,17 @@ async def process_booking_calendar(
         )
 
     if not result.slots_utc:
-        await callback.message.edit_text(
-            text="На этот день свободных слотов нет 😕\n"
-                 "Попробуй выбрать другую дату.",
-        )
+        await callback.message.edit_text(no_available_slots())
         return
 
     slots_iso = [dt.isoformat() for dt in result.slots_utc]
     await state.update_data(
         booking_slots_utc=slots_iso,
-        client_day=client_day,
+        client_day=client_day.isoformat(),
     )
 
     await callback.message.edit_text(
-        text=f"Свободные слоты на {client_day.strftime('%d.%m.%Y')} ⏰\n"
-             "Выбери удобное время:",
+        text=choose_time(client_day=client_day),
         reply_markup=build_slots_keyboard(result.slots_for_client),
     )
     await state.set_state(ClientBooking.selecting_slot)
@@ -235,11 +259,11 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
     client_timezone: Timezone = data.get("client_timezone")
 
     if client_timezone is None or not slots_iso:
-        await callback.answer("Что-то пошло не так, попробуй ещё раз", show_alert=True)
+        await callback.answer(state_broken_alert(), show_alert=True)
         return
 
     if index < 0 or index >= len(slots_iso):
-        await callback.answer("Некорректный слот, попробуй ещё раз", show_alert=True)
+        await callback.answer(incorrect_slot(), show_alert=True)
         return
 
     await callback.answer()
@@ -249,13 +273,10 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 
     await state.update_data(selected_slot_index=index)
 
-    text = (
-        f"Подтверди запись 👇\n\n"
-        f"<b>Дата:</b> {slot_dt_client.strftime('%d.%m.%Y')}\n"
-        f"<b>Время:</b> {slot_dt_client.strftime('%H:%M')}\n"
+    await callback.message.edit_text(
+        text=confirm_details(slot_dt_client=slot_dt_client),
+        reply_markup=build_confirm_keyboard(),
     )
-
-    await callback.message.edit_text(text, reply_markup=build_confirm_keyboard())
     await state.set_state(ClientBooking.confirm)
 
 
@@ -264,12 +285,10 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
     F.data == "book:cancel",
 )
 async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Запись не сохранена.")
+    await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
-    await callback.message.answer(
-        text="Окей, запись отменена. Если передумаешь — просто нажми «➕ Записаться» 🙂",
-    )
+    await callback.message.answer(booking_cancelled())
 
 
 @router.callback_query(
@@ -282,20 +301,18 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     F.data == "book:cancel_flow",
 )
 async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Запись не сохранена.")
+    await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
     if callback.message:
-        await callback.message.answer(
-            text="Окей, запись отменена. Если передумаешь — просто нажми «➕ Записаться» 🙂",
-        )
+        await callback.message.answer(booking_cancelled())
 
 
 @router.callback_query(
     StateFilter(ClientBooking.confirm),
     F.data == "book:confirm",
 )
-async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+async def booking_confirm(callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     data = await state.get_data()
@@ -306,89 +323,80 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext) -> None:
     client_name = data.get("client_name", "")
 
     if master_id is None or index is None or client_id is None or not slots_iso:
-        await callback.answer("Что-то пошло не так, попробуй ещё раз", show_alert=True)
+        await callback.answer(state_broken_alert(), show_alert=True)
         return
 
     slot_dt_utc = datetime.fromisoformat(slots_iso[index])
 
-    warn_bookings = False
     async with active_session() as session:
-        master_repo = MasterRepository(session)
-        booking_repo = BookingRepository(session)
-        entitlements = EntitlementsService(session)
+        use_case = CreateClientBooking(session)
+        result = await use_case.execute(
+            CreateClientBookingRequest(
+                master_id=master_id,
+                client_id=client_id,
+                start_at_utc=slot_dt_utc,
+            ),
+        )
 
-        master = await master_repo.get_by_id(master_id)
-
-        check = await entitlements.can_create_booking(master_id=master_id)
-        if not check.allowed:
-            await callback.answer(
-                text="Сейчас у мастера временно ограничено количество онлайн-записей.\n"
-                     "Попроси мастера подключить Pro или попробуй позже.",
-                show_alert=True,
-            )
+        if not result.ok:
+            if result.error == CreateClientBookingError.QUOTA_EXCEEDED:
+                await callback.answer(text=booking_limit_reached(), show_alert=True)
+                return
+            if result.error == CreateClientBookingError.SLOT_NOT_AVAILABLE:
+                await callback.answer(text=slot_not_available(), show_alert=True)
+                return
+            await callback.answer(state_broken_alert(), show_alert=True)
             return
 
-        booking_create = BookingCreate(
-            master_id=master_id,
-            client_id=client_id,
-            start_at=slot_dt_utc,
-            duration_min=master.slot_size_min,
-        )
-        try:
-            booking = await booking_repo.create(booking_create)
-        except IntegrityError:
-            await callback.answer(
-                text="Упс — этот слот только что заняли 😕\n"
-                     "Пожалуйста, выбери другое время.",
-                show_alert=True,
-            )
+        booking = result.booking
+        master = result.master
+        if booking is None or master is None:
+            await callback.answer(state_broken_alert(), show_alert=True)
             return
-
-        logger.info(
-            "booking.created",
-            extra={
-                "booking_id": booking.id,
-                "master_id": master_id,
-                "client_id": client_id,
-            },
-        )
-        if check.limit is not None:
-            warn_bookings = (check.current + 1) >= int(check.limit * 0.8)  # noqa: PLR2004
     await callback.answer()
 
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
-
-    await callback.message.answer(
-        "Готово! 🎉\n\n"
-        "Запись создана и отправлена мастеру на подтверждение.\n"
-        "Статус можно посмотреть в разделе «📋 Мои записи».\n"
-        "Если у мастера подключён Pro и включены уведомления — я дополнительно сообщу.\n\n"
-        "Чтобы записаться ещё раз — нажми «➕ Записаться».",
-    )
+    await callback.message.answer(done())
 
     # Send a notification to the master
     slot_dt_master = to_zone(slot_dt_utc, master.timezone)
     slot_master_str = slot_dt_master.strftime("%d.%m.%Y %H:%M")
-    notification = NotificationService(callback.bot)
-    await notification.send_booking(
-        event=NotificationEvent.BOOKING_CREATED_PENDING,
-        recipient=RecipientKind.MASTER,
-        chat_id=master.telegram_id,
-        context=BookingContext(
-            booking_id=booking.id,
-            master_name=master.name,
-            client_name=client_name,
-            slot_str=slot_master_str,
-            duration_min=master.slot_size_min,
+    await notifier.maybe_send(
+        NotificationRequest(
+            event=NotificationEvent.BOOKING_CREATED_PENDING,
+            recipient=RecipientKind.MASTER,
+            chat_id=master.telegram_id,
+            context=BookingContext(
+                booking_id=booking.id,
+                master_name=master.name,
+                client_name=client_name,
+                slot_str=slot_master_str,
+                duration_min=master.slot_size_min,
+            ),
+            reply_markup=build_master_booking_review_keyboard(booking.id),
         ),
-        reply_markup=build_master_booking_review_keyboard(booking.id),
     )
-    if warn_bookings:
-        try:
-            await callback.bot.send_message(
+    if (
+        result.warn_master_bookings_near_limit
+        and (result.plan_is_pro is False)
+        and result.usage is not None
+        and result.bookings_limit is not None
+    ):
+        await notifier.maybe_send(
+            NotificationRequest(
+                event=NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
+                recipient=RecipientKind.MASTER,
                 chat_id=master.telegram_id,
-                text="⚠️ Лимит записей Free почти исчерпан. В Pro лимитов нет.",
-            )
-        except Exception:
-            logger.debug("booking.warn_master_failed", exc_info=True)
+                context=LimitsContext(
+                    usage=result.usage,
+                    bookings_limit=result.bookings_limit,
+                ),
+                facts=NotificationFacts(
+                    event=NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=master.telegram_id,
+                    plan_is_pro=result.plan_is_pro,
+                ),
+            ),
+        )

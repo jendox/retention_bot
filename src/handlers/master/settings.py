@@ -11,6 +11,8 @@ from src.filters.user_role import UserRole
 from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
+from src.texts import common as common_txt, master_settings as txt
+from src.texts.buttons import btn_back, btn_cancel
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
@@ -33,16 +35,15 @@ class MasterSettingsStates(StatesGroup):
 
 
 def _kb_settings(*, is_pro: bool) -> InlineKeyboardMarkup:
-    notify_text = "🔔 Уведомления клиенту (Pro)" if not is_pro else "🔔 Уведомления клиенту"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📞 Телефон", callback_data=f"{SETTINGS_CB_PREFIX}phone")],
-            [InlineKeyboardButton(text="🌍 Таймзона", callback_data=f"{SETTINGS_CB_PREFIX}tz")],
-            [InlineKeyboardButton(text="📆 Рабочие дни", callback_data=f"{SETTINGS_CB_PREFIX}work_days")],
-            [InlineKeyboardButton(text="🕒 Время работы", callback_data=f"{SETTINGS_CB_PREFIX}work_time")],
-            [InlineKeyboardButton(text="⏱ Длительность слота", callback_data=f"{SETTINGS_CB_PREFIX}slot_size")],
-            [InlineKeyboardButton(text=notify_text, callback_data=f"{SETTINGS_CB_PREFIX}notify")],
-            [InlineKeyboardButton(text="◀️ Назад", callback_data=f"{SETTINGS_CB_PREFIX}back")],
+            [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}phone")],
+            [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
+            [InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days")],
+            [InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time")],
+            [InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size")],
+            [InlineKeyboardButton(text=txt.btn_notify(is_pro=is_pro), callback_data=f"{SETTINGS_CB_PREFIX}notify")],
+            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
 
@@ -61,30 +62,32 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for tz in common:
         rows.append([InlineKeyboardButton(text=str(tz.value), callback_data=f"{SETTINGS_CB_PREFIX}set_tz:{tz.value}")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _render(*, master_name: str, tz: Timezone, notify_clients: bool, plan_is_pro: bool) -> str:
-    plan = "Pro" if plan_is_pro else "Free"
-    notify_line = "включены ✅" if notify_clients else "выключены 🚫"
-    if not plan_is_pro:
-        notify_line += " (доступно в Pro)"
-    return (
-        "Настройки мастера ⚙️\n\n"
-        f"<b>Профиль:</b> {master_name}\n"
-        f"<b>Тариф:</b> {plan}\n"
-        f"<b>Таймзона:</b> {tz.value}\n"
-        f"<b>Уведомления клиенту:</b> {notify_line}\n\n"
-        "Что настроим?"
+    return txt.render_main(
+        master_name=master_name,
+        tz_value=str(tz.value),
+        notify_clients=notify_clients,
+        plan_is_pro=plan_is_pro,
     )
 
 
 def _render_details(*, master, plan) -> str:
-    work_days = ", ".join(str(d + 1) for d in getattr(master, "work_days", [])) or "—"
-    work_time = f"{master.start_time:%H:%M}–{master.end_time:%H:%M}" if master.start_time and master.end_time else "—"
-    slot_size = f"{master.slot_size_min} мин" if getattr(master, "slot_size_min", None) else "—"
-    phone = getattr(master, "phone", None) or "—"
+    work_days = ", ".join(str(d + 1) for d in getattr(master, "work_days", [])) or common_txt.placeholder_empty()
+    work_time = (
+        f"{master.start_time:%H:%M}–{master.end_time:%H:%M}"
+        if master.start_time and master.end_time
+        else common_txt.placeholder_empty()
+    )
+    slot_size = (
+        txt.minutes(value=int(master.slot_size_min))
+        if getattr(master, "slot_size_min", None)
+        else common_txt.placeholder_empty()
+    )
+    phone = getattr(master, "phone", None) or common_txt.placeholder_empty()
     notify_clients = bool(getattr(master, "notify_clients", True))
 
     return (
@@ -94,11 +97,12 @@ def _render_details(*, master, plan) -> str:
             notify_clients=notify_clients,
             plan_is_pro=plan.is_pro,
         )
-        + "\n\n"
-        f"<b>Телефон:</b> {phone}\n"
-        f"<b>Рабочие дни:</b> {work_days}\n"
-        f"<b>Время:</b> {work_time}\n"
-        f"<b>Слот:</b> {slot_size}"
+        + txt.render_details(
+            phone=str(phone),
+            work_days=str(work_days),
+            work_time=str(work_time),
+            slot_size=str(slot_size),
+        )
     )
 
 
@@ -118,7 +122,7 @@ async def open_master_settings(message: Message, state: FSMContext) -> None:
     try:
         master, plan = await _load_master_and_plan(telegram_id)
     except MasterNotFound:
-        await message.answer("Команда доступна мастерам после регистрации.")
+        await message.answer(txt.master_only())
         return
 
     data = await state.get_data()
@@ -176,11 +180,11 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
     try:
         master, plan = await _load_master_and_plan(telegram_id)
     except MasterNotFound:
-        await callback.answer("Команда доступна мастерам после регистрации.", show_alert=True)
+        await callback.answer(txt.master_only(), show_alert=True)
         return
 
     if data == f"{SETTINGS_CB_PREFIX}cancel_edit":
-        await callback.answer("Окей, отменил.", show_alert=True)
+        await callback.answer(txt.cancelled(), show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
         await state.set_state(None)
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
@@ -194,7 +198,7 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
     if data == f"{SETTINGS_CB_PREFIX}tz":
         await callback.answer()
         await callback.message.edit_text(
-            text="Выбери таймзону:",
+            text=txt.choose_timezone(),
             reply_markup=_kb_timezones(),
         )
         return
@@ -205,11 +209,11 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         await answer_tracked(
             callback.message,
             state,
-            text="Введи новый телефон (в формате <code>375291234567</code>):",
+            text=txt.ask_new_phone(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[
-                    InlineKeyboardButton(text="❌ Отмена", callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
+                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
                 ]],
             ),
         )
@@ -221,15 +225,11 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         await answer_tracked(
             callback.message,
             state,
-            text="В какие дни недели ты работаешь?\n"
-                 "1 — Пн, 2 — Вт, 3 — Ср, 4 — Чт, 5 — Пт, 6 — Сб, 7 — Вс\n\n"
-                 "Примеры:\n"
-                 "• <code>1-5</code>\n"
-                 "• <code>1,3,5</code>",
+            text=txt.ask_work_days(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[
-                    InlineKeyboardButton(text="❌ Отмена", callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
+                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
                 ]],
             ),
         )
@@ -241,12 +241,11 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         await answer_tracked(
             callback.message,
             state,
-            text="Введи рабочее время в формате <code>HH:MM-HH:MM</code>.\n"
-                 "Например: <code>10:00-19:00</code>",
+            text=txt.ask_work_time(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[
-                    InlineKeyboardButton(text="❌ Отмена", callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
+                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
                 ]],
             ),
         )
@@ -258,12 +257,11 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         await answer_tracked(
             callback.message,
             state,
-            text="Введи длительность слота в минутах.\n"
-                 "Например: <code>30</code>, <code>60</code>, <code>90</code>.",
+            text=txt.ask_slot_size(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[[
-                    InlineKeyboardButton(text="❌ Отмена", callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
+                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
                 ]],
             ),
         )
@@ -274,20 +272,20 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
         try:
             tz = Timezone(raw)
         except ValueError:
-            await callback.answer(text="Некорректная таймзона.", show_alert=True)
+            await callback.answer(text=txt.invalid_timezone(), show_alert=True)
             return
 
         async with active_session() as session:
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(timezone=tz))
 
-        await callback.answer(text="Таймзона обновлена ✅")
+        await callback.answer(text=txt.timezone_updated())
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
     if data == f"{SETTINGS_CB_PREFIX}notify":
         if not plan.is_pro:
-            await callback.answer("Уведомления клиенту доступны в Pro.", show_alert=True)
+            await callback.answer(txt.notify_pro_only(), show_alert=True)
             return
 
         current = bool(getattr(master, "notify_clients", True))
@@ -296,9 +294,7 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_clients=new_value))
 
-        await callback.answer(
-            "Уведомления клиенту включены ✅" if new_value else "Уведомления клиенту отключены 🚫",
-        )
+        await callback.answer(txt.notify_toggled(enabled=new_value))
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
@@ -370,7 +366,7 @@ async def save_phone(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     phone = validate_phone((message.text or "").strip())
     if phone is None:
-        await message.answer("Не смог разобрать номер. Введи в формате <code>375291234567</code>.")
+        await message.answer(txt.invalid_phone())
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
@@ -389,7 +385,7 @@ async def save_work_days(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     days = _parse_work_days(message.text or "")
     if days is None:
-        await message.answer("Не смог разобрать дни. Пример: <code>1-5</code> или <code>1,3,5</code>.")
+        await message.answer(txt.invalid_days())
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
@@ -408,7 +404,7 @@ async def save_work_time(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     parsed = _parse_time_range(message.text or "")
     if parsed is None:
-        await message.answer("Не получилось разобрать время. Пример: <code>10:00-19:00</code>.")
+        await message.answer(txt.invalid_work_time())
         return
     start_time, end_time = parsed
     async with active_session() as session:
@@ -428,7 +424,7 @@ async def save_slot_size(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     slot_size = _parse_slot_size(message.text or "")
     if slot_size is None:
-        await message.answer("Нужны минуты из списка: 15, 20, 30, 45, 60, 90, 120.")
+        await message.answer(txt.invalid_slot_size())
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)

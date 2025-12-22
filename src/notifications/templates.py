@@ -41,14 +41,14 @@ LIMITS_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Limits
 BOOKING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[BookingContext], str]] = {
     # Free
     (NotificationEvent.BOOKING_CREATED_PENDING, RecipientKind.MASTER): lambda context: (
-        "📩 Новая запись на подтверждение\n\n"
+        "📩 Новая запись на подтверждение.\n\n"
         f"<b>Клиент:</b> {context.client_name}\n"
         f"<b>Дата и время:</b> {context.slot_str}\n"
         f"<b>Длительность:</b> {context.duration_min} мин.\n\n"
         "Подтвердить запись?"
     ),
     (NotificationEvent.BOOKING_CANCELLED_BY_CLIENT, RecipientKind.MASTER): lambda context: (
-        "❌ Запись отменена клиентом\n\n"
+        "❌ Запись отменена клиентом.\n\n"
         f"<b>Клиент:</b> {context.client_name}\n"
         f"<b>Дата и время:</b> {context.slot_str}"
     ),
@@ -71,7 +71,7 @@ BOOKING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Booki
         "Пожалуйста, выберите другое время в разделе «➕ Записаться»."
     ),
     (NotificationEvent.BOOKING_CREATED_CONFIRMED, RecipientKind.CLIENT): lambda context: (
-        "✔️ Вам назначена запись\n\n"
+        "✔️ Вам назначена запись.\n\n"
         f"<b>Мастер:</b> {context.master_name}\n"
         f"<b>Дата и время:</b> {context.slot_str}\n"
         f"<b>Длительность:</b> {context.duration_min} мин.\n"
@@ -95,13 +95,13 @@ BOOKING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Booki
 REMINDER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[ReminderContext], str]] = {
     # Pro
     (NotificationEvent.REMINDER_24H, RecipientKind.CLIENT): lambda context: (
-        "Напоминание о записи ⏰\n\n"
+        "⏰ Напоминание о записи.\n\n"
         f"<b>Мастер:</b> {context.master_name}\n"
         f"<b>Дата и время:</b> {context.slot_str}\n"
         "До встречи 🙂"
     ),
     (NotificationEvent.REMINDER_2H, RecipientKind.CLIENT): lambda context: (
-        "Скоро запись ⏳\n\n"
+        "⏳ Скоро запись.\n\n"
         f"<b>Мастер:</b> {context.master_name}\n"
         f"<b>Дата и время:</b> {context.slot_str}\n"
         "Ждём вас 🙂"

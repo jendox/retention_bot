@@ -7,6 +7,7 @@ from aiogram.types import Message
 from src.core.sa import session_local
 from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
 from src.repositories import ClientNotFound, ClientRepository
+from src.texts import client_list_masters as txt
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -25,12 +26,11 @@ async def start_client_list_masters(message: Message, state: FSMContext) -> None
     masters = client.masters
     if not masters:
         await message.answer(
-            text="Пока нет подключенных мастеров 👀\n\n"
-                 "Попроси мастера прислать тебе персональную ссылку.",
+            text=txt.empty(),
         )
         return
 
-    lines = ["Твои мастера 💇‍♀️\n"]
+    lines = [txt.title()]
     for master in masters:
         lines.append(f"• <b>{master.name}</b>")
 

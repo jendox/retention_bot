@@ -7,6 +7,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import session_local
 from src.repositories import MasterNotFound, MasterRepository
+from src.texts import master_list_clients as txt
+from src.texts.buttons import btn_back
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -33,15 +35,15 @@ def _build_clients_page_text(
     total_pages: int,
 ) -> str:
     if not clients:
-        return "У тебя пока нет клиентов 👀\n\n" "Когда они появятся, ты увидишь их здесь."
+        return txt.empty_short()
 
     lines: list[str] = [
-        f"👥 Клиенты (страница {page}/{total_pages})",
+        txt.title(page=page, total_pages=total_pages),
         "",
     ]
 
     for index, client in enumerate(clients, start=1):
-        phone = f" — {client.phone}" if getattr(client, "phone", None) else ""
+        phone = f"{txt.phone_sep()}{client.phone}" if getattr(client, "phone", None) else ""
         lines.append(f"{index}. {client.name}{phone}")
 
     return "\n".join(lines)
@@ -60,7 +62,7 @@ def _build_clients_pagination_keyboard(
         if page > 1:
             nav_row.append(
                 InlineKeyboardButton(
-                    text="⬅️ Назад",
+                    text=txt.btn_prev(),
                     callback_data=f"{CLIENTS_PAGE_PREFIX}{page - 1}",
                 ),
             )
@@ -68,7 +70,7 @@ def _build_clients_pagination_keyboard(
         if page < total_pages:
             nav_row.append(
                 InlineKeyboardButton(
-                    text="Вперёд ➡️",
+                    text=txt.btn_next(),
                     callback_data=f"{CLIENTS_PAGE_PREFIX}{page + 1}",
                 ),
             )
@@ -80,7 +82,7 @@ def _build_clients_pagination_keyboard(
     buttons.append(
         [
             InlineKeyboardButton(
-                text="✖️ Закрыть",
+                text=txt.btn_close(),
                 callback_data=f"{CLIENTS_PAGE_PREFIX}close",
             ),
         ],
@@ -92,7 +94,7 @@ def _build_clients_pagination_keyboard(
 def _build_empty_clients_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад", callback_data=BACK_TO_CLIENTS_MENU_CB)],
+            [InlineKeyboardButton(text=btn_back(), callback_data=BACK_TO_CLIENTS_MENU_CB)],
         ],
     )
 
@@ -103,8 +105,7 @@ async def start_clients_entry(callback: CallbackQuery) -> None:
 
     if not all_clients:
         await callback.message.answer(
-            text="У тебя пока нет клиентов 👀\n\n"
-                 "Пригласи клиента по ссылке или добавь вручную, и они появятся здесь.",
+            text=txt.empty_long(),
             reply_markup=_build_empty_clients_keyboard(),
         )
         return
@@ -149,7 +150,7 @@ async def master_clients_pagination(callback: CallbackQuery) -> None:
 
     if not all_clients:
         await callback.message.edit_text(
-            "Клиентов пока нет 👀",
+            txt.no_clients_now(),
             reply_markup=_build_empty_clients_keyboard(),
         )
         return

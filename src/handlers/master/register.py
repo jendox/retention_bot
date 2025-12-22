@@ -13,6 +13,8 @@ from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterRepository, SubscriptionRepository
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
+from src.texts import common as common_txt, master_registration as txt
+from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
@@ -117,17 +119,17 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Всё верно",
+                    text=btn_confirm(),
                     callback_data="master_reg_confirm",
                 ),
                 InlineKeyboardButton(
-                    text="🔁 Заполнить заново",
+                    text=btn_restart(),
                     callback_data="master_reg_restart",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Отмена",
+                    text=btn_cancel(),
                     callback_data="master_reg_cancel",
                 ),
             ],
@@ -138,7 +140,7 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
 def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отмена", callback_data="master_reg_cancel")],
+            [InlineKeyboardButton(text=btn_cancel(), callback_data="master_reg_cancel")],
         ],
     )
 
@@ -165,9 +167,7 @@ async def start_master_registration(message: Message, state: FSMContext, token: 
     await answer_tracked(
         message,
         state,
-        text="Привет! 👋\n"
-             "Давай настроим твой профиль мастера в BeautyDesk.\n\n"
-             "Как тебя зовут? (Например: Маша)",
+        text=txt.ask_name(),
         bucket=MASTER_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -186,8 +186,7 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Я не понял имя 🤔\n"
-                 "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Маша</b>",
+            text=txt.name_not_recognized(),
             bucket=MASTER_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -198,8 +197,7 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text=f"Отлично, <b>{name}</b>! ✨\n\n"
-             "Теперь добавь номер телефона для связи (в формате <code>375291234567</code>):",
+        text=txt.ask_phone(name=name),
         bucket=MASTER_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -222,8 +220,7 @@ async def process_master_phone(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не смог разобрать номер 🤔\n\n"
-                 "Пожалуйста, введи реальный номер в формате <code>375291234567</code>:",
+            text=txt.phone_not_recognized(),
             bucket=MASTER_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -234,14 +231,7 @@ async def process_master_phone(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Принято! ✅\n\n"
-             "Теперь давай настроим твои рабочие дни.\n\n"
-             "<b>В какие дни недели ты работаешь?</b>\n"
-             "Напиши номера дней недели:\n"
-             "1 — Пн, 2 — Вт, 3 — Ср, 4 — Чт, 5 — Пт, 6 — Сб, 7 — Вс\n\n"
-             "Примеры:\n"
-             "• <code>1-5</code> — с понедельника по пятницу\n"
-             "• <code>1,3,5</code> — пн, ср, пт",
+        text=txt.ask_work_days(),
         bucket=MASTER_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -263,11 +253,7 @@ async def process_master_work_days(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не смог разобрать дни недели 🤔\n\n"
-                 "Напиши номера дней недели в одном из форматов:\n"
-                 "• <code>1-5</code>\n"
-                 "• <code>1,3,5</code>\n\n"
-                 "Где 1 — Пн, 7 — Вс.",
+            text=txt.work_days_not_recognized(),
             bucket=MASTER_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -278,10 +264,7 @@ async def process_master_work_days(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Принято! ✅\n\n"
-             "<b>Твоё рабочее время в течение дня?</b>\n"
-             "Напиши в формате <code>HH:MM-HH:MM</code>.\n\n"
-             "Например: <code>10:00-19:00</code>",
+        text=txt.ask_work_time(),
         bucket=MASTER_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -303,24 +286,22 @@ async def process_master_work_time(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не получилось разобрать время 🕒\n\n"
-                 "Напиши, пожалуйста, в формате <code>HH:MM-HH:MM</code>.\n"
-                 "Например: <code>10:00-19:00</code>",
+            text=txt.work_time_not_recognized(),
             bucket=MASTER_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
         return
 
     start_time, end_time = parsed
-    await state.update_data(start_time=start_time, end_time=end_time)
+    await state.update_data(
+        start_time=start_time.strftime("%H:%M"),
+        end_time=end_time.strftime("%H:%M"),
+    )
 
     await answer_tracked(
         message,
         state,
-        text="Супер! ✅\n\n"
-             "<b>Какой длительности обычно одна запись?</b>\n"
-             "Напиши количество минут.\n\n"
-             "Например: <code>30</code>, <code>60</code> или <code>90</code>.",
+        text=txt.ask_slot_size(),
         bucket=MASTER_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -342,8 +323,7 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Хмм, не похоже на подходящую длительность слота ⏱️\n\n"
-                 "Напиши количество минут, например: <code>30</code>, <code>60</code> или <code>90</code>.",
+            text=txt.slot_size_not_recognized(),
             bucket=MASTER_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -352,19 +332,16 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
     await state.update_data(slot_size_min=slot_size)
     data = await state.get_data()
 
-    text = (
-        "Проверь, пожалуйста, данные 👇\n\n"
-        f"<b>Имя:</b> {data['name']}\n"
-        f"<b>Телефон:</b> {data['phone']}\n"
-        f"<b>Рабочие дни:</b> {', '.join(str(day + 1) for day in data['work_days'])}\n"
-        f"<b>Время работы:</b> {data['start_time'].strftime('%H:%M')}–{data['end_time'].strftime('%H:%M')}\n"
-        f"<b>Длительность слота:</b> {data['slot_size_min']} мин.\n\n"
-        "Всё верно?"
-    )
     await answer_tracked(
         message,
         state,
-        text=text,
+        text=txt.confirm(
+            name=data["name"],
+            phone=data["phone"],
+            work_days=", ".join(str(day + 1) for day in data["work_days"]),
+            work_time=f"{data['start_time']}–{data['end_time']}",
+            slot_size_min=int(data["slot_size_min"]),
+        ),
         reply_markup=_build_confirm_registration_keyboard(),
         bucket=MASTER_REGISTRATION_BUCKET,
     )
@@ -389,20 +366,27 @@ async def master_reg_confirm(
     await answer_tracked(
         callback.message,
         state,
-        text="⏳ Создаю профиль мастера…\n"
-             "Пожалуйста, подожди несколько секунд.",
+        text=txt.creating_profile(),
         bucket=MASTER_REGISTRATION_BUCKET,
     )
     data = await state.get_data()
     telegram_id = callback.from_user.id
+    try:
+        start_time = datetime.strptime(data["start_time"], "%H:%M").time()
+        end_time = datetime.strptime(data["end_time"], "%H:%M").time()
+    except Exception:
+        await callback.answer(txt.broken_state_retry(), show_alert=True)
+        await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
+        await state.clear()
+        return
 
     master_create = MasterCreate(
         telegram_id=telegram_id,
         name=data["name"],
         phone=data["phone"],
         work_days=data["work_days"],
-        start_time=data["start_time"],
-        end_time=data["end_time"],
+        start_time=start_time,
+        end_time=end_time,
         slot_size_min=data["slot_size_min"],
         timezone=Timezone.EUROPE_MINSK,
     )
@@ -420,16 +404,14 @@ async def master_reg_confirm(
         )
 
     await callback.message.answer(
-        "Готово! 🎉\n\n"
-        "Твой профиль мастера создан.\n"
-        "Теперь ты можешь принимать клиентов и вести записи в BeautyDesk.",
+        txt.done(),
     )
 
     await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
     await state.clear()
     is_client = await _check_if_client(telegram_id)
     await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
-    await send_master_main_menu(callback.message, show_switch_role=is_client)
+    await send_master_main_menu(callback.bot, telegram_id, show_switch_role=is_client)
 
 
 @router.callback_query(
@@ -461,6 +443,6 @@ async def master_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
     F.data == "master_reg_cancel",
 )
 async def master_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Окей, отменил.", show_alert=True)
+    await callback.answer(common_txt.cancelled(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
     await state.clear()

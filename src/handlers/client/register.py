@@ -1,6 +1,7 @@
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -18,6 +19,8 @@ from src.repositories import (
     MasterNotFound,
     MasterRepository,
 )
+from src.texts import client_registration as txt
+from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
 from src.use_cases.accept_client_invite import AcceptClientInvite, AcceptClientInviteRequest, AcceptInviteError
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
@@ -45,17 +48,17 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Всё верно",
+                    text=btn_confirm(),
                     callback_data=CLIENT_REGISTRATION_CB["confirm"],
                 ),
                 InlineKeyboardButton(
-                    text="🔁 Заполнить заново",
+                    text=btn_restart(),
                     callback_data=CLIENT_REGISTRATION_CB["restart"],
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="❌ Отмена",
+                    text=btn_cancel(),
                     callback_data=CLIENT_REGISTRATION_CB["cancel"],
                 ),
             ],
@@ -67,7 +70,7 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="❌ Отмена", callback_data=CLIENT_REGISTRATION_CB["cancel"]),
+                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_REGISTRATION_CB["cancel"]),
             ],
         ],
     )
@@ -94,41 +97,34 @@ async def _send_error_message(
     if error in {AcceptInviteError.INVITE_INVALID, AcceptInviteError.INVITE_NOT_FOUND}:
         await bot.send_message(
             chat_id=chat_id,
-            text="Эта ссылка на регистрацию больше не активна 😕\n"
-                 "Она могла истечь или быть использована ранее.\n\n"
-                 "Попросите мастера отправить новую ссылку ✨",
+            text=txt.err_invite_inactive(),
         )
         return
 
     if error in {AcceptInviteError.INVITE_WRONG_TYPE, AcceptInviteError.INVITE_MASTER_MISMATCH}:
         await bot.send_message(
             chat_id=chat_id,
-            text="Эта ссылка не подходит для регистрации клиента 😕\n\n"
-                 "Попросите мастера прислать актуальную ссылку на регистрацию ✨",
+            text=txt.err_invite_wrong_link(),
         )
         return
 
     if error == AcceptInviteError.QUOTA_EXCEEDED:
         await bot.send_message(
             chat_id=chat_id,
-            text="Похоже, у мастера закончился лимит клиентов на Free 😕\n\n"
-                 "Попросите мастера подключить Pro или прислать ссылку позже.",
+            text=txt.err_quota_exceeded(),
         )
         return
 
     if error == AcceptInviteError.PHONE_CONFLICT:
         await bot.send_message(
             chat_id=chat_id,
-            text="Не получилось подключиться по ссылке 😕\n"
-                 "Похоже, у мастера уже есть клиент с таким телефоном.\n\n"
-                 "Попросите мастера помочь вам подключиться.",
+            text=txt.err_phone_conflict(),
         )
         return
 
     await bot.send_message(
         chat_id=chat_id,
-        text="Не получилось зарегистрироваться по ссылке 😕\n\n"
-             "Попробуйте ещё раз или попросите мастера прислать новую ссылку.",
+        text=txt.err_generic(),
     )
 
 
@@ -175,9 +171,7 @@ async def process_name_question(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Привет! 👋\n"
-             "Давайте настроим ваш профиль клиента в BeautyDesk.\n\n"
-             "Как вас зовут? (Например: Маша)",
+        text=txt.ask_name(),
         bucket=CLIENT_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -192,8 +186,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Я не понял имя 🤔\n"
-                 "Пожалуйста, напишите, как к вам обращаться. Например: <b>Маша</b>",
+            text=txt.name_invalid(),
             bucket=CLIENT_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -204,8 +197,7 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text=f"Отлично, <b>{name}</b>! ✨\n\n"
-             "Добавь свой номер телефона (375...):",
+        text=txt.ask_phone(name=name),
         bucket=CLIENT_REGISTRATION_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )
@@ -221,9 +213,7 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не смог разобрать телефонный номер 🤔\n\n"
-                 "Пожалуйста, введите реальный номер в формате 375291234567, "
-                 "чтобы мастер мог с вами связаться:",
+            text=txt.phone_invalid(),
             bucket=CLIENT_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )
@@ -233,12 +223,7 @@ async def process_client_phone(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
 
-    text = (
-        "Проверь, пожалуйста, данные 👇\n\n"
-        f"<b>Имя:</b> {data['name']}\n"
-        f"<b>Номер телефона:</b> {data['phone']}\n"
-        "Всё верно?"
-    )
+    text = txt.confirm_details(name=data["name"], phone=data["phone"])
 
     await answer_tracked(
         message,
@@ -261,12 +246,16 @@ async def client_reg_confirm(
     notifier: Notifier,
 ) -> None:
     await callback.answer()
+    try:
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
     await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
     await answer_tracked(
         callback.message,
         state,
-        text="⏳ Создаю профиль клиента…\n"
-             "Пожалуйста, подождите несколько секунд.",
+        text=txt.creating_profile(),
         bucket=CLIENT_REGISTRATION_BUCKET,
     )
 
@@ -276,7 +265,7 @@ async def client_reg_confirm(
     try:
         invite_data = InviteData.model_validate(data.get("invite_data"))
     except ValidationError:
-        await callback.answer("Что-то пошло не так, попробуйте ещё раз", show_alert=True)
+        await callback.answer(txt.state_broken_alert(), show_alert=True)
         await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
         await state.clear()
         return
@@ -313,9 +302,7 @@ async def client_reg_confirm(
     )
     await bot.send_message(
         chat_id=telegram_id,
-        text="Готово! 🎉\n\n"
-             "Ваш профиль клиента создан.\n"
-             "Теперь вы можете управлять записями в BeautyDesk.",
+        text=txt.done(),
     )
 
     if result.warn_master_clients_near_limit:
@@ -342,6 +329,11 @@ async def client_reg_confirm(
     await send_client_main_menu(bot, telegram_id, show_switch_role=is_master)
 
 
+@router.callback_query(F.data == CLIENT_REGISTRATION_CB["confirm"])
+async def client_reg_confirm_out_of_state(callback: CallbackQuery) -> None:
+    await callback.answer(txt.confirm_out_of_state(), show_alert=True)
+
+
 @router.callback_query(
     StateFilter(ClientRegistration.confirm),
     F.data == CLIENT_REGISTRATION_CB["restart"],
@@ -365,6 +357,6 @@ async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
     F.data == CLIENT_REGISTRATION_CB["cancel"],
 )
 async def client_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Регистрация отменена.", show_alert=True)
+    await callback.answer(txt.cancel_alert(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
     await state.clear()

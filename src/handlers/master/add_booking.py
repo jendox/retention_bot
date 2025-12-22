@@ -17,6 +17,8 @@ from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, MasterWithClients
 from src.schemas.enums import BookingStatus, Timezone
+from src.texts import common as common_txt, master_add_booking as txt
+from src.texts.buttons import btn_cancel, btn_cancel_booking, btn_confirm
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
@@ -52,9 +54,9 @@ def _build_clients_keyboard(clients: list) -> InlineKeyboardMarkup:
         if client.phone:
             label += f" ({client.phone})"
         if client.telegram_id is None:
-            label += " · 🔴 оффлайн"
+            label += txt.label_offline()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{client.id}")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -62,7 +64,7 @@ def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for index, slot in enumerate(slots):
         rows.append([InlineKeyboardButton(text=slot.strftime("%H:%M"), callback_data=f"m:add_booking:slot:{index}")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -70,14 +72,14 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data="m:add_booking:confirm"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel"),
+                InlineKeyboardButton(text=btn_confirm(), callback_data="m:add_booking:confirm"),
+                InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel"),
             ],
         ],
     )
 
 
-ASYNC_CTX_ERROR = "Что-то пошло не так, попробуй ещё раз"
+ASYNC_CTX_ERROR = common_txt.generic_error()
 
 
 async def _load_master_with_clients(telegram_id: int) -> MasterWithClients:
@@ -95,10 +97,10 @@ async def start_add_booking(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Введи имя или телефон клиента, чтобы создать запись:",
+        text=txt.ask_query(),
         bucket=ADD_BOOKING_BUCKET,
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="m:add_booking:cancel")]],
+            inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")]],
         ),
     )
     await state.set_state(AddBookingStates.search_client)
@@ -116,7 +118,7 @@ async def search_client(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Нужно ввести имя или телефон клиента.",
+            text=txt.query_required(),
             bucket=ADD_BOOKING_BUCKET,
         )
         return
@@ -134,7 +136,7 @@ async def search_client(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не нашёл клиентов по запросу. Попробуй другое имя или телефон.",
+            text=txt.no_matches(),
             bucket=ADD_BOOKING_BUCKET,
         )
         return
@@ -143,12 +145,12 @@ async def search_client(message: Message, state: FSMContext) -> None:
         master_id=master.id,
         master_slot_size=master.slot_size_min,
         master_timezone=str(master.timezone.value),
-        clients=[client.model_dump() for client in matches],
+        clients=[client.to_state_dict() for client in matches],
     )
     await answer_tracked(
         message,
         state,
-        text="Выбери клиента:",
+        text=txt.choose_client(),
         reply_markup=_build_clients_keyboard(matches),
         bucket=ADD_BOOKING_BUCKET,
     )
@@ -195,7 +197,7 @@ async def choose_client(callback: CallbackQuery, state: FSMContext) -> None:
     reply_markup = await calendar.start_calendar()
 
     await callback.message.edit_text(
-        text="Выбери дату для записи:",
+        text=txt.choose_date(),
         reply_markup=reply_markup,
     )
     await state.set_state(AddBookingStates.selecting_date)
@@ -231,8 +233,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
         max_date = today_master + timedelta(days=horizon_days)
         if not (today_master <= picked_day <= max_date):
             await callback.answer(
-                text=f"Можно выбрать дату с {today_master.strftime('%d.%m.%Y')} "
-                     f"по {max_date.strftime('%d.%m.%Y')}",
+                text=txt.date_out_of_range(today=today_master, max_date=max_date),
                 show_alert=True,
             )
             return
@@ -251,13 +252,13 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
             },
         )
         await callback.message.edit_text(
-            text="На этот день свободных слотов нет. Выбери другую дату.",
+            text=txt.no_slots(),
         )
         return
 
     await state.update_data(slots=[dt.isoformat() for dt in slots], master_day=str(result.master_day))
     await callback.message.edit_text(
-        text=f"Свободные слоты на {picked_date.strftime('%d.%m.%Y')}:",
+        text=txt.slots_title(day=picked_date.date()),
         reply_markup=_build_slots_keyboard([to_zone(dt, master_tz_enum) for dt in slots]),
     )
     await state.set_state(AddBookingStates.selecting_slot)
@@ -301,10 +302,9 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(selected_slot=slot_dt.isoformat())
 
     await callback.message.edit_text(
-        text=(
-            "Подтверди запись:\n\n"
-            f"Клиент: {client.get('name')}\n"
-            f"Дата/время: {slot_master_tz.strftime('%d.%m.%Y %H:%M')}"
+        text=txt.confirm_booking(
+            client_name=str(client.get("name") or ""),
+            slot_str=slot_master_tz.strftime("%d.%m.%Y %H:%M"),
         ),
         reply_markup=_build_confirm_keyboard(),
     )
@@ -340,7 +340,7 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
         check = await entitlements.can_create_booking(master_id=master_id)
         if not check.allowed:
             await callback.answer(
-                text="Лимит записей на Free исчерпан. Подключи Pro, чтобы создавать больше записей.",
+                text=txt.quota_reached(),
                 show_alert=True,
             )
             return
@@ -349,11 +349,7 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
             new_count = check.current + 1
             warn_bookings = new_count >= int(check.limit * 0.8)  # noqa: PLR2004
             if warn_bookings:
-                warn_text = (
-                    "⚠️ Лимит записей на Free почти исчерпан.\n\n"
-                    f"<b>{new_count}</b> из <b>{check.limit}</b> записей в этом месяце.\n"
-                    "В Pro лимитов нет."
-                )
+                warn_text = txt.warn_near_limit(new_count=new_count, limit=int(check.limit))
         booking_create = BookingCreate(
             master_id=master_id,
             client_id=client["id"],
@@ -365,8 +361,7 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
             booking = await booking_repo.create(booking_create)
         except IntegrityError:
             await callback.answer(
-                text="Упс — этот слот только что заняли 😕\n"
-                     "Пожалуйста, выбери другое время.",
+                text=txt.slot_taken(),
                 show_alert=True,
             )
             return
@@ -382,7 +377,7 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
     )
     client_has_tg = client.get("telegram_id") is not None
 
-    text = "✅ Запись создана" + (" (🔴 оффлайн)" if not client_has_tg else "")
+    text = txt.created(client_has_tg=client_has_tg)
 
     await callback.answer(text=text, show_alert=True)
 
@@ -409,7 +404,7 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
 
             from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
             reply_markup = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking.id}:cancel")]],
+                inline_keyboard=[[InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking.id}:cancel")]],
             )
 
             notification = NotificationService(callback.bot)
@@ -433,6 +428,6 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == "m:add_booking:cancel")
 async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("❌ Создание записи отменено", show_alert=True)
+    await callback.answer(txt.cancel_alert(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
     await state.clear()

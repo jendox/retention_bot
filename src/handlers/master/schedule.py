@@ -2,7 +2,6 @@ import logging
 from calendar import monthrange
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
-from textwrap import dedent
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -15,6 +14,8 @@ from src.filters.user_role import UserRole
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, status_badge
+from src.texts import master_schedule as txt
+from src.texts.buttons import btn_back, btn_cancel_booking
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
@@ -49,10 +50,10 @@ SCHEDULE_CB: dict[str, str] = {
 }
 
 TITLE_MAP: dict[Scope, str] = {
-    Scope.TODAY: "Расписание на сегодня",
-    Scope.TOMORROW: "Расписание на завтра",
-    Scope.WEEK: "Расписание на неделю",
-    Scope.MONTH: "Расписание на месяц",
+    Scope.TODAY: txt.title_today(),
+    Scope.TOMORROW: txt.title_tomorrow(),
+    Scope.WEEK: txt.title_week(),
+    Scope.MONTH: txt.title_month(),
 }
 
 # ---------- callback builders (short + stable) ----------
@@ -80,23 +81,23 @@ def _build_period_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📅 Сегодня", callback_data=SCHEDULE_CB[str(Scope.TODAY.value)],
+                    text=txt.btn_today(), callback_data=SCHEDULE_CB[str(Scope.TODAY.value)],
                 ),
                 InlineKeyboardButton(
-                    text="📆 Завтра", callback_data=SCHEDULE_CB[str(Scope.TOMORROW.value)],
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📆 Неделя", callback_data=SCHEDULE_CB[str(Scope.WEEK.value)],
-                ),
-                InlineKeyboardButton(
-                    text="🗓 Месяц", callback_data=SCHEDULE_CB[str(Scope.MONTH.value)],
+                    text=txt.btn_tomorrow(), callback_data=SCHEDULE_CB[str(Scope.TOMORROW.value)],
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="◀️ Назад", callback_data=SCHEDULE_CB["back_menu"],
+                    text=txt.btn_week(), callback_data=SCHEDULE_CB[str(Scope.WEEK.value)],
+                ),
+                InlineKeyboardButton(
+                    text=txt.btn_month(), callback_data=SCHEDULE_CB[str(Scope.MONTH.value)],
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=btn_back(), callback_data=SCHEDULE_CB["back_menu"],
                 ),
             ],
         ],
@@ -109,7 +110,7 @@ def _button_text(booking, tz: ZoneInfo, scope: Scope) -> str:
     badge = status_badge(booking.status)
 
     client = getattr(booking, "client", None)
-    client_name = getattr(client, "name", None) or f"Клиент #{getattr(booking, 'client_id', '')}"
+    client_name = getattr(client, "name", None) or txt.client_fallback(getattr(booking, "client_id", ""))
 
     if scope in Scope.long():
         return f"{badge} {local_dt:%d.%m} {local_dt:%H:%M} · {client_name}"
@@ -152,7 +153,7 @@ def _build_bookings_list_keyboard(
             nav_row.append(InlineKeyboardButton(text="▶️", callback_data=cb_schedule(scope, page + 1)))
         rows.append(nav_row)
 
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data=SCHEDULE_CB["back_periods"])])
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=SCHEDULE_CB["back_periods"])])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -168,14 +169,14 @@ def _build_booking_card_keyboard(
     if status in BookingStatus.active():
         actions: list[InlineKeyboardButton] = [
             InlineKeyboardButton(
-                text="❌ Отменить",
+                text=btn_cancel_booking(),
                 callback_data=cb_action("cancel", booking_id, scope, page),
             ),
         ]
         if allow_reschedule:
             actions.append(
                 InlineKeyboardButton(
-                    text="🔄 Перенести",
+                    text=txt.btn_reschedule(),
                     callback_data=cb_action("reschedule", booking_id, scope, page),
                 ),
             )
@@ -183,7 +184,7 @@ def _build_booking_card_keyboard(
     inline_keyboard.append(
         [
             InlineKeyboardButton(
-                text="◀️ Назад к расписанию",
+                text=txt.btn_back_to_schedule(),
                 callback_data=cb_schedule(scope, page),
             ),
         ],
@@ -276,15 +277,15 @@ async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1
             booking for booking in bookings if booking.start_at.astimezone(master_tz) >= cutoff_local
         ]
 
-    title = TITLE_MAP.get(scope, "Расписание")
+    title = TITLE_MAP.get(scope, txt.title_default())
 
     if not bookings:
-        text = f"{title}\n\nЗдесь пока нет записей 🙂"
+        text = txt.empty(title=title)
         reply_markup = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="◀️ Назад", callback_data=SCHEDULE_CB["back_periods"])]],
+            inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data=SCHEDULE_CB["back_periods"])]],
         )
     else:
-        text = f"{title}\nВыбери запись:"
+        text = txt.choose_booking(title=title)
         reply_markup = _build_bookings_list_keyboard(bookings=bookings, tz=master_tz, scope=scope, page=page)
 
     await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
@@ -301,29 +302,26 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
         plan = await entitlements.get_plan(master_id=master.id)
 
     if booking.master.id != master.id:
-        await callback.answer("Нет доступа к этой записи.", show_alert=True)
+        await callback.answer(txt.no_access(), show_alert=True)
         await _send_schedule(callback, scope=scope, page=page)
         return
 
     client = getattr(booking, "client", None)
-    client_name = getattr(client, "name", None) or f"Клиент #{getattr(booking, 'client_id', '')}"
+    client_name = getattr(client, "name", None) or txt.client_fallback(getattr(booking, "client_id", ""))
     phone = getattr(client, "phone", None)
 
-    phone_line = f'<a href="tel:{phone}">{phone}</a>' if phone else "не указан"
+    phone_line = f'<a href="tel:{phone}">{phone}</a>' if phone else txt.phone_missing()
 
     local_dt = booking.start_at.astimezone(master_tz)
     badge = status_badge(booking.status)
 
-    text = dedent(f"""
-        Запись
-
-        {badge} {BOOKING_STATUS_MAP[booking.status]}
-        📅 {local_dt:%d.%m.%Y}
-        ⏰ {local_dt:%H:%M}
-
-        👤 {client_name}
-        📞 {phone_line}
-        """).strip()
+    text = txt.card(
+        status_line=f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
+        date_line=f"📅 {local_dt:%d.%m.%Y}",
+        time_line=f"⏰ {local_dt:%H:%M}",
+        client_line=f"👤 {client_name}",
+        phone_line=f"📞 {phone_line}",
+    )
 
     await callback.message.edit_text(
         text=text,
@@ -342,7 +340,7 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
 
 async def master_schedule(message: Message) -> None:
     await message.answer(
-        text="Выбери период, чтобы посмотреть записи:",
+        text=txt.choose_period(),
         reply_markup=_build_period_keyboard(),
     )
 
@@ -359,7 +357,7 @@ async def master_schedule_period_callbacks(callback: CallbackQuery) -> None:
     data = callback.data or ""
 
     if data == SCHEDULE_CB["back_menu"]:
-        await callback.answer("Возвращаемся в главное меню.")
+        await callback.answer(txt.back_to_main_menu())
         try:
             await callback.message.delete()
         except Exception:
@@ -369,7 +367,7 @@ async def master_schedule_period_callbacks(callback: CallbackQuery) -> None:
     if data == SCHEDULE_CB["back_periods"]:
         await callback.answer()
         await callback.message.edit_text(
-            text="Выбери период, чтобы посмотреть записи:",
+            text=txt.choose_period(),
             reply_markup=_build_period_keyboard(),
         )
         return
@@ -389,7 +387,7 @@ async def master_schedule_pagination(callback: CallbackQuery) -> None:
         scope = Scope(parts[2])
         page = int(parts[4])
     except Exception:
-        await callback.answer("Ошибка навигации.", show_alert=False)
+        await callback.answer(txt.navigation_error(), show_alert=False)
         logger.debug("schedule.pagination_parse_failed", extra={"data": callback.data}, exc_info=True)
         return
 
@@ -406,7 +404,7 @@ async def master_open_booking_card(callback: CallbackQuery) -> None:
         scope = Scope(parts[4])
         page = int(parts[6])
     except Exception:
-        await callback.answer("Ошибка открытия записи.", show_alert=False)
+        await callback.answer(txt.open_booking_error(), show_alert=False)
         logger.debug("schedule.open_booking_parse_failed", extra={"data": callback.data}, exc_info=True)
         return
 
@@ -424,17 +422,17 @@ async def master_booking_actions(callback: CallbackQuery, state: FSMContext) -> 
         scope = Scope(parts[5])
         page = int(parts[7])
     except Exception:
-        await callback.answer("Ошибка действия.", show_alert=False)
+        await callback.answer(txt.action_error(), show_alert=False)
         logger.debug("schedule.action_parse_failed", extra={"data": callback.data}, exc_info=True)
         return
 
     if action == "cancel":
         master = await _fetch_master(callback.from_user.id)
         if not await _cancel_booking(booking_id=booking_id, master_id=master.id):
-            await callback.answer("Не удалось отменить запись (нет доступа или уже неактуальна).", show_alert=True)
+            await callback.answer(txt.cancel_failed(), show_alert=True)
             return
 
-        await callback.answer("Запись отменена ✅", show_alert=True)
+        await callback.answer(txt.cancelled_ok(), show_alert=True)
         await _send_schedule(callback, scope=scope, page=page)
         return
 
@@ -444,4 +442,4 @@ async def master_booking_actions(callback: CallbackQuery, state: FSMContext) -> 
         await start_reschedule(callback, state, booking_id=booking_id, scope=scope, page=page)
         return
 
-    await callback.answer("Неизвестное действие.", show_alert=False)
+    await callback.answer(txt.unknown_action(), show_alert=False)

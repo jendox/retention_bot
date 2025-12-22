@@ -64,6 +64,20 @@ class Master(MasterBase):
     def from_db_entity(cls, entity) -> Self:
         return cls.model_validate(entity)
 
+    def to_state_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "telegram_id": self.telegram_id,
+            "name": self.name,
+            "phone": self.phone,
+            "work_days": list(self.work_days),
+            "start_time": self.start_time.strftime("%H:%M"),
+            "end_time": self.end_time.strftime("%H:%M"),
+            "slot_size_min": self.slot_size_min,
+            "timezone": str(self.timezone.value),
+            "notify_clients": bool(self.notify_clients),
+        }
+
 
 # ---------- WorkdayOverride ----------
 
@@ -140,6 +154,16 @@ class Client(BaseClient):
     @classmethod
     def from_db_entity(cls, entity) -> Self:
         return cls.model_validate(entity)
+
+    def to_state_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "telegram_id": self.telegram_id,
+            "name": self.name,
+            "phone": self.phone,
+            "timezone": str(self.timezone.value),
+            "notifications_enabled": bool(self.notifications_enabled),
+        }
 
 
 class ClientDetails(Client):

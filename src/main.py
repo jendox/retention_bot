@@ -3,6 +3,8 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.base import DefaultKeyBuilder
+from aiogram.fsm.storage.redis import RedisEventIsolation, RedisStorage
 from redis.asyncio import Redis
 
 from src.core.sa import Database
@@ -18,7 +20,14 @@ logger = logging.getLogger("retention_bot")
 
 
 def build_dispatcher(redis: Redis) -> Dispatcher:
-    dp = Dispatcher()
+    key_builder = DefaultKeyBuilder(prefix="fsm", with_bot_id=True, with_destiny=True)
+    storage = RedisStorage(redis=redis, key_builder=key_builder)
+    isolation = RedisEventIsolation(
+        redis=redis,
+        key_builder=key_builder,
+        lock_kwargs={"timeout": 60},
+    )
+    dp = Dispatcher(storage=storage, events_isolation=isolation)
     user_ctx_storage = UserContextStorage(redis)
     dp.update.outer_middleware(LoggingMiddleware())
     dp.update.outer_middleware(UserContextMiddleware(user_ctx_storage))

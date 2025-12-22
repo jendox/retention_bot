@@ -17,6 +17,7 @@ from src.plans import (
 )
 from src.repositories import MasterNotFound, MasterRepository, SubscriptionRepository
 from src.settings import get_settings
+from src.texts import admin as txt
 from src.use_cases.entitlements import EntitlementsService
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ def _billing_contact() -> str:
 
 def _format_dt(dt: datetime | None) -> str:
     if dt is None:
-        return "—"
+        return txt.placeholder_empty()
     return dt.astimezone(UTC).strftime("%d.%m.%Y %H:%M UTC")
 
 
@@ -40,28 +41,22 @@ def _render_plan_text(
     usage,
     horizon_days: int,
 ) -> str:
-    if plan.is_pro:
-        status = "Pro"
-        if plan.source == "trial":
-            status += " (trial)"
-        elif plan.source == "paid":
-            status += " (оплачено)"
-    else:
-        status = "Free"
+    status = txt.status_label(is_pro=bool(plan.is_pro), source=getattr(plan, "source", None))
 
     until = _format_dt(plan.active_until)
     clients_limit = "∞" if plan.is_pro else str(FREE_CLIENTS_LIMIT)
     bookings_limit = "∞" if plan.is_pro else str(FREE_BOOKINGS_PER_MONTH_LIMIT)
 
-    return (
-        f"{title}\n\n"
-        f"<b>Тариф:</b> {status}\n"
-        f"<b>Действует до:</b> {until}\n\n"
-        f"<b>Клиенты:</b> {usage.clients_count}/{clients_limit}\n"
-        f"<b>Новые записи (мес):</b> {usage.bookings_created_this_month}/{bookings_limit}\n"
-        f"<b>Горизонт записи:</b> {horizon_days} дней\n\n"
-        "Чтобы подключить Pro — напиши: "
-        f"{_billing_contact()}"
+    return txt.render_plan_text(
+        title=title,
+        status=status,
+        until=until,
+        clients_current=int(usage.clients_count),
+        clients_limit=clients_limit,
+        bookings_current=int(usage.bookings_created_this_month),
+        bookings_limit=bookings_limit,
+        horizon_days=int(horizon_days),
+        billing_contact=_billing_contact(),
     )
 
 
@@ -69,16 +64,16 @@ def _render_plan_text(
 async def grant_pro(message: Message, command: CommandObject) -> None:
     parts = (command.args or "").split()
     if len(parts) != 2:  # noqa: PLR2004
-        await message.answer("Использование: /grant_pro <master_telegram_id> <days>")
+        await message.answer(txt.usage_grant_pro())
         return
     try:
         master_telegram_id = int(parts[0])
         days = int(parts[1])
     except ValueError:
-        await message.answer("Аргументы должны быть числами: /grant_pro <master_telegram_id> <days>")
+        await message.answer(txt.args_must_be_numbers_grant())
         return
     if days <= 0:
-        await message.answer("days должен быть > 0")
+        await message.answer(txt.days_must_be_positive())
         return
 
     paid_until = datetime.now(UTC) + timedelta(days=days)
@@ -88,28 +83,24 @@ async def grant_pro(message: Message, command: CommandObject) -> None:
         try:
             master = await master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
-            await message.answer("Мастер не найден.")
+            await message.answer(txt.master_not_found())
             return
         await subs_repo.grant_pro(master.id, paid_until)
 
     logger.info("admin.grant_pro", extra={"master_id": master.id, "paid_until": paid_until.isoformat()})
-    await message.answer(
-        f"✅ Pro активирован\n\n"
-        f"<b>Мастер:</b> {master.name} ({master_telegram_id})\n"
-        f"<b>До:</b> {_format_dt(paid_until)}",
-    )
+    await message.answer(txt.pro_activated(master_name=master.name, master_telegram_id=master_telegram_id, until=_format_dt(paid_until)))
 
 
 @router.message(AdminOnly(), Command("revoke_pro"))
 async def revoke_pro(message: Message, command: CommandObject) -> None:
     parts = (command.args or "").split()
     if len(parts) != 1:  # noqa: PLR2004
-        await message.answer("Использование: /revoke_pro <master_telegram_id>")
+        await message.answer(txt.usage_revoke_pro())
         return
     try:
         master_telegram_id = int(parts[0])
     except ValueError:
-        await message.answer("master_telegram_id должен быть числом.")
+        await message.answer(txt.master_id_must_be_number())
         return
 
     async with active_session() as session:
@@ -118,13 +109,11 @@ async def revoke_pro(message: Message, command: CommandObject) -> None:
         try:
             master = await master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
-            await message.answer("Мастер не найден.")
+            await message.answer(txt.master_not_found())
             return
         changed = await subs_repo.revoke_pro(master.id)
 
-    await message.answer(
-        "✅ Pro отключён." if changed else "ℹ️ Подписка не найдена (ничего не изменил).",
-    )
+    await message.answer(txt.pro_revoked(changed=bool(changed)))
 
 
 @router.message(
@@ -135,12 +124,12 @@ async def revoke_pro(message: Message, command: CommandObject) -> None:
 async def admin_plan(message: Message, command: CommandObject) -> None:
     parts = (command.args or "").split()
     if len(parts) != 1:  # noqa: PLR2004
-        await message.answer("Использование: /plan <master_telegram_id>")
+        await message.answer(txt.usage_plan())
         return
     try:
         master_telegram_id = int(parts[0])
     except ValueError:
-        await message.answer("master_telegram_id должен быть числом.")
+        await message.answer(txt.master_id_must_be_number())
         return
 
     async with session_local() as session:
@@ -149,7 +138,7 @@ async def admin_plan(message: Message, command: CommandObject) -> None:
         try:
             master = await master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
-            await message.answer("Мастер не найден.")
+            await message.answer(txt.master_not_found())
             return
 
         plan = await entitlements.get_plan(master_id=master.id)
@@ -158,7 +147,7 @@ async def admin_plan(message: Message, command: CommandObject) -> None:
 
     await message.answer(
         _render_plan_text(
-            title=f"Тариф мастера 💳\n<b>{master.name}</b>",
+            title=txt.title_master_plan(master_name=master.name),
             plan=plan,
             usage=usage,
             horizon_days=horizon,
@@ -178,7 +167,7 @@ async def my_plan(message: Message) -> None:
         try:
             master = await master_repo.get_by_telegram_id(telegram_id)
         except MasterNotFound:
-            await message.answer("Команда доступна мастерам после регистрации.")
+            await message.answer(txt.master_only())
             return
 
         plan = await entitlements.get_plan(master_id=master.id)
@@ -193,7 +182,7 @@ async def my_plan(message: Message) -> None:
 
     await message.answer(
         _render_plan_text(
-            title="Твой тариф 💳",
+            title=txt.title_my_plan(),
             plan=plan,
             usage=usage,
             horizon_days=horizon,

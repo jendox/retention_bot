@@ -9,6 +9,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from src.core.sa import active_session, session_local
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientUpdate
+from src.texts import common as common_txt, edit_client as txt
+from src.texts.buttons import btn_back, btn_cancel
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
 
 logger = logging.getLogger(__name__)
@@ -29,45 +31,41 @@ class EditClientStates(StatesGroup):
 
 def _kb_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="m:edit_client:cancel")]],
+        inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")]],
     )
 
 
 def _kb_results(clients: list[dict]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for raw in clients[:10]:
-        label = raw.get("name") or "Клиент"
+        label = raw.get("name") or common_txt.label_default_client()
         phone = raw.get("phone")
         if phone:
             label += f" ({phone})"
         if raw.get("telegram_id") is None:
-            label += " · 🔴 оффлайн"
+            label += common_txt.label_offline_badge()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:edit_client:pick:{raw['id']}")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="m:edit_client:back")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="m:edit_client:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data="m:edit_client:back")])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _kb_actions(*, can_edit_phone: bool = True) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="✏️ Изменить имя", callback_data="m:edit_client:edit_name")],
+        [InlineKeyboardButton(text=txt.btn_edit_name(), callback_data="m:edit_client:edit_name")],
     ]
     if can_edit_phone:
-        rows.append([InlineKeyboardButton(text="📞 Изменить телефон", callback_data="m:edit_client:edit_phone")])
-    rows.append([InlineKeyboardButton(text="◀️ Назад к поиску", callback_data="m:edit_client:back")])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="m:edit_client:cancel")])
+        rows.append([InlineKeyboardButton(text=txt.btn_edit_phone(), callback_data="m:edit_client:edit_phone")])
+    rows.append([InlineKeyboardButton(text=txt.btn_back_to_search(), callback_data="m:edit_client:back")])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _render_client_card(client: dict) -> str:
-    name = client.get("name") or "—"
-    phone = client.get("phone") or "—"
-    offline = "да" if client.get("telegram_id") is None else "нет"
-    return (
-        "Карточка клиента 👤\n\n"
-        f"<b>Имя:</b> {name}\n"
-        f"<b>Телефон:</b> {phone}\n"
-        f"<b>Оффлайн:</b> {offline}"
+    return txt.client_card(
+        name=client.get("name"),
+        phone=client.get("phone"),
+        is_offline=client.get("telegram_id") is None,
     )
 
 
@@ -135,7 +133,7 @@ async def start_edit_client(callback: CallbackQuery, state: FSMContext) -> None:
     await answer_tracked(
         callback.message,
         state,
-        text="Введи имя или телефон клиента для поиска:",
+        text=txt.ask_name_or_phone(),
         bucket=EDIT_CLIENT_BUCKET,
         reply_markup=_kb_cancel(),
     )
@@ -150,7 +148,7 @@ async def process_query(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Нужно ввести имя или телефон клиента.",
+            text=txt.name_or_phone_required(),
             bucket=EDIT_CLIENT_BUCKET,
             reply_markup=_kb_cancel(),
         )
@@ -162,12 +160,12 @@ async def process_query(message: Message, state: FSMContext) -> None:
         try:
             master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
         except MasterNotFound:
-            await message.answer("Профиль мастера не найден.")
+            await message.answer(txt.master_profile_not_found())
             return
 
     q = query.lower()
     matches = [
-        client.model_dump()
+        client.to_state_dict()
         for client in master.clients
         if q in (client.name or "").lower() or q in (client.phone or "")
     ]
@@ -175,7 +173,7 @@ async def process_query(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не нашёл клиентов по запросу. Попробуй другое имя или телефон.",
+            text=txt.no_clients_found(),
             bucket=EDIT_CLIENT_BUCKET,
             reply_markup=_kb_cancel(),
         )
@@ -185,7 +183,7 @@ async def process_query(message: Message, state: FSMContext) -> None:
     await answer_tracked(
         message,
         state,
-        text="Нашёл клиентов. Выбери нужного:",
+        text=txt.choose_client(),
         bucket=EDIT_CLIENT_BUCKET,
         reply_markup=_kb_results(matches),
     )
@@ -203,7 +201,7 @@ async def process_query(message: Message, state: FSMContext) -> None:
     F.data == "m:edit_client:cancel",
 )
 async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer("Окей, отменил.", show_alert=True)
+    await callback.answer(common_txt.cancelled(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_CARD_BUCKET)
     await state.clear()
@@ -227,7 +225,7 @@ async def back(callback: CallbackQuery, state: FSMContext) -> None:
     await answer_tracked(
         callback.message,
         state,
-        text="Введи имя или телефон клиента для поиска:",
+        text=txt.ask_name_or_phone(),
         bucket=EDIT_CLIENT_BUCKET,
         reply_markup=_kb_cancel(),
     )
@@ -247,14 +245,14 @@ async def pick_client(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         client_id = int((callback.data or "").split(":")[-1])
     except ValueError:
-        await callback.answer("Некорректный клиент.", show_alert=True)
+        await callback.answer(txt.invalid_client(), show_alert=True)
         return
 
     data = await state.get_data()
     results: list[dict] = data.get("edit_client_results", [])
     selected = next((c for c in results if c.get("id") == client_id), None)
     if selected is None:
-        await callback.answer("Не нашёл клиента в списке, попробуй заново.", show_alert=True)
+        await callback.answer(txt.client_not_found_in_results(), show_alert=True)
         return
 
     await state.update_data(edit_client_selected=selected)
@@ -272,7 +270,7 @@ async def start_edit_name(callback: CallbackQuery, state: FSMContext) -> None:
     await answer_tracked(
         callback.message,
         state,
-        text="Введи новое имя клиента:",
+        text=txt.ask_new_name(),
         bucket=EDIT_CLIENT_BUCKET,
         reply_markup=_kb_cancel(),
     )
@@ -287,7 +285,7 @@ async def save_name(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Имя не понял 😅 Введи, пожалуйста, имя клиента.",
+            text=txt.name_not_recognized(),
             bucket=EDIT_CLIENT_BUCKET,
             reply_markup=_kb_cancel(),
         )
@@ -296,7 +294,7 @@ async def save_name(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     selected: dict | None = data.get("edit_client_selected")
     if not selected:
-        await message.answer("Контекст потерян, начни заново.")
+        await message.answer(common_txt.context_lost())
         await state.clear()
         return
 
@@ -307,7 +305,7 @@ async def save_name(message: Message, state: FSMContext) -> None:
     selected["name"] = name
     await state.update_data(edit_client_selected=selected)
     await cleanup_messages(state, message.bot, bucket=EDIT_CLIENT_BUCKET)
-    await answer_tracked(message, state, text="✅ Имя обновлено.", bucket=EDIT_CLIENT_BUCKET)
+    await answer_tracked(message, state, text=txt.name_updated(), bucket=EDIT_CLIENT_BUCKET)
     await _update_card(message, state, selected)
     await state.set_state(EditClientStates.action)
 
@@ -318,7 +316,7 @@ async def start_edit_phone(callback: CallbackQuery, state: FSMContext) -> None:
     await answer_tracked(
         callback.message,
         state,
-        text="Введи новый телефон клиента (в формате <code>375291234567</code>):",
+        text=txt.ask_new_phone(),
         bucket=EDIT_CLIENT_BUCKET,
         reply_markup=_kb_cancel(),
     )
@@ -334,7 +332,7 @@ async def save_phone(message: Message, state: FSMContext) -> None:
         await answer_tracked(
             message,
             state,
-            text="Не смог разобрать номер 🤔\n\nВведи номер в формате <code>375291234567</code>:",
+            text=txt.phone_not_recognized(),
             bucket=EDIT_CLIENT_BUCKET,
             reply_markup=_kb_cancel(),
         )
@@ -343,7 +341,7 @@ async def save_phone(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     selected: dict | None = data.get("edit_client_selected")
     if not selected:
-        await message.answer("Контекст потерян, начни заново.")
+        await message.answer(common_txt.context_lost())
         await state.clear()
         return
 
@@ -354,7 +352,7 @@ async def save_phone(message: Message, state: FSMContext) -> None:
         try:
             master = await master_repo.get_by_telegram_id(telegram_id)
         except MasterNotFound:
-            await message.answer("Профиль мастера не найден.")
+            await message.answer(txt.master_profile_not_found())
             await state.clear()
             return
 
@@ -367,7 +365,7 @@ async def save_phone(message: Message, state: FSMContext) -> None:
             await answer_tracked(
                 message,
                 state,
-                text="У тебя уже есть клиент с таким телефоном. Телефон должен быть уникален в твоей базе.",
+                text=txt.phone_conflict(),
                 bucket=EDIT_CLIENT_BUCKET,
                 reply_markup=_kb_cancel(),
             )
@@ -378,6 +376,6 @@ async def save_phone(message: Message, state: FSMContext) -> None:
     selected["phone"] = phone
     await state.update_data(edit_client_selected=selected)
     await cleanup_messages(state, message.bot, bucket=EDIT_CLIENT_BUCKET)
-    await answer_tracked(message, state, text="✅ Телефон обновлён.", bucket=EDIT_CLIENT_BUCKET)
+    await answer_tracked(message, state, text=txt.phone_updated(), bucket=EDIT_CLIENT_BUCKET)
     await _update_card(message, state, selected)
     await state.set_state(EditClientStates.action)

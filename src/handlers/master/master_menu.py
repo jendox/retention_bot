@@ -1,7 +1,6 @@
 import logging
-from textwrap import dedent
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -21,19 +20,11 @@ from src.handlers.master.list_clients import start_clients_entry
 from src.handlers.master.schedule import master_schedule
 from src.handlers.master.settings import open_master_settings
 from src.notifications.notifier import Notifier
+from src.texts import common as common_txt, master_menu as txt
 from src.user_context import ActiveRole, UserContextStorage
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
-
-MASTER_MAIN_MENU_TEXT = dedent("""
-    Главное меню мастера 💇‍♀️
-    Здесь ты можешь:
-    • приглашать и добавлять клиентов
-    • создавать записи
-    • смотреть расписание
-    • управлять настройками
-""").strip()
 
 CLIENTS_MENU_CB = {
     "list": "m:clients:list",
@@ -47,20 +38,20 @@ CLIENTS_MENU_CB = {
 def build_master_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
     rows = [
         [
-            KeyboardButton(text="🗓 Добавить запись"),
-            KeyboardButton(text="📅 Расписание"),
+            KeyboardButton(text=txt.MENU_ADD_BOOKING),
+            KeyboardButton(text=txt.MENU_SCHEDULE),
         ],
         [
-            KeyboardButton(text="👥 Клиенты"),
-            KeyboardButton(text="⚙️ Настройки"),
+            KeyboardButton(text=txt.MENU_CLIENTS),
+            KeyboardButton(text=txt.MENU_SETTINGS),
         ],
     ]
     if show_switch_role:
-        rows.append([KeyboardButton(text="🔄 Сменить роль")])
+        rows.append([KeyboardButton(text=txt.MENU_SWITCH_ROLE)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
-        input_field_placeholder="Выберите действие",
+        input_field_placeholder=common_txt.input_choose_action(),
     )
 
 
@@ -68,34 +59,36 @@ def build_master_clients_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="📋 Список", callback_data=CLIENTS_MENU_CB["list"]),
-                InlineKeyboardButton(text="➕ Добавить", callback_data=CLIENTS_MENU_CB["add"]),
+                InlineKeyboardButton(text=txt.CLIENTS_BTN_LIST, callback_data=CLIENTS_MENU_CB["list"]),
+                InlineKeyboardButton(text=txt.CLIENTS_BTN_ADD, callback_data=CLIENTS_MENU_CB["add"]),
             ],
             [
-                InlineKeyboardButton(text="🔎 Найти/Изменить", callback_data=CLIENTS_MENU_CB["search"]),
-                InlineKeyboardButton(text="📨 Пригласить", callback_data=CLIENTS_MENU_CB["invite"]),
+                InlineKeyboardButton(text=txt.CLIENTS_BTN_SEARCH_EDIT, callback_data=CLIENTS_MENU_CB["search"]),
+                InlineKeyboardButton(text=txt.CLIENTS_BTN_INVITE, callback_data=CLIENTS_MENU_CB["invite"]),
             ],
             [
-                InlineKeyboardButton(text="◀️ Назад", callback_data=CLIENTS_MENU_CB["back"]),
+                InlineKeyboardButton(text=txt.CLIENTS_BTN_BACK, callback_data=CLIENTS_MENU_CB["back"]),
             ],
         ],
     )
 
 
 async def send_master_main_menu(
-    message: Message,
+    bot: Bot,
+    chat_id: int,
     show_switch_role: bool = False,
 ) -> None:
-    await message.answer(
-        text=MASTER_MAIN_MENU_TEXT,
+    await bot.send_message(
+        chat_id=chat_id,
+        text=txt.MAIN_MENU_TEXT,
         reply_markup=build_master_main_keyboard(show_switch_role),
     )
 
 
-@router.message(UserRole(ActiveRole.MASTER), F.text == "👥 Клиенты")
+@router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_CLIENTS)
 async def master_clients(message: Message, state: FSMContext) -> None:
     await message.answer(
-        text="Выбери действие:",
+        text=txt.choose_action(),
         reply_markup=build_master_clients_keyboard(),
     )
     await message.delete()
@@ -126,11 +119,11 @@ async def master_invite_client(callback: CallbackQuery, state: FSMContext) -> No
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["back"])
 async def master_back_to_main_menu(callback: CallbackQuery) -> None:
-    await callback.answer("Возвращаемся в главное меню.")
+    await callback.answer(txt.back_to_main_menu())
     await callback.message.delete()
 
 
-@router.message(UserRole(ActiveRole.MASTER), F.text == "🔄 Сменить роль")
+@router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_SWITCH_ROLE)
 async def master_switch_role(
     message: Message,
     state: FSMContext,
@@ -145,18 +138,18 @@ async def master_switch_role(
     await message.delete()
 
 
-@router.message(UserRole(ActiveRole.MASTER), F.text == "🗓 Добавить запись")
+@router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_ADD_BOOKING)
 async def master_add_booking(message: Message, state: FSMContext) -> None:
     await start_add_booking(message, state)
 
 
-@router.message(UserRole(ActiveRole.MASTER), F.text == "📅 Расписание")
+@router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_SCHEDULE)
 async def master_schedule_entry(message: Message) -> None:
     await master_schedule(message)
     await message.delete()
 
 
-@router.message(UserRole(ActiveRole.MASTER), F.text == "⚙️ Настройки")
+@router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_SETTINGS)
 async def master_settings(message: Message, state: FSMContext) -> None:
     await open_master_settings(message, state)
     await message.delete()

@@ -14,6 +14,8 @@ from src.repositories import ClientNotFound, ClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, status_badge
+from src.texts import client_list_bookings as txt
+from src.texts.buttons import btn_cancel_booking
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -23,7 +25,7 @@ def build_booking_cancel_keyboard(booking_id: int):
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking_id}:cancel")],
+            [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking_id}:cancel")],
         ],
     )
 
@@ -83,12 +85,11 @@ async def start_client_list_bookings(message: Message, state: FSMContext) -> Non
 
     if not bookings:
         await message.answer(
-            "Пока нет активных записей 🗓\n\n"
-            "Чтобы записаться — нажми «➕ Записаться».",
+            txt.empty_list(),
         )
         return
 
-    await message.answer("Твои активные записи 🗓")
+    await message.answer(txt.title())
     await _list_bookings(message.bot, telegram_id, bookings, client.timezone)
     await message.delete()
 
@@ -97,7 +98,7 @@ async def start_client_list_bookings(message: Message, state: FSMContext) -> Non
 async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
     booking_id = _parse_booking_id(callback.data)
     if booking_id is None:
-        await callback.answer("Некорректная команда.", show_alert=True)
+        await callback.answer(txt.invalid_command(), show_alert=True)
         return
 
     telegram_id = callback.from_user.id
@@ -111,14 +112,14 @@ async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
             booking = await booking_repo.get_for_review(booking_id)
         except BookingNotFound:
             await callback.answer(
-                text="Запись не найдена или уже удалена.",
+                text=txt.booking_not_found(),
                 show_alert=True,
             )
             return
 
         # безопасность: клиент может отменять только свою запись
         if booking.client.id != client.id:
-            await callback.answer("Это не ваша запись.", show_alert=True)
+            await callback.answer(txt.forbidden(), show_alert=True)
             return
 
         cancelled = await booking_repo.cancel_by_client(
@@ -128,15 +129,15 @@ async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
 
     if not cancelled:
         await callback.answer(
-            text="Не получилось отменить: запись уже обработана или время прошло.",
+            text=txt.cannot_cancel(),
             show_alert=True,
         )
         return
 
-    await callback.answer("Запись отменена ✅")
+    await callback.answer(txt.cancelled_alert())
 
     if callback.message:
-        await callback.message.edit_text("❌ Запись отменена.")
+        await callback.message.edit_text(txt.cancelled_text())
 
     # уведомляем мастера (в его TZ)
     slot_master = to_zone(booking.start_at, booking.master.timezone)

@@ -19,6 +19,8 @@ from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schedule import get_free_slots_for_date
 from src.schemas.enums import BookingStatus, Timezone
+from src.texts import master_reschedule as txt
+from src.texts.buttons import btn_cancel, btn_cancel_booking, btn_confirm
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
@@ -44,7 +46,7 @@ def _build_slots_keyboard(slots_local: list[datetime]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for index, slot in enumerate(slots_local):
         rows.append([InlineKeyboardButton(text=slot.strftime("%H:%M"), callback_data=_cb_slot(index))])
-    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=CB_CANCEL)])
+    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -52,8 +54,8 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data=CB_CONFIRM),
-                InlineKeyboardButton(text="❌ Отмена", callback_data=CB_CANCEL),
+                InlineKeyboardButton(text=btn_confirm(), callback_data=CB_CONFIRM),
+                InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL),
             ],
         ],
     )
@@ -77,20 +79,20 @@ async def start_reschedule(
         entitlements = EntitlementsService(session)
         plan = await entitlements.get_plan(master_id=master.id)
         if not plan.is_pro:
-            await callback.answer("Перенос записи доступен в Pro.", show_alert=True)
+            await callback.answer(txt.pro_only(), show_alert=True)
             return
 
         booking_repo = BookingRepository(session)
         booking = await booking_repo.get_for_review(booking_id)
 
     if booking.master.telegram_id != callback.from_user.id:
-        await callback.answer("Это не твоя запись.", show_alert=True)
+        await callback.answer(txt.not_your_booking(), show_alert=True)
         return
     if booking.status not in BookingStatus.active():
-        await callback.answer("Эту запись нельзя перенести.", show_alert=True)
+        await callback.answer(txt.not_reschedulable(), show_alert=True)
         return
     if booking.start_at <= datetime.now(UTC):
-        await callback.answer("Нельзя переносить прошедшие записи.", show_alert=True)
+        await callback.answer(txt.past_booking(), show_alert=True)
         return
 
     await state.clear()
@@ -107,7 +109,7 @@ async def start_reschedule(
     calendar = SimpleCalendar()
     reply_markup = await calendar.start_calendar()
     if callback.message:
-        await callback.message.edit_text("Выбери новую дату для записи:", reply_markup=reply_markup)
+        await callback.message.edit_text(txt.choose_new_date(), reply_markup=reply_markup)
     await state.set_state(RescheduleStates.selecting_date)
     await callback.answer()
 
@@ -124,7 +126,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     master_id = data.get("reschedule_master_id")
     master_tz_name = data.get("reschedule_master_tz")
     if booking_id is None or master_id is None or not master_tz_name:
-        await callback.answer("Что-то пошло не так, попробуй ещё раз.", show_alert=True)
+        await callback.answer(txt.broken_state(), show_alert=True)
         await state.clear()
         return
 
@@ -138,8 +140,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     max_day = today_master + timedelta(days=horizon_days)
     if not (today_master <= picked_day <= max_day):
         await callback.answer(
-            text=f"Можно выбрать дату с {today_master.strftime('%d.%m.%Y')} "
-                 f"по {max_day.strftime('%d.%m.%Y')}",
+            text=txt.date_out_of_range(today=today_master, max_day=max_day),
             show_alert=True,
         )
         return
@@ -165,7 +166,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     if not slots_local:
         await callback.answer()
         if callback.message:
-            await callback.message.edit_text("На этот день свободных слотов нет. Выбери другую дату.")
+            await callback.message.edit_text(txt.no_slots())
         return
 
     slots_utc = [dt.astimezone(UTC) for dt in slots_local]
@@ -176,7 +177,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
 
     if callback.message:
         await callback.message.edit_text(
-            text=f"Свободные слоты на {picked_day.strftime('%d.%m.%Y')}:",
+            text=txt.slots_title(day=picked_day),
             reply_markup=_build_slots_keyboard(slots_local),
         )
     await state.set_state(RescheduleStates.selecting_slot)
@@ -187,20 +188,20 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
 async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     parts = (callback.data or "").split(":")
     if len(parts) != 4 or parts[0] != "m" or parts[1] != "r" or parts[2] != "slot":  # noqa: PLR2004
-        await callback.answer("Что-то пошло не так, попробуй ещё раз.", show_alert=True)
+        await callback.answer(txt.broken_state(), show_alert=True)
         return
     try:
         index = int(parts[3])
     except ValueError:
-        await callback.answer("Что-то пошло не так, попробуй ещё раз.", show_alert=True)
+        await callback.answer(txt.broken_state(), show_alert=True)
         return
 
     data = await state.get_data()
     slots_iso: list[str] = data.get("reschedule_slots", [])
     master_tz_name = data.get("reschedule_master_tz")
-    client_name = data.get("reschedule_client_name") or "клиент"
+    client_name = data.get("reschedule_client_name") or txt.client_fallback()
     if not slots_iso or master_tz_name is None or index < 0 or index >= len(slots_iso):
-        await callback.answer("Что-то пошло не так, попробуй ещё раз.", show_alert=True)
+        await callback.answer(txt.broken_state(), show_alert=True)
         return
 
     slot_utc = datetime.fromisoformat(slots_iso[index])
@@ -209,11 +210,10 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
 
     if callback.message:
         await callback.message.edit_text(
-            text=(
-                "Подтверди перенос записи:\n\n"
-                f"👤 {client_name}\n"
-                f"📅 {slot_local:%d.%m.%Y}\n"
-                f"⏰ {slot_local:%H:%M}"
+            text=txt.confirm(
+                client_name=client_name,
+                day=f"{slot_local:%d.%m.%Y}",
+                time_str=f"{slot_local:%H:%M}",
             ),
             reply_markup=_build_confirm_keyboard(),
         )
@@ -235,7 +235,7 @@ async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
     return_page = data.get("reschedule_page")
 
     if booking_id is None or master_id is None or slot_iso is None or not master_tz_name:
-        await callback.answer("Что-то пошло не так, попробуй ещё раз.", show_alert=True)
+        await callback.answer(txt.broken_state(), show_alert=True)
         await state.clear()
         return
 
@@ -246,22 +246,22 @@ async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
             updated = await booking_repo.reschedule(booking_id=booking_id, master_id=master_id, start_at=new_start_at)
     except IntegrityError:
         await callback.answer(
-            "Упс — этот слот только что заняли 😕\nПожалуйста, выбери другое время.",
+            txt.slot_taken(),
             show_alert=True,
         )
         await state.set_state(RescheduleStates.selecting_date)
         calendar = SimpleCalendar()
         reply_markup = await calendar.start_calendar()
         if callback.message:
-            await callback.message.edit_text("Выбери новую дату для записи:", reply_markup=reply_markup)
+            await callback.message.edit_text(txt.choose_new_date(), reply_markup=reply_markup)
         return
 
     if not updated:
-        await callback.answer("Не удалось перенести запись.", show_alert=True)
+        await callback.answer(txt.update_failed(), show_alert=True)
         await state.clear()
         return
 
-    await callback.answer("Запись перенесена ✅", show_alert=True)
+    await callback.answer(txt.updated(), show_alert=True)
 
     if client_tg:
         async with session_local() as session:
@@ -281,7 +281,7 @@ async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
             from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
             reply_markup = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"c:booking:{booking.id}:cancel")],
+                    [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking.id}:cancel")],
                 ],
             )
 
@@ -317,6 +317,6 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
     return_scope = data.get("reschedule_scope")
     return_page = data.get("reschedule_page")
     await state.clear()
-    await callback.answer("Окей, перенос отменён.", show_alert=True)
+    await callback.answer(txt.cancelled(), show_alert=True)
     if callback.message and return_scope and return_page:
         await _send_schedule(callback, scope=Scope(return_scope), page=int(return_page))
