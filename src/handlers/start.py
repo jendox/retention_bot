@@ -54,8 +54,18 @@ async def cmd_start(
 ) -> None:
     await cleanup_messages(state, message.bot, bucket=START_BOT_BUCKET)
     await track_message(state, message, bucket=START_BOT_BUCKET)
+    settings = get_settings()
+    invite_only_master_reg = bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
     if command.args == "registration":
         logger.debug("process new master")
+        if invite_only_master_reg:
+            await answer_tracked(
+                message,
+                state,
+                text=txt.master_registration_invite_only(contact=settings.billing.contact),
+                bucket=START_BOT_BUCKET,
+            )
+            return
         await start_master_registration(message, state)
         return
     if command.args and command.args.startswith("c_"):
@@ -85,6 +95,8 @@ async def resolve_role_and_dispatch(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
 ) -> None:
+    settings = get_settings()
+    invite_only_master_reg = bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
     async with session_local() as session:
         is_master = True
         is_client = True
@@ -122,13 +134,14 @@ async def resolve_role_and_dispatch(
         await ROLE_MENU_MAP[ActiveRole.CLIENT](message, is_master)
         return
 
-    bot_username = get_settings().telegram.bot_username
-    link = f"https://t.me/{bot_username}?start=registration"
-
     await answer_tracked(
         message,
         state,
-        text=txt.greet_unknown(link=link),
+        text=(
+            txt.greet_unknown_invite_only(contact=settings.billing.contact)
+            if invite_only_master_reg
+            else txt.greet_unknown(link=f"https://t.me/{settings.telegram.bot_username}?start=registration")
+        ),
         bucket=START_BOT_BUCKET,
     )
 

@@ -93,3 +93,23 @@ def title_my_plan(*, t: Translator = _noop_t) -> str:
 
 def master_only(*, t: Translator = _noop_t) -> str:
     return t("Команда доступна мастерам после регистрации.")
+
+
+def usage_invite_master(*, t: Translator = _noop_t) -> str:
+    return t("Использование: /invite_master [ttl_hours]")
+
+
+def invite_master_secret_missing(*, t: Translator = _noop_t) -> str:
+    return t("⚠️ Не задан `SECURITY__MASTER_INVITE_SECRET`, приглашения мастерам недоступны.")
+
+
+def invite_master_bad_ttl(*, t: Translator = _noop_t) -> str:
+    return t("⚠️ ttl_hours должен быть положительным числом.")
+
+
+def invite_master_created(*, link: str, ttl_hours: int, t: Translator = _noop_t) -> str:
+    return t(
+        "✅ Ссылка для регистрации мастера готова.\n\n"
+        f"{link}\n\n"
+        f"Ссылка действует {ttl_hours} ч.",
+    )

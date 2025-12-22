@@ -10,7 +10,6 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
-from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
@@ -35,6 +34,7 @@ from src.texts.client_booking import (
     slot_not_available,
     state_broken_alert,
 )
+from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 from src.use_cases.create_client_booking import (
     CreateClientBooking,
     CreateClientBookingError,

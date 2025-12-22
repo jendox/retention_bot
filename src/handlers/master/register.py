@@ -11,8 +11,10 @@ from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
 from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterRepository, SubscriptionRepository
+from src.security.master_invites import verify_master_invite_token
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
+from src.settings import get_settings
 from src.texts import common as common_txt, master_registration as txt
 from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
 from src.user_context import ActiveRole, UserContextStorage
@@ -161,6 +163,29 @@ async def start_master_registration(message: Message, state: FSMContext, token: 
             "has_token": bool(token),
         },
     )
+    settings = get_settings()
+    invite_only = bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
+    if invite_only:
+        if not token:
+            await answer_tracked(
+                message,
+                state,
+                text=txt.invite_required(contact=settings.billing.contact),
+                bucket=MASTER_REGISTRATION_BUCKET,
+            )
+            return
+        claims = verify_master_invite_token(
+            secret=settings.security.master_invite_secret.get_secret_value(),  # type: ignore[union-attr]
+            token=token,
+        )
+        if claims is None:
+            await answer_tracked(
+                message,
+                state,
+                text=txt.invite_invalid(contact=settings.billing.contact),
+                bucket=MASTER_REGISTRATION_BUCKET,
+            )
+            return
     await state.update_data(token=token)
     await answer_tracked(
         message,

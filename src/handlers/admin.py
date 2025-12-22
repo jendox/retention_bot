@@ -16,6 +16,7 @@ from src.plans import (
     PRO_BOOKING_HORIZON_DAYS,
 )
 from src.repositories import MasterNotFound, MasterRepository, SubscriptionRepository
+from src.security.master_invites import create_master_invite_token
 from src.settings import get_settings
 from src.texts import admin as txt
 from src.use_cases.entitlements import EntitlementsService
@@ -188,3 +189,27 @@ async def my_plan(message: Message) -> None:
             horizon_days=horizon,
         ),
     )
+
+
+@router.message(AdminOnly(), Command("invite_master"))
+async def invite_master(message: Message, command: CommandObject) -> None:
+    settings = get_settings()
+    secret = settings.security.master_invite_secret
+    if secret is None:
+        await message.answer(txt.invite_master_secret_missing())
+        return
+
+    ttl_hours = settings.security.master_invite_ttl_sec // 3600
+    if command.args:
+        try:
+            ttl_hours = int((command.args or "").strip())
+        except ValueError:
+            await message.answer(txt.usage_invite_master())
+            return
+        if ttl_hours <= 0:
+            await message.answer(txt.invite_master_bad_ttl())
+            return
+
+    token = create_master_invite_token(secret=secret.get_secret_value(), ttl_sec=ttl_hours * 3600)
+    link = f"https://t.me/{settings.telegram.bot_username}?start=m_{token}"
+    await message.answer(txt.invite_master_created(link=link, ttl_hours=ttl_hours))

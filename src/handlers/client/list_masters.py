@@ -5,9 +5,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from src.core.sa import session_local
-from src.handlers.client.messages import CLIENT_NOT_FOUND_MESSAGE
 from src.repositories import ClientNotFound, ClientRepository
 from src.texts import client_list_masters as txt
+from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)

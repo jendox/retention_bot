@@ -46,6 +46,18 @@ class BillingSettings(BaseModel):
     contact: str = "@admin"
 
 
+class SecuritySettings(BaseModel):
+    """
+    Anti-abuse controls.
+
+    If master_invite_secret is set, you can switch master registration to invite-only.
+    """
+
+    master_invite_secret: SecretStr | None = None
+    master_invite_ttl_sec: int = 60 * 60 * 24  # 24h
+    master_public_registration: bool = False
+
+
 class AppSettings(BaseSettings):
     debug: bool = False
 
@@ -53,6 +65,7 @@ class AppSettings(BaseSettings):
     database: DatabaseSettings
     admin: AdminSettings = Field(default_factory=AdminSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
 
     model_config = SettingsConfigDict(
         env_nested_delimiter="__",

@@ -88,7 +88,15 @@ def slot_size_not_recognized(*, t: Translator = _noop_t) -> str:
     )
 
 
-def confirm(*, name: str, phone: str, work_days: str, work_time: str, slot_size_min: int, t: Translator = _noop_t) -> str:
+def confirm(
+    *,
+    name: str,
+    phone: str,
+    work_days: str,
+    work_time: str,
+    slot_size_min: int,
+    t: Translator = _noop_t,
+) -> str:
     return t(
         "Проверь, пожалуйста, данные 👇\n\n"
         f"<b>Имя:</b> {name}\n"
@@ -114,3 +122,19 @@ def done(*, t: Translator = _noop_t) -> str:
 
 def broken_state_retry(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Что-то пошло не так. Попробуй зарегистрироваться заново.")
+
+
+def invite_required(*, contact: str, t: Translator = _noop_t) -> str:
+    return t(
+        "⚠️ Регистрация мастера доступна только по пригласительной ссылке.\n\n"
+        "Напиши сюда — и мы пришлём ссылку: "
+        f"{contact}",
+    )
+
+
+def invite_invalid(*, contact: str, t: Translator = _noop_t) -> str:
+    return t(
+        "⚠️ Похоже, ссылка для регистрации устарела или уже не работает.\n\n"
+        "Напиши сюда — и мы пришлём новую: "
+        f"{contact}",
+    )

@@ -25,5 +25,23 @@ def greet_unknown(*, link: str, t: Translator = _noop_t) -> str:
     )
 
 
+def greet_unknown_invite_only(*, contact: str, t: Translator = _noop_t) -> str:
+    return t(
+        "Привет! 👋\n"
+        "Я BeautyDesk — бот для записи к мастерам.\n\n"
+        "Чтобы записаться, возьми персональную ссылку у своего мастера.\n"
+        "А если ты мастер и хочешь подключить бота — напиши: "
+        f"{contact}",
+    )
+
+
+def master_registration_invite_only(*, contact: str, t: Translator = _noop_t) -> str:
+    return t(
+        "⚠️ Регистрация мастера доступна только по пригласительной ссылке.\n\n"
+        "Напиши, пожалуйста, сюда — и мы пришлём ссылку: "
+        f"{contact}",
+    )
+
+
 def role_not_recognized(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Не понял роль 😅 Выбери, пожалуйста, ещё раз:")
