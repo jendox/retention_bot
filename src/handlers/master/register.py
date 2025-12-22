@@ -33,6 +33,13 @@ class MasterRegistration(StatesGroup):
     confirm = State()
 
 
+MASTER_REGISTRATION_CB = {
+    "confirm": "m:registration:confirm",
+    "restart": "m:registration:restart",
+    "cancel": "m:registration:cancel",
+}
+
+
 # ------------ helpers ------------
 
 def _parse_work_days(raw: str) -> list[int] | None:
@@ -118,20 +125,11 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text=btn_confirm(),
-                    callback_data="master_reg_confirm",
-                ),
-                InlineKeyboardButton(
-                    text=btn_restart(),
-                    callback_data="master_reg_restart",
-                ),
+                InlineKeyboardButton(text=btn_confirm(), callback_data=MASTER_REGISTRATION_CB["confirm"]),
+                InlineKeyboardButton(text=btn_restart(), callback_data=MASTER_REGISTRATION_CB["restart"]),
             ],
             [
-                InlineKeyboardButton(
-                    text=btn_cancel(),
-                    callback_data="master_reg_cancel",
-                ),
+                InlineKeyboardButton(text=btn_cancel(), callback_data=MASTER_REGISTRATION_CB["cancel"]),
             ],
         ],
     )
@@ -140,7 +138,7 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
 def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=btn_cancel(), callback_data="master_reg_cancel")],
+            [InlineKeyboardButton(text=btn_cancel(), callback_data=MASTER_REGISTRATION_CB["cancel"])],
         ],
     )
 
@@ -350,7 +348,7 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
 
 @router.callback_query(
     StateFilter(MasterRegistration.confirm),
-    F.data == "master_reg_confirm",
+    F.data == MASTER_REGISTRATION_CB["confirm"],
 )
 async def master_reg_confirm(
     callback: CallbackQuery,
@@ -416,7 +414,7 @@ async def master_reg_confirm(
 
 @router.callback_query(
     StateFilter(MasterRegistration.confirm),
-    F.data == "master_reg_restart",
+    F.data == MASTER_REGISTRATION_CB["restart"],
 )
 async def master_reg_restart(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
@@ -440,7 +438,7 @@ async def master_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
         MasterRegistration.slot_size,
         MasterRegistration.confirm,
     ),
-    F.data == "master_reg_cancel",
+    F.data == MASTER_REGISTRATION_CB["cancel"],
 )
 async def master_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer(common_txt.cancelled(), show_alert=True)
