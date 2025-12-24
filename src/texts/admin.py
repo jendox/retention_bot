@@ -31,24 +31,29 @@ def render_plan_text(
     billing_contact: str,
     t: Translator = _noop_t,
 ) -> str:
-    return t(
+    text = (
         f"{title}\n\n"
         f"<b>Тариф:</b> {status}\n"
         f"<b>Действует до:</b> {until}\n\n"
         f"<b>Клиенты:</b> {clients_current}/{clients_limit}\n"
         f"<b>Новые записи (мес):</b> {bookings_current}/{bookings_limit}\n"
-        f"<b>Горизонт записи:</b> {horizon_days} дней\n\n"
-        "Чтобы подключить Pro — напиши: "
-        f"{billing_contact}",
+        f"<b>Горизонт записи:</b> {horizon_days} дней"
     )
+    if not "Pro" in status:
+        text += (
+            "\n\n"
+            "Чтобы подключить Pro — напиши: "
+            f"{billing_contact}"
+        )
+    return t(text)
 
 
 def usage_grant_pro(*, t: Translator = _noop_t) -> str:
-    return t("Использование: /grant_pro <master_telegram_id> <days>")
+    return t("Использование: /grant_pro <code>master_telegram_id</code> <code>days</code>")
 
 
 def args_must_be_numbers_grant(*, t: Translator = _noop_t) -> str:
-    return t("Аргументы должны быть числами: /grant_pro <master_telegram_id> <days>")
+    return t("Аргументы должны быть числами: /grant_pro <code>master_telegram_id</code> <code>days</code>")
 
 
 def days_must_be_positive(*, t: Translator = _noop_t) -> str:
@@ -68,7 +73,7 @@ def pro_activated(*, master_name: str, master_telegram_id: int, until: str, t: T
 
 
 def usage_revoke_pro(*, t: Translator = _noop_t) -> str:
-    return t("Использование: /revoke_pro <master_telegram_id>")
+    return t("Использование: /revoke_pro <code>master_telegram_id</code>")
 
 
 def master_id_must_be_number(*, t: Translator = _noop_t) -> str:
@@ -80,7 +85,7 @@ def pro_revoked(*, changed: bool, t: Translator = _noop_t) -> str:
 
 
 def usage_plan(*, t: Translator = _noop_t) -> str:
-    return t("Использование: /plan <master_telegram_id>")
+    return t("Использование: /plan <code>master_telegram_id</code>")
 
 
 def title_master_plan(*, master_name: str, t: Translator = _noop_t) -> str:

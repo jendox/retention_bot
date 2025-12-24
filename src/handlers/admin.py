@@ -16,7 +16,7 @@ from src.plans import (
     PRO_BOOKING_HORIZON_DAYS,
 )
 from src.repositories import MasterNotFound, MasterRepository, SubscriptionRepository
-from src.security.master_invites import create_master_invite_token
+from src.security.master_invites import create_master_invite_token, encode_master_invite_for_start
 from src.settings import get_settings
 from src.texts import admin as txt
 from src.use_cases.entitlements import EntitlementsService
@@ -211,5 +211,5 @@ async def invite_master(message: Message, command: CommandObject) -> None:
             return
 
     token = create_master_invite_token(secret=secret.get_secret_value(), ttl_sec=ttl_hours * 3600)
-    link = f"https://t.me/{settings.telegram.bot_username}?start=m_{token}"
+    link = f"https://t.me/{settings.telegram.bot_username}?start=m_{encode_master_invite_for_start(token)}"
     await message.answer(txt.invite_master_created(link=link, ttl_hours=ttl_hours))

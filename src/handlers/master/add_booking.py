@@ -12,7 +12,9 @@ from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
-from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
+from src.notifications import BookingContext, NotificationEvent, RecipientKind
+from src.notifications.notifier import NotificationRequest, Notifier
+from src.notifications.policy import NotificationFacts
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingCreate, MasterWithClients
@@ -312,7 +314,7 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(StateFilter(AddBookingStates.confirm), F.data == "m:add_booking:confirm")
-async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
+async def confirm_booking(callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
     await track_callback_message(state, callback, bucket=ADD_BOOKING_BUCKET)
 
     data = await state.get_data()
@@ -332,7 +334,6 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
 
     slot_dt = datetime.fromisoformat(slot_iso)
 
-    warn_bookings = False
     warn_text: str | None = None
     async with active_session() as session:
         booking_repo = BookingRepository(session)
@@ -404,22 +405,36 @@ async def confirm_booking(callback: CallbackQuery, state: FSMContext) -> None:
 
             from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
             reply_markup = InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking.id}:cancel")]],
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=btn_cancel_booking(),
+                            callback_data=f"c:booking:{booking.id}:cancel",
+                        ),
+                    ],
+                ],
             )
 
-            notification = NotificationService(callback.bot)
-            await notification.send_booking(
-                event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
-                recipient=RecipientKind.CLIENT,
-                chat_id=client["telegram_id"],
-                context=BookingContext(
-                    booking_id=booking.id,
-                    master_name=master.name,
-                    client_name=client.get("name") or "",
-                    slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
-                    duration_min=master_slot_size,
+            await notifier.maybe_send(
+                NotificationRequest(
+                    event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
+                    recipient=RecipientKind.CLIENT,
+                    chat_id=client["telegram_id"],
+                    context=BookingContext(
+                        booking_id=booking.id,
+                        master_name=master.name,
+                        client_name=client.get("name") or "",
+                        slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
+                        duration_min=master_slot_size,
+                    ),
+                    facts=NotificationFacts(
+                        event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
+                        recipient=RecipientKind.CLIENT,
+                        chat_id=client["telegram_id"],
+                        master_notify_clients=allow_client_notifications,
+                    ),
+                    reply_markup=reply_markup,
                 ),
-                reply_markup=reply_markup,
             )
 
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)

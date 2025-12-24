@@ -13,6 +13,7 @@ from src.handlers.client.register import start_client_registration
 from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
+from src.security.master_invites import decode_master_invite_from_start
 from src.settings import get_settings
 from src.texts import start as txt
 from src.user_context import ActiveRole, UserContextStorage
@@ -54,28 +55,16 @@ async def cmd_start(
 ) -> None:
     await cleanup_messages(state, message.bot, bucket=START_BOT_BUCKET)
     await track_message(state, message, bucket=START_BOT_BUCKET)
-    settings = get_settings()
-    invite_only_master_reg = bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
     if command.args == "registration":
-        logger.debug("process new master")
-        if invite_only_master_reg:
-            await answer_tracked(
-                message,
-                state,
-                text=txt.master_registration_invite_only(contact=settings.billing.contact),
-                bucket=START_BOT_BUCKET,
-            )
-            return
-        await start_master_registration(message, state)
+        await start_master_registration(message, state, user_ctx_storage=user_ctx_storage)
         return
     if command.args and command.args.startswith("c_"):
-        logger.debug("process client with invite link")
         await start_client_registration(message, state, user_ctx_storage, command.args)
         return
     if command.args and command.args.startswith("m_"):
-        logger.debug("process master with invite link")
-        token = command.args.removeprefix("m_") or None
-        await start_master_registration(message, state, token=token)
+        raw = command.args.removeprefix("m_")
+        token = decode_master_invite_from_start(raw) or (raw or None)
+        await start_master_registration(message, state, user_ctx_storage=user_ctx_storage, token=token)
         return
 
     telegram_id = message.from_user.id
@@ -96,7 +85,8 @@ async def resolve_role_and_dispatch(
     user_ctx_storage: UserContextStorage,
 ) -> None:
     settings = get_settings()
-    invite_only_master_reg = bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
+    invite_only_master_reg = bool(
+        settings.security.master_invite_secret) and not settings.security.master_public_registration
     async with session_local() as session:
         is_master = True
         is_client = True
@@ -126,12 +116,12 @@ async def resolve_role_and_dispatch(
 
     if is_master:
         await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
-        await ROLE_MENU_MAP[ActiveRole.MASTER](message, is_client)
+        await ROLE_MENU_MAP[ActiveRole.MASTER](message.bot, telegram_id, is_client)
         return
 
     if is_client:
         await user_ctx_storage.set_role(telegram_id, ActiveRole.CLIENT)
-        await ROLE_MENU_MAP[ActiveRole.CLIENT](message, is_master)
+        await ROLE_MENU_MAP[ActiveRole.CLIENT](message.bot, telegram_id, is_master)
         return
 
     await answer_tracked(

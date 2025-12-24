@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime, time, timedelta
+from datetime import datetime, time
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -9,14 +9,17 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
-from src.plans import TRIAL_DAYS
-from src.repositories import ClientNotFound, ClientRepository, MasterRepository, SubscriptionRepository
-from src.security.master_invites import verify_master_invite_token
-from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import common as common_txt, master_registration as txt
 from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
+from src.use_cases.master_registration import (
+    CompleteMasterRegistration,
+    CompleteMasterRegistrationRequest,
+    StartMasterRegistration,
+    StartMasterRegistrationOutcome,
+    StartMasterRegistrationRequest,
+)
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
 
@@ -46,11 +49,11 @@ MASTER_REGISTRATION_CB = {
 
 def _parse_work_days(raw: str) -> list[int] | None:
     """
-    Парсим дни недели в виде:
+    Parse week days:
     - "1-5" -> [0,1,2,3,4]
     - "1,3,5" -> [0,2,4]
-    где 1 = понедельник, 7 = воскресенье.
-    В БД храним 0-6.
+    where 1 = monday, 7 = sunday.
+    In the database saved like 0-6.
     """
     text = raw.replace(" ", "")
     if not text:
@@ -76,7 +79,6 @@ def _parse_work_days(raw: str) -> list[int] | None:
                     return None
                 days.append(day - 1)
 
-        # убираем дубли и сортируем
         days = sorted(set(days))
         return days or None
     except ValueError:
@@ -85,7 +87,7 @@ def _parse_work_days(raw: str) -> list[int] | None:
 
 def _parse_time_range(raw: str) -> tuple[time, time] | None:
     """
-    Парсим строку вида "10:00-19:00" в (time(10,0), time(19,0)).
+    String parse "10:00-19:00" в (time(10,0), time(19,0)).
     """
     text = raw.replace(" ", "")
     if "-" not in text:
@@ -145,48 +147,60 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-async def _check_if_client(telegram_id: int) -> bool:
-    async with session_local() as session:
-        repo = ClientRepository(session)
-        try:
-            await repo.get_details_by_telegram_id(telegram_id)
-            return True
-        except ClientNotFound:
-            return False
-
-
-async def start_master_registration(message: Message, state: FSMContext, token: str | None = None) -> None:
+async def start_master_registration(
+    message: Message,
+    state: FSMContext,
+    user_ctx_storage: UserContextStorage,
+    token: str | None = None,
+) -> None:
+    telegram_id = message.from_user.id
     logger.info(
         "master_reg.start",
-        extra={
-            "telegram_id": message.from_user.id if message.from_user else None,
-            "has_token": bool(token),
-        },
+        extra={"telegram_id": telegram_id, "has_token": bool(token)},
     )
     settings = get_settings()
-    invite_only = bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
-    if invite_only:
-        if not token:
-            await answer_tracked(
-                message,
-                state,
-                text=txt.invite_required(contact=settings.billing.contact),
-                bucket=MASTER_REGISTRATION_BUCKET,
-            )
-            return
-        claims = verify_master_invite_token(
-            secret=settings.security.master_invite_secret.get_secret_value(),  # type: ignore[union-attr]
-            token=token,
+    invite_secret = settings.security.master_invite_secret
+    invite_only = bool(invite_secret) and not settings.security.master_public_registration
+
+    async with session_local() as session:
+        starter = StartMasterRegistration(session)
+        result = await starter.execute(
+            StartMasterRegistrationRequest(
+                telegram_id=telegram_id,
+                invite_only=invite_only,
+                invite_secret=invite_secret.get_secret_value() if invite_secret is not None else None,
+                token=token,
+            ),
         )
-        if claims is None:
-            await answer_tracked(
-                message,
-                state,
-                text=txt.invite_invalid(contact=settings.billing.contact),
-                bucket=MASTER_REGISTRATION_BUCKET,
-            )
-            return
-    await state.update_data(token=token)
+
+    if result.outcome == StartMasterRegistrationOutcome.ALREADY_MASTER:
+        await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
+        await send_master_main_menu(message.bot, telegram_id, show_switch_role=result.is_client)
+        try:
+            await message.delete()
+        except Exception:
+            logger.debug("master_reg.delete_failed", exc_info=True)
+        return
+
+    if result.outcome == StartMasterRegistrationOutcome.INVITE_REQUIRED:
+        await answer_tracked(
+            message,
+            state,
+            text=txt.invite_required(contact=settings.billing.contact),
+            bucket=MASTER_REGISTRATION_BUCKET,
+        )
+        return
+
+    if result.outcome == StartMasterRegistrationOutcome.INVITE_INVALID:
+        await answer_tracked(
+            message,
+            state,
+            text=txt.invite_invalid(contact=settings.billing.contact),
+            bucket=MASTER_REGISTRATION_BUCKET,
+        )
+        return
+
+    await state.update_data(token=token, is_client=result.is_client)
     await answer_tracked(
         message,
         state,
@@ -380,12 +394,9 @@ async def master_reg_confirm(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
 ) -> None:
-    await callback.answer()
+    telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
-    logger.info(
-        "master_reg.confirm",
-        extra={"telegram_id": callback.from_user.id if callback.from_user else None},
-    )
+    logger.info("master_reg.confirm", extra={"telegram_id": telegram_id})
     await answer_tracked(
         callback.message,
         state,
@@ -393,7 +404,6 @@ async def master_reg_confirm(
         bucket=MASTER_REGISTRATION_BUCKET,
     )
     data = await state.get_data()
-    telegram_id = callback.from_user.id
     try:
         start_time = datetime.strptime(data["start_time"], "%H:%M").time()
         end_time = datetime.strptime(data["end_time"], "%H:%M").time()
@@ -403,36 +413,26 @@ async def master_reg_confirm(
         await state.clear()
         return
 
-    master_create = MasterCreate(
-        telegram_id=telegram_id,
-        name=data["name"],
-        phone=data["phone"],
-        work_days=data["work_days"],
-        start_time=start_time,
-        end_time=end_time,
-        slot_size_min=data["slot_size_min"],
-        timezone=Timezone.EUROPE_MINSK,
-    )
-
     async with active_session() as session:
-        repo = MasterRepository(session)
-        master = await repo.create(master_create)
-        subscription_repo = SubscriptionRepository(session)
-        if await subscription_repo.get_by_master_id(master.id) is None:
-            trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
-            await subscription_repo.upsert_trial(master.id, trial_until)
-        logger.info(
-            "master.created",
-            extra={"master_id": master.id, "telegram_id": telegram_id},
+        result = await CompleteMasterRegistration(session).execute(
+            CompleteMasterRegistrationRequest(
+                telegram_id=telegram_id,
+                name=data["name"],
+                phone=data["phone"],
+                work_days=data["work_days"],
+                start_time=start_time,
+                end_time=end_time,
+                slot_size_min=int(data["slot_size_min"]),
+                timezone=Timezone.EUROPE_MINSK,
+            ),
         )
+        logger.info("master.registration.completed", extra={"master_id": result.master_id, "telegram_id": telegram_id})
 
-    await callback.message.answer(
-        txt.done(),
-    )
+    await callback.message.answer(txt.done())
+    is_client = bool(data.get("is_client"))
 
     await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
     await state.clear()
-    is_client = await _check_if_client(telegram_id)
     await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
     await send_master_main_menu(callback.bot, telegram_id, show_switch_role=is_client)
 
@@ -441,7 +441,11 @@ async def master_reg_confirm(
     StateFilter(MasterRegistration.confirm),
     F.data == MASTER_REGISTRATION_CB["restart"],
 )
-async def master_reg_restart(callback: CallbackQuery, state: FSMContext) -> None:
+async def master_reg_restart(
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_ctx_storage: UserContextStorage,
+) -> None:
     data = await state.get_data()
     token = data.get("token")
     await callback.answer()
@@ -451,7 +455,7 @@ async def master_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
     )
     await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
     await state.clear()
-    await start_master_registration(callback.message, state, token=token)
+    await start_master_registration(callback.message, state, user_ctx_storage, token)
 
 
 @router.callback_query(

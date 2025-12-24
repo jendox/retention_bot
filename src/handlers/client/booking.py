@@ -57,7 +57,7 @@ class ClientBooking(StatesGroup):
     confirm = State()
 
 
-def build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
+def _build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for master in masters:
         rows.append([
@@ -67,7 +67,7 @@ def build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
+def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     for index, slot_dt in enumerate(slots):
@@ -80,7 +80,7 @@ def build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_confirm_keyboard() -> InlineKeyboardMarkup:
+def _build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -91,7 +91,7 @@ def build_confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMarkup:
+def _build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -133,7 +133,7 @@ async def start_client_add_booking(message: Message, state: FSMContext) -> None:
         message,
         state,
         text=choose_master(),
-        reply_markup=build_masters_keyboard(masters),
+        reply_markup=_build_masters_keyboard(masters),
         bucket=BOOKING_BUCKET,
     )
     await state.set_state(ClientBooking.selecting_master)
@@ -239,7 +239,7 @@ async def process_booking_calendar(
 
     await callback.message.edit_text(
         text=choose_time(client_day=client_day),
-        reply_markup=build_slots_keyboard(result.slots_for_client),
+        reply_markup=_build_slots_keyboard(result.slots_for_client),
     )
     await state.set_state(ClientBooking.selecting_slot)
 
@@ -275,7 +275,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 
     await callback.message.edit_text(
         text=confirm_details(slot_dt_client=slot_dt_client),
-        reply_markup=build_confirm_keyboard(),
+        reply_markup=_build_confirm_keyboard(),
     )
     await state.set_state(ClientBooking.confirm)
 
@@ -374,7 +374,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext, notifier: 
                 slot_str=slot_master_str,
                 duration_min=master.slot_size_min,
             ),
-            reply_markup=build_master_booking_review_keyboard(booking.id),
+            reply_markup=_build_master_booking_review_keyboard(booking.id),
         ),
     )
     if (

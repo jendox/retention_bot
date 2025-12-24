@@ -31,6 +31,28 @@ def _sign(secret: str, payload: bytes) -> bytes:
     return digest[:12]
 
 
+def encode_master_invite_for_start(token: str) -> str:
+    """
+    Telegram deep-link `start=` payload is limited and only allows [A-Za-z0-9_-].
+    Our invite token contains '.', so we wrap it into base64url.
+    """
+    return _b64url_encode(token.encode("utf-8"))
+
+
+def decode_master_invite_from_start(value: str) -> str | None:
+    """
+    Reverse `encode_master_invite_for_start`.
+    Returns None if the value is not a valid encoded token.
+    """
+    try:
+        decoded = _b64url_decode(value).decode("utf-8")
+    except Exception:
+        return None
+    if "." not in decoded:
+        return None
+    return decoded
+
+
 def create_master_invite_token(*, secret: str, ttl_sec: int) -> str:
     issued_at = int(time.time())
     ttl_min = max(1, int(ttl_sec) // 60)

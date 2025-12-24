@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 if typing.TYPE_CHECKING:
     from src.schemas import Booking
-from src.schemas.override import WorkdayOverride
 from src.schemas.enums import Timezone
+from src.schemas.override import WorkdayOverride
 
 # ---------- Master ----------
 
