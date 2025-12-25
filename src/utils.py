@@ -83,11 +83,26 @@ async def cleanup_messages(
         try:
             await bot.delete_message(chat_id=chat_id, message_id=mid)
         except (TelegramBadRequest, TelegramAPIError) as e:
-            # тут "следим за исключениями": логируем, но не роняем хендлер
-            logger.warning(
-                "message_gc.delete_failed",
-                extra={"chat_id": chat_id, "message_id": mid, "error": str(e)},
-            )
+            # Best-effort cleanup: Telegram deletion is racy (message can be deleted already).
+            error_text = str(e)
+            if isinstance(e, TelegramBadRequest) and any(
+                marker in error_text.lower()
+                for marker in (
+                    "message to delete not found",
+                    "message can't be deleted",
+                    "message cannot be deleted",
+                    "message to delete not found",
+                )
+            ):
+                logger.debug(
+                    "message_gc.delete_skipped",
+                    extra={"chat_id": chat_id, "message_id": mid, "error": error_text},
+                )
+            else:
+                logger.warning(
+                    "message_gc.delete_failed",
+                    extra={"chat_id": chat_id, "message_id": mid, "error": error_text},
+                )
             if not ignore_errors:
                 raise
 

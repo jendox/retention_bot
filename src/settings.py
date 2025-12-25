@@ -78,6 +78,7 @@ class ObservabilitySettings(BaseModel):
     # EventLogger will emit it only for a subset of updates (deterministically by trace_id when possible).
     log_sample_rate_by_event: dict[str, float] = Field(default_factory=dict)
     db_slow_query_ms: int = 500
+    handler_slow_ms: int = 3_000
 
     @field_validator("alerts_events", mode="before")
     @classmethod

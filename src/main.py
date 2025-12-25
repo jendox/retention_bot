@@ -32,7 +32,7 @@ logger = logging.getLogger("retention_bot")
 ev = EventLogger("retention_bot")
 
 
-def build_dispatcher(redis: Redis) -> Dispatcher:
+def build_dispatcher(redis: Redis, *, slow_threshold_ms: int) -> Dispatcher:
     key_builder = DefaultKeyBuilder(prefix="fsm", with_bot_id=True, with_destiny=True)
     storage = RedisStorage(redis=redis, key_builder=key_builder)
     isolation = RedisEventIsolation(
@@ -44,7 +44,7 @@ def build_dispatcher(redis: Redis) -> Dispatcher:
     user_ctx_storage = UserContextStorage(redis)
     rate_limiter = RateLimiter(redis)
     dp.update.outer_middleware(LogContextMiddleware())
-    dp.update.outer_middleware(LoggingMiddleware())
+    dp.update.outer_middleware(LoggingMiddleware(slow_threshold_ms=slow_threshold_ms))
     dp.update.outer_middleware(RateLimiterMiddleware(rate_limiter))
     dp.update.outer_middleware(UserContextMiddleware(user_ctx_storage))
     for name, observer in dp.observers.items():
@@ -80,7 +80,7 @@ async def main():
             token=token,
             default=DefaultBotProperties(parse_mode="HTML"),
         )
-        dp = build_dispatcher(redis)
+        dp = build_dispatcher(redis, slow_threshold_ms=settings.observability.handler_slow_ms)
         dp.errors.register(global_error_handler)
         notifier = Notifier(
             bot=bot,
