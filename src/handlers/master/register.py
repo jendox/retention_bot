@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
+from src.rate_limiter import RateLimiter
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import admin as admin_txt, common as common_txt, master_registration as txt
@@ -289,10 +290,11 @@ async def _handle_start_result(
 
 # ------------ handlers ------------
 
-async def start_master_registration(
+async def start_master_registration(  # noqa: C901
     message: Message,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
+    rate_limiter: RateLimiter | None = None,
     token: str | None = None,
 ) -> None:
     """
@@ -306,10 +308,20 @@ async def start_master_registration(
         return
 
     token = _normalize_token(token)
+    telegram_id = message.from_user.id
+
+    if rate_limiter is not None:
+        settings = get_settings()
+        allowed = await rate_limiter.hit(
+            name="master_reg:start",
+            telegram_id=telegram_id,
+            ttl_sec=settings.security.master_registration_start_rl_sec,
+        )
+        if not allowed:
+            logger.info("master_reg.start_rate_limited", extra={"telegram_id": telegram_id})
+            return
 
     await _reset_master_registration(state, message.bot)
-
-    telegram_id = message.from_user.id
     logger.info(
         "master_reg.start",
         extra={"telegram_id": telegram_id, "has_token": bool(token)},
@@ -574,10 +586,22 @@ async def master_reg_confirm(  # noqa: C901
     callback: CallbackQuery,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
+    rate_limiter: RateLimiter,
 ) -> None:
     telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
     logger.info("master_reg.confirm", extra={"telegram_id": telegram_id})
+    settings = get_settings()
+    allowed = await rate_limiter.hit(
+        name="master_reg:confirm",
+        telegram_id=telegram_id,
+        ttl_sec=settings.security.master_registration_confirm_rl_sec,
+    )
+    if not allowed:
+        logger.info("master_reg.confirm_rate_limited", extra={"telegram_id": telegram_id})
+        await callback.answer(common_txt.too_many_requests(), show_alert=False)
+        return
+
     await callback.answer()
 
     data = await state.get_data()
@@ -652,6 +676,7 @@ async def master_reg_restart(
     callback: CallbackQuery,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
+    rate_limiter: RateLimiter,
 ) -> None:
     data = await state.get_data()
     token = data.get("token")
@@ -661,7 +686,7 @@ async def master_reg_restart(
         extra={"telegram_id": callback.from_user.id if callback.from_user else None},
     )
     await _reset_master_registration(state, callback.bot)
-    await start_master_registration(callback.message, state, user_ctx_storage, token)
+    await start_master_registration(callback.message, state, user_ctx_storage, rate_limiter, token)
 
 
 @router.callback_query(

@@ -8,6 +8,7 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
+from src.rate_limiter import RateLimiter
 from src.user_context import UserContextStorage
 
 logger = logging.getLogger(__name__)
@@ -74,4 +75,18 @@ class UserContextMiddleware(BaseMiddleware):
             data["active_role"] = role
             data["user_ctx_storage"] = self._storage
 
+        return await handler(event, data)
+
+
+class RateLimiterMiddleware(BaseMiddleware):
+    def __init__(self, limiter: RateLimiter) -> None:
+        self._limiter = limiter
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        data["rate_limiter"] = self._limiter
         return await handler(event, data)

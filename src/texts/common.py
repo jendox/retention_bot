@@ -27,6 +27,10 @@ def generic_error(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Что-то пошло не так. Попробуй ещё раз.")
 
 
+def too_many_requests(*, t: Translator = _noop_t) -> str:
+    return t("⌛ Слишком часто. Попробуй через несколько секунд.")
+
+
 def invalid_command(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Некорректная команда.")
 

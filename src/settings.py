@@ -34,10 +34,10 @@ class AdminSettings(BaseModel):
         if isinstance(value, str):
             ids: set[int] = set()
             for part in value.split(","):
-                part = part.strip()
-                if not part:
+                stripped = part.strip()
+                if not stripped:
                     continue
-                ids.add(int(part))
+                ids.add(int(stripped))
             return ids
         return value
 
@@ -56,6 +56,8 @@ class SecuritySettings(BaseModel):
     master_invite_secret: SecretStr | None = None
     master_invite_ttl_sec: int = 60 * 60 * 24  # 24h
     master_public_registration: bool = False
+    master_registration_start_rl_sec: int = 5
+    master_registration_confirm_rl_sec: int = 15
 
 
 class AppSettings(BaseSettings):

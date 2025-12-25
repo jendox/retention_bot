@@ -12,6 +12,7 @@ from src.handlers.client.client_menu import send_client_main_menu
 from src.handlers.client.register import start_client_registration
 from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
+from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.security.master_invites import decode_master_invite_from_start
 from src.settings import get_settings
@@ -52,11 +53,12 @@ async def cmd_start(
     command: CommandObject,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
+    rate_limiter: RateLimiter,
 ) -> None:
     await cleanup_messages(state, message.bot, bucket=START_BOT_BUCKET)
     await track_message(state, message, bucket=START_BOT_BUCKET)
     if command.args == "registration":
-        await start_master_registration(message, state, user_ctx_storage=user_ctx_storage)
+        await start_master_registration(message, state, user_ctx_storage=user_ctx_storage, rate_limiter=rate_limiter)
         return
     if command.args and command.args.startswith("c_"):
         await start_client_registration(message, state, user_ctx_storage, command.args)
@@ -64,7 +66,13 @@ async def cmd_start(
     if command.args and command.args.startswith("m_"):
         raw = command.args.removeprefix("m_")
         token = decode_master_invite_from_start(raw) or (raw or None)
-        await start_master_registration(message, state, user_ctx_storage=user_ctx_storage, token=token)
+        await start_master_registration(
+            message,
+            state,
+            user_ctx_storage=user_ctx_storage,
+            rate_limiter=rate_limiter,
+            token=token,
+        )
         return
 
     telegram_id = message.from_user.id

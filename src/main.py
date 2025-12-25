@@ -9,10 +9,11 @@ from redis.asyncio import Redis
 
 from src.core.sa import Database
 from src.handlers import routers
-from src.middlewares import LoggingMiddleware, UserContextMiddleware
+from src.middlewares import LoggingMiddleware, RateLimiterMiddleware, UserContextMiddleware
 from src.notifications.notifier import Notifier
 from src.notifications.policy import DefaultNotificationPolicy
 from src.observability import setup_logging
+from src.rate_limiter import RateLimiter
 from src.settings import AppSettings, app_settings
 from src.user_context import UserContextStorage
 
@@ -29,7 +30,9 @@ def build_dispatcher(redis: Redis) -> Dispatcher:
     )
     dp = Dispatcher(storage=storage, events_isolation=isolation)
     user_ctx_storage = UserContextStorage(redis)
+    rate_limiter = RateLimiter(redis)
     dp.update.outer_middleware(LoggingMiddleware())
+    dp.update.outer_middleware(RateLimiterMiddleware(rate_limiter))
     dp.update.outer_middleware(UserContextMiddleware(user_ctx_storage))
     dp.include_routers(*routers)
 
