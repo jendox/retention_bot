@@ -7,8 +7,10 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import ErrorEvent
 
 from src.observability.alerts import AdminAlerter
+from src.observability.events import EventLogger
 
 logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 
 def _extract_update_context(event: ErrorEvent) -> dict[str, Any]:
@@ -43,7 +45,7 @@ async def global_error_handler(event: ErrorEvent, admin_alerter: AdminAlerter | 
     extra["error_type"] = type(exc).__name__
 
     # One structured error log per unhandled exception (handler middleware may log separately).
-    logger.error("bot.unhandled_exception", exc_info=True, extra=extra)
+    await ev.aexception("bot.unhandled_exception", exc=exc, admin_alerter=admin_alerter, **extra)
 
     if admin_alerter is None:
         return
@@ -51,12 +53,4 @@ async def global_error_handler(event: ErrorEvent, admin_alerter: AdminAlerter | 
     # Telegram API errors can be noisy; keep them in logs, but avoid paging admins by default.
     if isinstance(exc, TelegramAPIError):
         return
-
-    await admin_alerter.notify(
-        event="bot.unhandled_exception",
-        text=f"{type(exc).__name__}: {exc}",
-        level="ERROR",
-        throttle_key=f"bot.unhandled_exception:{type(exc).__name__}",
-        extra=extra,
-    )
-
+    # Note: alerting is policy-driven inside EventLogger.

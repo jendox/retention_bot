@@ -12,6 +12,8 @@ from src.handlers.client.client_menu import send_client_main_menu
 from src.handlers.client.register import start_client_registration
 from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
+from src.observability.alerts import AdminAlerter
+from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.security.master_invites import decode_master_invite_from_start
@@ -21,7 +23,7 @@ from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_message
 
 router = Router(name=__name__)
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 START_BOT_BUCKET = "start_bot"
 
@@ -54,11 +56,18 @@ async def cmd_start(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
     rate_limiter: RateLimiter,
+    admin_alerter: AdminAlerter | None = None,
 ) -> None:
     await cleanup_messages(state, message.bot, bucket=START_BOT_BUCKET)
     await track_message(state, message, bucket=START_BOT_BUCKET)
     if command.args == "registration":
-        await start_master_registration(message, state, user_ctx_storage=user_ctx_storage, rate_limiter=rate_limiter)
+        await start_master_registration(
+            message,
+            state,
+            user_ctx_storage=user_ctx_storage,
+            rate_limiter=rate_limiter,
+            admin_alerter=admin_alerter,
+        )
         return
     if command.args and command.args.startswith("c_"):
         await start_client_registration(message, state, user_ctx_storage, command.args)
@@ -71,6 +80,7 @@ async def cmd_start(
             state,
             user_ctx_storage=user_ctx_storage,
             rate_limiter=rate_limiter,
+            admin_alerter=admin_alerter,
             token=token,
         )
         return
@@ -155,7 +165,7 @@ async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_stora
     try:
         role = ActiveRole(raw)
     except ValueError:
-        logger.info("choose_role.error", extra={"telegram_id": telegram_id, "raw_role": raw})
+        ev.info("choose_role.error", reason="invalid_role", raw_role=raw)
         await state.set_state(RoleStates.choosing_role)
         await answer_tracked(
             callback.message,
@@ -166,7 +176,7 @@ async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_stora
         )
         return
 
-    logger.info("choose_role.success", extra={"telegram_id": telegram_id, "role": role})
+    ev.info("choose_role.success", role=str(role.value))
     await user_ctx_storage.set_role(telegram_id, role)
     await ROLE_MENU_MAP[role](callback.bot, telegram_id, True)
 

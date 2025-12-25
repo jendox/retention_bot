@@ -60,6 +60,121 @@ class SecuritySettings(BaseModel):
     master_registration_confirm_rl_sec: int = 15
 
 
+class ObservabilitySettings(BaseModel):
+    """
+    Runtime knobs for logging and admin alerting.
+
+    These settings are intentionally minimal for MVP, but allow tuning without code changes.
+    """
+
+    alerts_enabled: bool = True
+    alerts_default_throttle_sec: int = 10 * 60
+    alerts_throttle_sec_by_event: dict[str, int] = Field(default_factory=dict)
+    alerts_events: set[str] | None = None
+    alerts_level_by_event: dict[str, str] = Field(default_factory=dict)
+
+    # Per-event log sampling rates in range [0..1]. If an event is present here and its rate < 1,
+    # EventLogger will emit it only for a subset of updates (deterministically by trace_id when possible).
+    log_sample_rate_by_event: dict[str, float] = Field(default_factory=dict)
+    db_slow_query_ms: int = 500
+
+    @field_validator("alerts_events", mode="before")
+    @classmethod
+    def _parse_alerts_events(cls, value):
+        if value is None:
+            return None
+        if isinstance(value, set):
+            return {str(v).strip() for v in value if str(v).strip()}
+        if isinstance(value, (list, tuple)):
+            return {str(v).strip() for v in value if str(v).strip()}
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return set()
+            return {part.strip() for part in raw.split(",") if part.strip()}
+        return value
+
+    @field_validator("alerts_level_by_event", mode="before")
+    @classmethod
+    def _parse_alert_levels(cls, value):
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {str(k): str(v).upper() for k, v in value.items()}
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            # Format: "event=ERROR,event2=WARNING"
+            items: dict[str, str] = {}
+            for part in raw.split(","):
+                part = part.strip()
+                if not part or "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                k = k.strip()
+                v = v.strip().upper()
+                if not k or not v:
+                    continue
+                items[k] = v
+            return items
+        return value
+
+    @field_validator("alerts_throttle_sec_by_event", mode="before")
+    @classmethod
+    def _parse_alert_throttles(cls, value):
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {str(k): int(v) for k, v in value.items()}
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            # Format: "event=600,event2=3600"
+            items: dict[str, int] = {}
+            for part in raw.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                if "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if not k or not v:
+                    continue
+                items[k] = int(v)
+            return items
+        return value
+
+    @field_validator("log_sample_rate_by_event", mode="before")
+    @classmethod
+    def _parse_sample_rates(cls, value):
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {str(k): float(v) for k, v in value.items()}
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            # Format: "event=0.1,event2=1"
+            items: dict[str, float] = {}
+            for part in raw.split(","):
+                part = part.strip()
+                if not part or "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if not k or not v:
+                    continue
+                items[k] = float(v)
+            return items
+        return value
+
+
 class AppSettings(BaseSettings):
     debug: bool = False
 
@@ -68,15 +183,23 @@ class AppSettings(BaseSettings):
     admin: AdminSettings = Field(default_factory=AdminSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     model_config = SettingsConfigDict(
         env_nested_delimiter="__",
+        env_ignore_empty=True,
         extra="ignore",
     )
 
     @classmethod
     def load(cls, *, env_file: str | None = None) -> Self:
         env_file = env_file or os.getenv("ENV_FILE") or ".env.local"
+        # pydantic-settings treats top-level nested models as "complex" values and will attempt to JSON-decode
+        # env vars like OBSERVABILITY/SECURITY/TELEGRAM if they are present. An empty value would crash JSON
+        # decoding, so we proactively ignore empty top-level blobs.
+        for key in ("TELEGRAM", "DATABASE", "ADMIN", "BILLING", "SECURITY", "OBSERVABILITY"):
+            if key in os.environ and not os.environ[key].strip():
+                os.environ.pop(key, None)
         file_values = _read_env_file(env_file)
         raw_admin_ids = (
             os.getenv("ADMIN__TELEGRAM_IDS")

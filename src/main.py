@@ -20,13 +20,16 @@ from src.middlewares import (
 from src.notifications.notifier import Notifier
 from src.notifications.policy import DefaultNotificationPolicy
 from src.observability.alerts import AdminAlerter
+from src.observability.events import EventLogger
 from src.observability.errors import global_error_handler
 from src.observability import setup_logging
 from src.rate_limiter import RateLimiter
 from src.settings import AppSettings, app_settings
+from src.texts import admin as admin_txt
 from src.user_context import UserContextStorage
 
 logger = logging.getLogger("retention_bot")
+ev = EventLogger("retention_bot")
 
 
 def build_dispatcher(redis: Redis) -> Dispatcher:
@@ -64,6 +67,8 @@ async def main():
         version="0.1.0",
     )
     redis: Redis | None = None
+    admin_alerter: AdminAlerter | None = None
+    bot: Bot | None = None
 
     try:
         token = settings.telegram.bot_token.get_secret_value()
@@ -82,12 +87,33 @@ async def main():
             bot=bot,
             policy=DefaultNotificationPolicy(),
         )
-        admin_alerter = AdminAlerter(bot=bot, admin_ids=settings.admin.telegram_ids, redis=redis)
+        admin_alerter = AdminAlerter(
+            bot=bot,
+            admin_ids=settings.admin.telegram_ids,
+            redis=redis,
+            enabled=settings.observability.alerts_enabled,
+            default_throttle_sec=settings.observability.alerts_default_throttle_sec,
+        )
+        if (not settings.security.master_public_registration) and (settings.security.master_invite_secret is None):
+            logger.error("security.invite_policy_misconfigured", extra={"invite_only": False})
+            await admin_alerter.notify(
+                event="security.invite_policy_misconfigured",
+                text=admin_txt.invite_policy_misconfigured(),
+                level="WARNING",
+                throttle_key="security.invite_policy_misconfigured",
+                throttle_sec=60 * 60,
+                extra={"invite_only": False},
+            )
         async with Database.lifespan(url=postgres_url):
             await dp.start_polling(bot, notifier=notifier, admin_alerter=admin_alerter)
 
     except Exception as exc:
-        logger.error("app.error", exc_info=True, extra={"error_type": type(exc).__name__})
+        await ev.aexception(
+            "app.error",
+            exc=exc,
+            admin_alerter=admin_alerter,
+            error_type=type(exc).__name__,
+        )
     finally:
         if redis is not None:
             await redis.aclose()

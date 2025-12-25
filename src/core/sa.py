@@ -1,9 +1,14 @@
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+
+from src.observability.events import EventLogger
+from src.settings import get_settings
 
 __all__ = (
     "Base",
@@ -15,6 +20,7 @@ __all__ = (
 URL_PARTS = 2
 
 logger = logging.getLogger("db.sa")
+ev = EventLogger("db.sa")
 
 
 class Base(DeclarativeBase):
@@ -35,6 +41,7 @@ class Database:
             max_overflow=10,
             future=True,
         )
+        _setup_query_observability(cls.engine)
         cls.session_maker = async_sessionmaker(
             cls.engine, expire_on_commit=False, class_=AsyncSession,
         )
@@ -94,3 +101,52 @@ def _redact_url(url: str) -> str:
     except Exception:
         pass
     return url
+
+
+def _setup_query_observability(engine: AsyncEngine) -> None:
+    """
+    Attach minimal SQLAlchemy instrumentation:
+    - `db.query_failed` on DBAPI errors
+    - `db.query_slow` for slow statements (threshold is configurable)
+
+    This is intentionally lightweight for MVP and avoids logging bind params.
+    """
+
+    sync_engine = engine.sync_engine
+
+    @event.listens_for(sync_engine, "before_cursor_execute")
+    def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        context._query_started_at = time.perf_counter()  # type: ignore[attr-defined]
+
+    @event.listens_for(sync_engine, "after_cursor_execute")
+    def _after_cursor_execute(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        started = getattr(context, "_query_started_at", None)
+        if started is None:
+            return
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        slow_ms = get_settings().observability.db_slow_query_ms
+        if duration_ms >= int(slow_ms):
+            ev.warning(
+                "db.query_slow",
+                duration_ms=duration_ms,
+                statement=_short_stmt(statement),
+            )
+
+    @event.listens_for(sync_engine, "handle_error")
+    def _handle_error(exception_context):  # noqa: ANN001
+        # Called for DBAPI-level exceptions.
+        err = exception_context.original_exception
+        ev.error(
+            "db.query_failed",
+            error_type=type(err).__name__ if err is not None else None,
+            statement=_short_stmt(exception_context.statement),
+        )
+
+
+def _short_stmt(statement: str | None, *, limit: int = 400) -> str | None:
+    if statement is None:
+        return None
+    text = " ".join(str(statement).split())
+    if len(text) > limit:
+        return text[:limit] + "…"
+    return text

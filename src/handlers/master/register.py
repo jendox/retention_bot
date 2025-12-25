@@ -23,10 +23,13 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
+from src.observability.alerts import AdminAlerter
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.schemas.enums import Timezone
 from src.settings import get_settings
-from src.texts import admin as admin_txt, common as common_txt, master_registration as txt
+from src.texts import common as common_txt, master_registration as txt
 from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
 from src.use_cases.master_registration import (
     CompleteMasterRegistration,
@@ -40,7 +43,6 @@ from src.user_context import ActiveRole, UserContextStorage
 from src.utils import (
     answer_tracked,
     cleanup_messages,
-    notify_admins,
     track_callback_message,
     track_message,
     validate_phone,
@@ -48,6 +50,7 @@ from src.utils import (
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 MASTER_REGISTRATION_BUCKET = "master_registration"
 
@@ -70,7 +73,6 @@ MASTER_REGISTRATION_CB = {
 _DASH_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—−", "-"))
 _HOURS_MAX = 23
 _MINUTES_MAX = 59
-_INVITE_MISCONFIGURED_NOTIFIED = False
 _NAME_MAX_LEN = 64
 _SLOT_SIZE_MIN_MINUTES = 5
 _SLOT_SIZE_MAX_MINUTES = 240
@@ -83,15 +85,9 @@ def _normalize_token(token: str | None) -> str | None:
     return (token or "").strip() or None
 
 
-def _get_invite_policy(settings, *, telegram_id: int) -> tuple[bool, str | None]:
+def _get_invite_policy(settings) -> tuple[bool, str | None]:
     invite_secret = settings.security.master_invite_secret
     invite_only = bool(invite_secret) and not settings.security.master_public_registration
-
-    if not settings.security.master_public_registration and invite_secret is None:
-        logger.warning(
-            "master_reg.invite_misconfigured",
-            extra={"telegram_id": telegram_id},
-        )
 
     invite_secret_value = invite_secret.get_secret_value() if invite_secret is not None else None
     return invite_only, invite_secret_value
@@ -295,6 +291,7 @@ async def start_master_registration(  # noqa: C901
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
     rate_limiter: RateLimiter | None = None,
+    admin_alerter: AdminAlerter | None = None,
     token: str | None = None,
 ) -> None:
     """
@@ -304,11 +301,14 @@ async def start_master_registration(  # noqa: C901
     If registration can proceed, it starts the FSM by asking for the master name.
     """
     if message.from_user is None:
-        logger.warning("master_reg.start.no_from_user")
+        ev.warning("master_reg.start.no_from_user")
         return
+
+    bind_log_context(flow="master_reg", step="start")
 
     token = _normalize_token(token)
     telegram_id = message.from_user.id
+    bind_log_context(has_token=bool(token))
 
     if rate_limiter is not None:
         settings = get_settings()
@@ -318,25 +318,13 @@ async def start_master_registration(  # noqa: C901
             ttl_sec=settings.security.master_registration_start_rl_sec,
         )
         if not allowed:
-            logger.info("master_reg.start_rate_limited", extra={"telegram_id": telegram_id})
+            ev.debug("master_reg.rate_limited", scope="start")
             return
 
     await _reset_master_registration(state, message.bot)
-    logger.info(
-        "master_reg.start",
-        extra={"telegram_id": telegram_id, "has_token": bool(token)},
-    )
     settings = get_settings()
-    invite_only, invite_secret_value = _get_invite_policy(settings, telegram_id=telegram_id)
-    if not settings.security.master_public_registration and settings.security.master_invite_secret is None:
-        global _INVITE_MISCONFIGURED_NOTIFIED  # noqa: PLW0603
-        if not _INVITE_MISCONFIGURED_NOTIFIED:
-            _INVITE_MISCONFIGURED_NOTIFIED = True
-            await notify_admins(
-                message.bot,
-                settings.admin.telegram_ids,
-                admin_txt.invite_policy_misconfigured(),
-            )
+    invite_only, invite_secret_value = _get_invite_policy(settings)
+    bind_log_context(invite_only=bool(invite_only))
 
     try:
         async with session_local() as session:
@@ -348,8 +336,13 @@ async def start_master_registration(  # noqa: C901
                     token=token,
                 ),
             )
-    except Exception:
-        logger.exception("master_reg.start_failed", extra={"telegram_id": telegram_id})
+    except Exception as exc:
+        await ev.aexception(
+            "master_reg.start_failed",
+            stage="use_case",
+            exc=exc,
+            admin_alerter=admin_alerter,
+        )
         await answer_tracked(
             message,
             state,
@@ -358,15 +351,12 @@ async def start_master_registration(  # noqa: C901
         )
         return
 
-    logger.info(
+    ev.info(
         "master_reg.start_result",
-        extra={
-            "telegram_id": telegram_id,
-            "outcome": str(result.outcome.value),
-            "is_client": bool(result.is_client),
-            "invite_only": bool(invite_only),
-            "has_token": bool(token),
-        },
+        outcome=str(result.outcome.value),
+        is_client=bool(result.is_client),
+        invite_only=bool(invite_only),
+        has_token=bool(token),
     )
 
     if await _handle_start_result(
@@ -392,13 +382,11 @@ async def start_master_registration(  # noqa: C901
 
 @router.message(StateFilter(MasterRegistration.name))
 async def process_master_name(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="name")
     await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
     name = _normalize_name(message.text)
     if not name:
-        logger.debug(
-            "master_reg.name.invalid",
-            extra={"telegram_id": message.from_user.id if message.from_user else None},
-        )
+        ev.debug("master_reg.input_invalid", field="name", reason="empty")
         await answer_tracked(
             message,
             state,
@@ -409,10 +397,7 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
         return
 
     if len(name) > _NAME_MAX_LEN:
-        logger.debug(
-            "master_reg.name.too_long",
-            extra={"telegram_id": message.from_user.id if message.from_user else None, "len": len(name)},
-        )
+        ev.debug("master_reg.input_invalid", field="name", reason="too_long", len=len(name), max_len=_NAME_MAX_LEN)
         await answer_tracked(
             message,
             state,
@@ -436,17 +421,12 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(MasterRegistration.phone))
 async def process_master_phone(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="phone")
     await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
     raw_text = (message.text or "").strip()
     phone = validate_phone(raw_text)
     if phone is None:
-        logger.debug(
-            "master_reg.phone.invalid",
-            extra={
-                "telegram_id": message.from_user.id if message.from_user else None,
-                "raw": raw_text,
-            },
-        )
+        ev.debug("master_reg.input_invalid", field="phone", reason="invalid")
         await answer_tracked(
             message,
             state,
@@ -470,16 +450,11 @@ async def process_master_phone(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(MasterRegistration.work_days))
 async def process_master_work_days(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="work_days")
     await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
     work_days = _parse_work_days(message.text or "")
     if work_days is None:
-        logger.debug(
-            "master_reg.work_days.invalid",
-            extra={
-                "telegram_id": message.from_user.id if message.from_user else None,
-                "raw": message.text,
-            },
-        )
+        ev.debug("master_reg.input_invalid", field="work_days", reason="invalid")
         await answer_tracked(
             message,
             state,
@@ -503,16 +478,11 @@ async def process_master_work_days(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(MasterRegistration.work_time))
 async def process_master_work_time(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="work_time")
     await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
     parsed = _parse_time_range(message.text or "")
     if parsed is None:
-        logger.debug(
-            "master_reg.work_time.invalid",
-            extra={
-                "telegram_id": message.from_user.id if message.from_user else None,
-                "raw": message.text,
-            },
-        )
+        ev.debug("master_reg.input_invalid", field="work_time", reason="invalid")
         await answer_tracked(
             message,
             state,
@@ -540,16 +510,11 @@ async def process_master_work_time(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(MasterRegistration.slot_size))
 async def process_master_slot_size(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="slot_size")
     await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
     slot_size = _parse_slot_size(message.text or "")
     if slot_size is None:
-        logger.debug(
-            "master_reg.slot_size.invalid",
-            extra={
-                "telegram_id": message.from_user.id if message.from_user else None,
-                "raw": message.text,
-            },
-        )
+        ev.debug("master_reg.input_invalid", field="slot_size", reason="invalid")
         await answer_tracked(
             message,
             state,
@@ -587,10 +552,11 @@ async def master_reg_confirm(  # noqa: C901
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
     rate_limiter: RateLimiter,
+    admin_alerter: AdminAlerter | None = None,
 ) -> None:
+    bind_log_context(flow="master_reg", step="confirm")
     telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
-    logger.info("master_reg.confirm", extra={"telegram_id": telegram_id})
     settings = get_settings()
     allowed = await rate_limiter.hit(
         name="master_reg:confirm",
@@ -598,7 +564,7 @@ async def master_reg_confirm(  # noqa: C901
         ttl_sec=settings.security.master_registration_confirm_rl_sec,
     )
     if not allowed:
-        logger.info("master_reg.confirm_rate_limited", extra={"telegram_id": telegram_id})
+        ev.debug("master_reg.rate_limited", scope="confirm")
         await callback.answer(common_txt.too_many_requests(), show_alert=False)
         return
 
@@ -612,8 +578,12 @@ async def master_reg_confirm(  # noqa: C901
     if callback.message is not None:
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            logger.debug("master_reg.confirm.disable_keyboard_failed", exc_info=True)
+        except Exception as exc:
+            logger.debug(
+                "master_reg.confirm.disable_keyboard_failed",
+                exc_info=True,
+                extra={"error_type": type(exc).__name__},
+            )
 
     await answer_tracked(
         callback.message,
@@ -625,6 +595,7 @@ async def master_reg_confirm(  # noqa: C901
         start_time = datetime.strptime(data["start_time"], "%H:%M").time()
         end_time = datetime.strptime(data["end_time"], "%H:%M").time()
     except Exception:
+        ev.warning("master_reg.state_invalid", reason="time_parse_failed")
         if callback.message is not None:
             await callback.message.answer(txt.broken_state_retry())
         await _reset_master_registration(state, callback.bot)
@@ -644,20 +615,22 @@ async def master_reg_confirm(  # noqa: C901
                     timezone=Timezone.EUROPE_MINSK,
                 ),
             )
-    except Exception:
-        logger.exception("master_reg.complete_failed", extra={"telegram_id": telegram_id})
+    except Exception as exc:
+        await ev.aexception(
+            "master_reg.complete_failed",
+            stage="use_case",
+            exc=exc,
+            admin_alerter=admin_alerter,
+        )
         if callback.message is not None:
             await callback.message.answer(txt.profile_creation_failed(contact=get_settings().billing.contact))
         await _reset_master_registration(state, callback.bot)
         return
 
-    logger.info(
+    ev.info(
         "master_reg.complete_result",
-        extra={
-            "telegram_id": telegram_id,
-            "master_id": result.master_id,
-            "outcome": str(result.outcome.value),
-        },
+        master_id=result.master_id,
+        outcome=str(result.outcome.value),
     )
 
     await callback.message.answer(txt.done())
@@ -677,16 +650,15 @@ async def master_reg_restart(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
     rate_limiter: RateLimiter,
+    admin_alerter: AdminAlerter | None = None,
 ) -> None:
+    bind_log_context(flow="master_reg", step="restart")
     data = await state.get_data()
     token = data.get("token")
     await callback.answer()
-    logger.info(
-        "master_reg.restart",
-        extra={"telegram_id": callback.from_user.id if callback.from_user else None},
-    )
+    ev.info("master_reg.restart")
     await _reset_master_registration(state, callback.bot)
-    await start_master_registration(callback.message, state, user_ctx_storage, rate_limiter, token)
+    await start_master_registration(callback.message, state, user_ctx_storage, rate_limiter, admin_alerter, token)
 
 
 @router.callback_query(
@@ -701,5 +673,6 @@ async def master_reg_restart(
     F.data == MASTER_REGISTRATION_CB["cancel"],
 )
 async def master_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="cancel")
     await callback.answer(common_txt.cancelled(), show_alert=True)
     await _reset_master_registration(state, callback.bot)

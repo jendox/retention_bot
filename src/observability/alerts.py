@@ -9,6 +9,7 @@ from typing import Any
 from aiogram import Bot
 from redis.asyncio import Redis
 
+from src.settings import get_settings
 from src.utils import notify_admins
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,10 @@ class AdminAlerter:
     ) -> bool:
         if not self._enabled or not self._admin_ids:
             return False
+        settings = get_settings()
+        allowlist = settings.observability.alerts_events
+        if allowlist is not None and event not in allowlist:
+            return False
 
         throttle_sec = int(throttle_sec or self._default_throttle_sec)
         dedup_key = throttle_key or event
@@ -133,4 +138,3 @@ class AdminAlerter:
         for k in sorted(extra):
             lines.append(f"{k}={extra[k]}")
         return "\n".join(lines)
-

@@ -42,6 +42,15 @@ class LogContextMiddleware(BaseMiddleware):
         if message is not None:
             ctx["message_id"] = getattr(message, "message_id", None)
 
+        state = data.get("state")
+        if state is not None:
+            try:
+                fsm_state = await state.get_state()
+            except Exception:
+                fsm_state = None
+            if fsm_state:
+                ctx["fsm_state"] = fsm_state
+
         token = set_log_context(ctx)
         try:
             return await handler(event, data)
