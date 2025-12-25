@@ -55,6 +55,10 @@ def name_not_recognized(*, t: Translator = _noop_t) -> str:
     return t("Имя не понял 😅 Введи, пожалуйста, имя клиента.")
 
 
+def name_too_long(*, max_len: int, t: Translator = _noop_t) -> str:
+    return t(f"Имя слишком длинное. Максимум {max_len} символов.")
+
+
 def ask_phone(*, t: Translator = _noop_t) -> str:
     return t("Записал. Теперь номер телефона (для связи):")
 

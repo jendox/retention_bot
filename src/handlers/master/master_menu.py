@@ -20,6 +20,7 @@ from src.handlers.master.list_clients import start_clients_entry
 from src.handlers.master.schedule import master_schedule
 from src.handlers.master.settings import open_master_settings
 from src.notifications.notifier import Notifier
+from src.observability.alerts import AdminAlerter
 from src.texts import common as common_txt, master_menu as txt
 from src.user_context import ActiveRole, UserContextStorage
 
@@ -86,7 +87,7 @@ async def send_master_main_menu(
 
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_CLIENTS)
-async def master_clients(message: Message, state: FSMContext) -> None:
+async def master_clients(message: Message) -> None:
     await message.answer(
         text=txt.choose_action(),
         reply_markup=build_master_clients_keyboard(),
@@ -101,9 +102,14 @@ async def master_clients_list(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["add"])
-async def master_add_client(callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
+async def master_add_client(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    admin_alerter: AdminAlerter | None = None,
+) -> None:
     await callback.answer()
-    await start_add_client(callback, state, notifier)
+    await start_add_client(callback, state, notifier, admin_alerter=admin_alerter)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["search"])
@@ -112,9 +118,9 @@ async def master_search_client(callback: CallbackQuery, state: FSMContext) -> No
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["invite"])
-async def master_invite_client(callback: CallbackQuery, state: FSMContext) -> None:
+async def master_invite_client(callback: CallbackQuery, state: FSMContext, admin_alerter: AdminAlerter | None = None) -> None:
     await callback.answer()
-    await start_invite_client(callback, state)
+    await start_invite_client(callback, state, admin_alerter=admin_alerter)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["back"])

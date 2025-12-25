@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 
 from aiogram import Bot, Dispatcher
@@ -19,16 +18,15 @@ from src.middlewares import (
 )
 from src.notifications.notifier import Notifier
 from src.notifications.policy import DefaultNotificationPolicy
-from src.observability.alerts import AdminAlerter
-from src.observability.events import EventLogger
-from src.observability.errors import global_error_handler
 from src.observability import setup_logging
+from src.observability.alerts import AdminAlerter
+from src.observability.errors import global_error_handler
+from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.settings import AppSettings, app_settings
 from src.texts import admin as admin_txt
 from src.user_context import UserContextStorage
 
-logger = logging.getLogger("retention_bot")
 ev = EventLogger("retention_bot")
 
 
@@ -94,7 +92,7 @@ async def main():
             default_throttle_sec=settings.observability.alerts_default_throttle_sec,
         )
         if (not settings.security.master_public_registration) and (settings.security.master_invite_secret is None):
-            logger.error("security.invite_policy_misconfigured", extra={"invite_only": False})
+            ev.error("security.invite_policy_misconfigured", invite_only=False)
             await admin_alerter.notify(
                 event="security.invite_policy_misconfigured",
                 text=admin_txt.invite_policy_misconfigured(),
@@ -120,7 +118,6 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        logger.info("app.start")
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("app.shutdown")
+        ev.info(event="app.shutdown")

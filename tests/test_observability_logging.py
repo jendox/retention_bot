@@ -3,11 +3,11 @@ import logging
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from src.settings import AppSettings, app_settings
 from src.observability.alerts import AdminAlerter
 from src.observability.context import reset_log_context, set_log_context
 from src.observability.events import EventLogger
 from src.observability.logging import JsonFormatter
+from src.settings import AppSettings, app_settings
 
 
 class JsonFormatterTests(unittest.TestCase):

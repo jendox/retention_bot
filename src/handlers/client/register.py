@@ -14,6 +14,9 @@ from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
+from src.observability.alerts import AdminAlerter
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import (
     MasterNotFound,
@@ -27,6 +30,7 @@ from src.utils import answer_tracked, cleanup_messages, track_callback_message, 
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 CLIENT_REGISTRATION_BUCKET = "client_registration"
 
@@ -138,20 +142,51 @@ async def start_client_registration(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
     invite_link: str,
+    *,
+    admin_alerter: AdminAlerter | None = None,
 ) -> None:
+    bind_log_context(flow="client_reg", step="start")
     await track_message(state, message, bucket=CLIENT_REGISTRATION_BUCKET)
     token = invite_link.removeprefix("c_")
+    if message.from_user is None:
+        ev.warning("client_reg.start.no_from_user")
+        return
+
     telegram_id = message.from_user.id
-    async with active_session() as session:
-        result = await AcceptClientInvite(session).execute(
-            AcceptClientInviteRequest(
-                telegram_id=telegram_id,
-                invite_token=token,
-            ),
+    try:
+        async with active_session() as session:
+            result = await AcceptClientInvite(session).execute(
+                AcceptClientInviteRequest(
+                    telegram_id=telegram_id,
+                    invite_token=token,
+                ),
+            )
+    except Exception as exc:
+        await ev.aexception(
+            "client_reg.start_failed",
+            stage="use_case",
+            exc=exc,
+            admin_alerter=admin_alerter,
         )
+        await message.answer(txt.err_generic())
+        await cleanup_messages(state, message.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+        await state.clear()
+        return
+
+    ev.info(
+        "client_reg.start_result",
+        ok=bool(result.ok),
+        outcome=str(result.outcome.value) if result.outcome else None,
+        error=str(result.error.value) if result.error else None,
+        master_id=result.master_id,
+    )
 
     if result.ok:
-        is_master = await _check_if_master(telegram_id)
+        try:
+            is_master = await _check_if_master(telegram_id)
+        except Exception as exc:
+            await ev.aexception("client_reg.check_master_failed", stage="check_master", exc=exc, admin_alerter=admin_alerter)
+            is_master = False
         await user_ctx_storage.set_role(telegram_id, ActiveRole.CLIENT)
         await send_client_main_menu(message.bot, telegram_id, show_switch_role=is_master)
         return
@@ -180,9 +215,11 @@ async def process_name_question(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(ClientRegistration.name))
 async def process_client_name(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="name")
     await track_message(state, message, bucket=CLIENT_REGISTRATION_BUCKET)
-    name = (message.text or "").strip()
+    name = " ".join((message.text or "").split()).strip()
     if not name:
+        ev.debug("client_reg.input_invalid", field="name", reason="empty")
         await answer_tracked(
             message,
             state,
@@ -206,10 +243,12 @@ async def process_client_name(message: Message, state: FSMContext) -> None:
 
 @router.message(StateFilter(ClientRegistration.phone))
 async def process_client_phone(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="phone")
     await track_message(state, message, bucket=CLIENT_REGISTRATION_BUCKET)
     raw_text = (message.text or "").strip()
     phone = validate_phone(raw_text)
     if phone is None:
+        ev.debug("client_reg.input_invalid", field="phone", reason="invalid")
         await answer_tracked(
             message,
             state,
@@ -244,7 +283,9 @@ async def client_reg_confirm(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
     notifier: Notifier,
+    admin_alerter: AdminAlerter | None = None,
 ) -> None:
+    bind_log_context(flow="client_reg", step="confirm")
     await callback.answer()
     try:
         if callback.message:
@@ -252,6 +293,13 @@ async def client_reg_confirm(
     except TelegramBadRequest:
         pass
     await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
+
+    data = await state.get_data()
+    if data.get("confirm_in_progress"):
+        ev.debug("client_reg.confirm_duplicate_click")
+        return
+    await state.update_data(confirm_in_progress=True)
+
     await answer_tracked(
         callback.message,
         state,
@@ -259,7 +307,6 @@ async def client_reg_confirm(
         bucket=CLIENT_REGISTRATION_BUCKET,
     )
 
-    data = await state.get_data()
     telegram_id = callback.from_user.id
 
     try:
@@ -273,33 +320,52 @@ async def client_reg_confirm(
     phone = data["phone"]
     name = data["name"]
 
-    async with active_session() as session:
-        result = await AcceptClientInvite(session).execute(
-            AcceptClientInviteRequest(
-                telegram_id=telegram_id,
-                invite_token=invite_data.invite_token,
-                name=name,
-                phone_e164=phone,
-                expected_master_id=invite_data.invite_master_id,
-            ),
+    try:
+        async with active_session() as session:
+            result = await AcceptClientInvite(session).execute(
+                AcceptClientInviteRequest(
+                    telegram_id=telegram_id,
+                    invite_token=invite_data.invite_token,
+                    name=name,
+                    phone_e164=phone,
+                    expected_master_id=invite_data.invite_master_id,
+                ),
+            )
+    except Exception as exc:
+        await ev.aexception(
+            "client_reg.confirm_failed",
+            stage="use_case",
+            exc=exc,
+            admin_alerter=admin_alerter,
         )
+        await callback.bot.send_message(chat_id=telegram_id, text=txt.err_generic())
+        await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+        await state.clear()
+        return
+
+    ev.info(
+        "client_reg.confirm_result",
+        ok=bool(result.ok),
+        outcome=str(result.outcome.value) if result.outcome else None,
+        error=str(result.error.value) if result.error else None,
+        master_id=result.master_id,
+        client_id=result.client_id,
+    )
 
     bot = callback.bot
     await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
     await state.clear()
 
     if not result.ok:
-        logger.error(
-            "client.registration_failed",
-            extra={"telegram_id": telegram_id, "master_id": result.master_id, "error": result.error.value},
+        ev.warning(
+            "client_reg.registration_failed",
+            master_id=result.master_id,
+            error=str(result.error.value) if result.error else None,
         )
         await _send_error_message(bot, telegram_id, result.error)
         return
 
-    logger.info(
-        "client.registration_success",
-        extra={"master_id": result.master_id, "client_id": result.client_id, "telegram_id": telegram_id},
-    )
+    ev.info("client_reg.registration_success", master_id=result.master_id, client_id=result.client_id)
     await bot.send_message(
         chat_id=telegram_id,
         text=txt.done(),
@@ -324,13 +390,19 @@ async def client_reg_confirm(
             ),
         )
 
-    is_master = await _check_if_master(telegram_id)
+    try:
+        is_master = await _check_if_master(telegram_id)
+    except Exception as exc:
+        await ev.aexception("client_reg.check_master_failed", stage="check_master", exc=exc, admin_alerter=admin_alerter)
+        is_master = False
     await user_ctx_storage.set_role(telegram_id, ActiveRole.CLIENT)
     await send_client_main_menu(bot, telegram_id, show_switch_role=is_master)
 
 
 @router.callback_query(F.data == CLIENT_REGISTRATION_CB["confirm"])
 async def client_reg_confirm_out_of_state(callback: CallbackQuery) -> None:
+    bind_log_context(flow="client_reg", step="confirm_out_of_state")
+    ev.debug("client_reg.confirm_out_of_state")
     await callback.answer(txt.confirm_out_of_state(), show_alert=True)
 
 
@@ -339,6 +411,7 @@ async def client_reg_confirm_out_of_state(callback: CallbackQuery) -> None:
     F.data == CLIENT_REGISTRATION_CB["restart"],
 )
 async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="restart")
     await callback.answer()
     await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
 
@@ -357,6 +430,8 @@ async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
     F.data == CLIENT_REGISTRATION_CB["cancel"],
 )
 async def client_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="cancel")
+    ev.info("client_reg.cancelled")
     await callback.answer(txt.cancel_alert(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
     await state.clear()

@@ -1,4 +1,3 @@
-import logging
 from collections.abc import Awaitable, Callable
 
 from aiogram import Bot, F, Router
@@ -70,7 +69,7 @@ async def cmd_start(
         )
         return
     if command.args and command.args.startswith("c_"):
-        await start_client_registration(message, state, user_ctx_storage, command.args)
+        await start_client_registration(message, state, user_ctx_storage, command.args, admin_alerter=admin_alerter)
         return
     if command.args and command.args.startswith("m_"):
         raw = command.args.removeprefix("m_")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import logging
 import hashlib
+import logging
 from collections.abc import Mapping
 from typing import Any
 
