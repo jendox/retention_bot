@@ -142,6 +142,7 @@ async def answer_tracked(
     """
     Обертка над message.answer: отправляет + автоматически трекает.
     """
+    kwargs.setdefault("parse_mode", "HTML")
     msg = await message.answer(text, **kwargs)
     await track_message(state, msg, bucket=bucket)
     return msg
@@ -160,6 +161,7 @@ async def edit_text_tracked(
     Если хочешь редактировать существующее сообщение и тоже его трекать
     (хотя часто трекать достаточно один раз при создании).
     """
+    kwargs.setdefault("parse_mode", "HTML")
     msg = await bot.edit_message_text(
         chat_id=chat_id,
         message_id=message_id,

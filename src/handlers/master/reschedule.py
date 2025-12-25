@@ -99,7 +99,7 @@ async def _send_and_track(
     text: str,
     reply_markup=None,
 ) -> None:
-    msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+    msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
     await track_message(state, msg, bucket=RESCHEDULE_BUCKET)
 
 

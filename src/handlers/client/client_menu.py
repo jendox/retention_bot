@@ -9,12 +9,17 @@ from src.handlers.client.booking import start_client_add_booking
 from src.handlers.client.list_bookings import start_client_list_bookings
 from src.handlers.client.list_masters import start_client_list_masters
 from src.handlers.client.settings import open_client_settings
+from src.handlers.shared.guards import rate_limit_message
+from src.handlers.shared.ui import safe_delete
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.texts import client_menu as txt, common as common_txt
 from src.user_context import ActiveRole, UserContextStorage
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
+ev = EventLogger(__name__)
 
 
 def build_client_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
@@ -49,16 +54,25 @@ async def send_client_main_menu(
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOK)
 async def client_add_booking(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_menu", step="book")
+    if not await rate_limit_message(message, rate_limiter, name="client_menu:book", ttl_sec=2):
+        return
     await start_client_add_booking(message, state, rate_limiter)
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOKINGS)
 async def client_list_bookings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_menu", step="bookings")
+    if not await rate_limit_message(message, rate_limiter, name="client_menu:bookings", ttl_sec=2):
+        return
     await start_client_list_bookings(message, state, rate_limiter)
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_MASTERS)
 async def client_list_masters(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_menu", step="masters")
+    if not await rate_limit_message(message, rate_limiter, name="client_menu:masters", ttl_sec=2):
+        return
     await start_client_list_masters(message, state, rate_limiter)
 
 
@@ -68,16 +82,20 @@ async def client_switch_role(
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
 ) -> None:
+    bind_log_context(flow="client_menu", step="switch_role")
     from src.handlers.master.master_menu import send_master_main_menu
 
     telegram_id = message.from_user.id
     await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
     await state.clear()
     await send_master_main_menu(message.bot, telegram_id, show_switch_role=True)
-    await message.delete()
+    await safe_delete(message, ev=ev, event="client_menu.delete_switch_role_message_failed")
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_SETTINGS)
 async def client_settings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_menu", step="settings")
+    if not await rate_limit_message(message, rate_limiter, name="client_menu:settings", ttl_sec=2):
+        return
     await state.clear()
     await open_client_settings(message, state, rate_limiter)

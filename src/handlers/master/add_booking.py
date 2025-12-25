@@ -126,7 +126,7 @@ async def _send_and_track(
     text: str,
     reply_markup=None,
 ) -> None:
-    msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+    msg = await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
     await track_message(state, msg, bucket=ADD_BOOKING_BUCKET)
 
 
@@ -534,6 +534,7 @@ async def choose_client(callback: CallbackQuery, state: FSMContext) -> None:
             chat_id=callback.from_user.id,
             text=txt.choose_date(),
             reply_markup=reply_markup,
+            parse_mode="HTML",
         )
     await state.set_state(AddBookingStates.selecting_date)
 
@@ -676,6 +677,7 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
                 slot_str=slot_master_tz.strftime("%d.%m.%Y %H:%M"),
             ),
             reply_markup=_build_confirm_keyboard(),
+            parse_mode="HTML",
         )
     await state.set_state(AddBookingStates.confirm)
 

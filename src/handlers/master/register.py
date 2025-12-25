@@ -23,7 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
-from src.handlers.shared.ui import safe_edit_reply_markup
+from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -258,10 +258,7 @@ async def _handle_start_result(
     if result.outcome == StartMasterRegistrationOutcome.ALREADY_MASTER:
         await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
         await send_master_main_menu(message.bot, telegram_id, show_switch_role=result.is_client)
-        try:
-            await message.delete()
-        except Exception:
-            logger.debug("master_reg.delete_failed", exc_info=True)
+        await safe_delete(message, ev=ev, event="master_reg.delete_start_message_failed")
         return True
 
     if result.outcome == StartMasterRegistrationOutcome.INVITE_REQUIRED:
@@ -596,7 +593,7 @@ async def master_reg_confirm(  # noqa: C901
     except Exception:
         ev.warning("master_reg.state_invalid", reason="time_parse_failed")
         if callback.message is not None:
-            await callback.message.answer(txt.broken_state_retry())
+            await callback.message.answer(txt.broken_state_retry(), parse_mode="HTML")
         await _reset_master_registration(state, callback.bot)
         return
 
@@ -622,7 +619,10 @@ async def master_reg_confirm(  # noqa: C901
             admin_alerter=admin_alerter,
         )
         if callback.message is not None:
-            await callback.message.answer(txt.profile_creation_failed(contact=get_settings().billing.contact))
+            await callback.message.answer(
+                txt.profile_creation_failed(contact=get_settings().billing.contact),
+                parse_mode="HTML",
+            )
         await _reset_master_registration(state, callback.bot)
         return
 
@@ -632,7 +632,7 @@ async def master_reg_confirm(  # noqa: C901
         outcome=str(result.outcome.value),
     )
 
-    await callback.message.answer(txt.done())
+    await callback.message.answer(txt.done(), parse_mode="HTML")
     is_client = bool(data.get("is_client"))
 
     await _reset_master_registration(state, callback.bot)

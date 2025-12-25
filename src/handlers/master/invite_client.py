@@ -278,8 +278,8 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
             ev=ev,
             event="master_invite_client.disable_keyboard_failed",
         )
-        await callback.message.answer(text)
+        await callback.message.answer(text, parse_mode="HTML")
     else:
-        await callback.bot.send_message(chat_id=callback.from_user.id, text=text)
+        await callback.bot.send_message(chat_id=callback.from_user.id, text=text, parse_mode="HTML")
     ev.info("master_invite_client.format_chosen", kind=str(kind.value))
     await _reset_invite_flow(state, callback.bot)

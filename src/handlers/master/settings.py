@@ -8,7 +8,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
-from src.handlers.shared.ui import safe_bot_edit_message_text, safe_delete, safe_edit_text
+from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
@@ -20,6 +24,7 @@ from src.utils import answer_tracked, cleanup_messages, track_message, validate_
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
+ev = EventLogger(__name__)
 
 
 SETTINGS_CB_PREFIX = "m:settings:"
@@ -121,14 +126,21 @@ async def _load_master_and_plan(telegram_id: int):
         return master, plan
 
 
-async def open_master_settings(message: Message, state: FSMContext) -> None:
+async def open_master_settings(
+    message: Message,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_settings", step="open")
+    if not await rate_limit_message(message, rate_limiter, name="master_settings:open", ttl_sec=2):
+        return
     telegram_id = message.from_user.id
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     try:
         master, plan = await _load_master_and_plan(telegram_id)
     except MasterNotFound:
-        await message.answer(txt.master_only())
+        await message.answer(txt.master_only(), parse_mode="HTML")
         return
 
     data = await state.get_data()
@@ -136,10 +148,13 @@ async def open_master_settings(message: Message, state: FSMContext) -> None:
     prev_chat_id = main.get("chat_id")
     prev_message_id = main.get("message_id")
     if prev_chat_id and prev_message_id:
-        try:
-            await message.bot.delete_message(chat_id=prev_chat_id, message_id=prev_message_id)
-        except Exception:
-            logger.debug("master.settings.delete_prev_failed", exc_info=True)
+        await safe_bot_delete_message(
+            message.bot,
+            chat_id=int(prev_chat_id),
+            message_id=int(prev_message_id),
+            ev=ev,
+            event="master.settings.delete_prev_failed",
+        )
 
     settings_msg = await message.answer(
         text=_render_details(master=master, plan=plan),
@@ -147,6 +162,7 @@ async def open_master_settings(message: Message, state: FSMContext) -> None:
             notify_clients=bool(getattr(master, "notify_clients", True)),
             plan_is_pro=plan.is_pro,
         ),
+        parse_mode="HTML",
     )
     await state.update_data(**{
         SETTINGS_MAIN_KEY: {
@@ -179,7 +195,14 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith(SETTINGS_CB_PREFIX))
-async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None:  # noqa: C901, PLR0911, PLR0912, PLR0915
+async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_settings", step="callback")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_settings:callback", ttl_sec=1):
+        return
     telegram_id = callback.from_user.id
     data = callback.data or ""
 
@@ -407,7 +430,7 @@ async def save_phone(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     phone = validate_phone((message.text or "").strip())
     if phone is None:
-        await message.answer(txt.invalid_phone())
+        await message.answer(txt.invalid_phone(), parse_mode="HTML")
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
@@ -426,7 +449,7 @@ async def save_work_days(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     days = _parse_work_days(message.text or "")
     if days is None:
-        await message.answer(txt.invalid_days())
+        await message.answer(txt.invalid_days(), parse_mode="HTML")
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
@@ -445,7 +468,7 @@ async def save_work_time(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     parsed = _parse_time_range(message.text or "")
     if parsed is None:
-        await message.answer(txt.invalid_work_time())
+        await message.answer(txt.invalid_work_time(), parse_mode="HTML")
         return
     start_time, end_time = parsed
     async with active_session() as session:
@@ -465,7 +488,7 @@ async def save_slot_size(message: Message, state: FSMContext) -> None:
     telegram_id = message.from_user.id
     slot_size = _parse_slot_size(message.text or "")
     if slot_size is None:
-        await message.answer(txt.invalid_slot_size())
+        await message.answer(txt.invalid_slot_size(), parse_mode="HTML")
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)

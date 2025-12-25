@@ -11,7 +11,10 @@ from src.handlers.client.client_menu import send_client_main_menu
 from src.handlers.client.register import start_client_registration
 from src.handlers.master.master_menu import send_master_main_menu
 from src.handlers.master.register import start_master_registration
+from src.handlers.shared.guards import rate_limit_callback
+from src.handlers.shared.ui import safe_delete
 from src.observability.alerts import AdminAlerter
+from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
@@ -57,6 +60,7 @@ async def cmd_start(
     rate_limiter: RateLimiter,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
+    bind_log_context(flow="start", step="cmd_start")
     await cleanup_messages(state, message.bot, bucket=START_BOT_BUCKET)
     await track_message(state, message, bucket=START_BOT_BUCKET)
     if command.args == "registration":
@@ -98,7 +102,7 @@ async def cmd_start(
         state=state,
         user_ctx_storage=user_ctx_storage,
     )
-    await message.delete()
+    await safe_delete(message, ev=ev, event="start.delete_message_failed")
 
 
 async def resolve_role_and_dispatch(
@@ -164,8 +168,17 @@ async def resolve_role_and_dispatch(
     StateFilter(RoleStates.choosing_role),
     F.data.in_([f"role:{ActiveRole.MASTER.value}", f"role:{ActiveRole.CLIENT.value}"]),
 )
-async def choose_role(callback: CallbackQuery, state: FSMContext, user_ctx_storage: UserContextStorage) -> None:
+async def choose_role(
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_ctx_storage: UserContextStorage,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="start", step="choose_role")
+    # prevent accidental double taps / spam (cheap but noisy)
     telegram_id = callback.from_user.id
+    if not await rate_limit_callback(callback, rate_limiter, name="start:choose_role", ttl_sec=2):
+        return
 
     raw = callback.data.split(":", 1)[1]
     try:

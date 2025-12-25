@@ -106,6 +106,7 @@ async def _send_error_message(
         await bot.send_message(
             chat_id=chat_id,
             text=txt.err_invite_inactive(),
+            parse_mode="HTML",
         )
         return
 
@@ -113,6 +114,7 @@ async def _send_error_message(
         await bot.send_message(
             chat_id=chat_id,
             text=txt.err_invite_wrong_link(),
+            parse_mode="HTML",
         )
         return
 
@@ -120,6 +122,7 @@ async def _send_error_message(
         await bot.send_message(
             chat_id=chat_id,
             text=txt.err_quota_exceeded(),
+            parse_mode="HTML",
         )
         return
 
@@ -127,12 +130,14 @@ async def _send_error_message(
         await bot.send_message(
             chat_id=chat_id,
             text=txt.err_phone_conflict(),
+            parse_mode="HTML",
         )
         return
 
     await bot.send_message(
         chat_id=chat_id,
         text=txt.err_generic(),
+        parse_mode="HTML",
     )
 
 
@@ -419,7 +424,7 @@ async def _client_reg_confirm_impl(
 
     result = await _execute_confirm(telegram_id=telegram_id, data=confirm_data, admin_alerter=admin_alerter)
     if result is None:
-        await callback.bot.send_message(chat_id=telegram_id, text=txt.err_generic())
+        await callback.bot.send_message(chat_id=telegram_id, text=txt.err_generic(), parse_mode="HTML")
         await _reset_flow(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
         return
 
@@ -448,6 +453,7 @@ async def _client_reg_confirm_impl(
     await bot.send_message(
         chat_id=telegram_id,
         text=txt.done(),
+        parse_mode="HTML",
     )
 
     if result.warn_master_clients_near_limit:
@@ -508,6 +514,7 @@ async def client_reg_restart(callback: CallbackQuery, state: FSMContext) -> None
             chat_id=callback.from_user.id,
             text=txt.ask_name(),
             reply_markup=_build_cancel_keyboard(),
+            parse_mode="HTML",
         )
         await state.set_state(ClientRegistration.name)
         return

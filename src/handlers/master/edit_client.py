@@ -7,11 +7,16 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
+from src.filters.user_role import UserRole
+from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_bot_edit_message_text, safe_edit_text
+from src.observability.context import bind_log_context
+from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientUpdate
 from src.texts import common as common_txt, edit_client as txt
 from src.texts.buttons import btn_back, btn_cancel
+from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
 
 logger = logging.getLogger(__name__)
@@ -122,11 +127,18 @@ async def _update_card(message: Message, state: FSMContext, selected: dict) -> N
         if ok:
             return
 
-    card = await message.answer(_render_client_card(selected), reply_markup=_kb_actions())
+    card = await message.answer(_render_client_card(selected), reply_markup=_kb_actions(), parse_mode="HTML")
     await track_message(state, card, bucket=EDIT_CLIENT_CARD_BUCKET)
 
 
-async def start_edit_client(callback: CallbackQuery, state: FSMContext) -> None:
+async def start_edit_client(
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_edit_client", step="start")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_edit_client:start", ttl_sec=2):
+        return
     await callback.answer()
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_CARD_BUCKET)
@@ -141,8 +153,11 @@ async def start_edit_client(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(EditClientStates.query)
 
 
-@router.message(StateFilter(EditClientStates.query))
-async def process_query(message: Message, state: FSMContext) -> None:
+@router.message(UserRole(ActiveRole.MASTER), StateFilter(EditClientStates.query))
+async def process_query(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="master_edit_client", step="query")
+    if not await rate_limit_message(message, rate_limiter, name="master_edit_client:query", ttl_sec=1):
+        return
     await track_message(state, message, bucket=EDIT_CLIENT_BUCKET)
     query = (message.text or "").strip()
     if not query:
@@ -192,6 +207,7 @@ async def process_query(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(
+    UserRole(ActiveRole.MASTER),
     StateFilter(
         EditClientStates.query,
         EditClientStates.choosing,
@@ -201,7 +217,14 @@ async def process_query(message: Message, state: FSMContext) -> None:
     ),
     F.data == "m:edit_client:cancel",
 )
-async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
+async def cancel(
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_edit_client", step="cancel")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_edit_client:cancel", ttl_sec=1):
+        return
     await callback.answer(common_txt.cancelled(), show_alert=True)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_CARD_BUCKET)
@@ -209,6 +232,7 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(
+    UserRole(ActiveRole.MASTER),
     StateFilter(
         EditClientStates.query,
         EditClientStates.choosing,
@@ -218,7 +242,14 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
     ),
     F.data == "m:edit_client:back",
 )
-async def back(callback: CallbackQuery, state: FSMContext) -> None:
+async def back(
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_edit_client", step="back")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_edit_client:back", ttl_sec=1):
+        return
     await callback.answer()
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_CARD_BUCKET)
@@ -233,8 +264,19 @@ async def back(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(EditClientStates.query)
 
 
-@router.callback_query(StateFilter(EditClientStates.choosing), F.data.startswith("m:edit_client:pick:"))
-async def pick_client(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(EditClientStates.choosing),
+    F.data.startswith("m:edit_client:pick:"),
+)
+async def pick_client(
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_edit_client", step="pick")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_edit_client:pick", ttl_sec=1):
+        return
     await callback.answer()
     if callback.message:
         await _move_message_to_bucket(
@@ -267,8 +309,13 @@ async def pick_client(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(EditClientStates.action)
 
 
-@router.callback_query(StateFilter(EditClientStates.action), F.data == "m:edit_client:edit_name")
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(EditClientStates.action),
+    F.data == "m:edit_client:edit_name",
+)
 async def start_edit_name(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_edit_client", step="edit_name_start")
     await callback.answer()
     await answer_tracked(
         callback.message,
@@ -280,8 +327,11 @@ async def start_edit_name(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(EditClientStates.edit_name)
 
 
-@router.message(StateFilter(EditClientStates.edit_name))
-async def save_name(message: Message, state: FSMContext) -> None:
+@router.message(UserRole(ActiveRole.MASTER), StateFilter(EditClientStates.edit_name))
+async def save_name(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="master_edit_client", step="edit_name_save")
+    if not await rate_limit_message(message, rate_limiter, name="master_edit_client:edit_name", ttl_sec=1):
+        return
     await track_message(state, message, bucket=EDIT_CLIENT_BUCKET)
     name = (message.text or "").strip()
     if not name:
@@ -313,8 +363,13 @@ async def save_name(message: Message, state: FSMContext) -> None:
     await state.set_state(EditClientStates.action)
 
 
-@router.callback_query(StateFilter(EditClientStates.action), F.data == "m:edit_client:edit_phone")
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(EditClientStates.action),
+    F.data == "m:edit_client:edit_phone",
+)
 async def start_edit_phone(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_edit_client", step="edit_phone_start")
     await callback.answer()
     await answer_tracked(
         callback.message,
@@ -326,8 +381,11 @@ async def start_edit_phone(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(EditClientStates.edit_phone)
 
 
-@router.message(StateFilter(EditClientStates.edit_phone))
-async def save_phone(message: Message, state: FSMContext) -> None:
+@router.message(UserRole(ActiveRole.MASTER), StateFilter(EditClientStates.edit_phone))
+async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="master_edit_client", step="edit_phone_save")
+    if not await rate_limit_message(message, rate_limiter, name="master_edit_client:edit_phone", ttl_sec=1):
+        return
     await track_message(state, message, bucket=EDIT_CLIENT_BUCKET)
     raw = (message.text or "").strip()
     phone = validate_phone(raw)

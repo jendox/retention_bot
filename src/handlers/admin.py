@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime, timedelta
 
 from aiogram import F, Router
@@ -9,6 +8,8 @@ from aiogram.types import Message
 
 from src.core.sa import active_session, session_local
 from src.filters.admin import AdminOnly
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
 from src.plans import (
     FREE_BOOKING_HORIZON_DAYS,
     FREE_BOOKINGS_PER_MONTH_LIMIT,
@@ -21,8 +22,8 @@ from src.settings import get_settings
 from src.texts import admin as txt
 from src.use_cases.entitlements import EntitlementsService
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
+ev = EventLogger(__name__)
 
 
 def _billing_contact() -> str:
@@ -63,18 +64,19 @@ def _render_plan_text(
 
 @router.message(AdminOnly(), Command("grant_pro"))
 async def grant_pro(message: Message, command: CommandObject) -> None:
+    bind_log_context(flow="admin", step="grant_pro")
     parts = (command.args or "").split()
     if len(parts) != 2:  # noqa: PLR2004
-        await message.answer(txt.usage_grant_pro())
+        await message.answer(txt.usage_grant_pro(), parse_mode="HTML")
         return
     try:
         master_telegram_id = int(parts[0])
         days = int(parts[1])
     except ValueError:
-        await message.answer(txt.args_must_be_numbers_grant())
+        await message.answer(txt.args_must_be_numbers_grant(), parse_mode="HTML")
         return
     if days <= 0:
-        await message.answer(txt.days_must_be_positive())
+        await message.answer(txt.days_must_be_positive(), parse_mode="HTML")
         return
 
     paid_until = datetime.now(UTC) + timedelta(days=days)
@@ -84,30 +86,32 @@ async def grant_pro(message: Message, command: CommandObject) -> None:
         try:
             master = await master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
-            await message.answer(txt.master_not_found())
+            await message.answer(txt.master_not_found(), parse_mode="HTML")
             return
         await subs_repo.grant_pro(master.id, paid_until)
 
-    logger.info("admin.grant_pro", extra={"master_id": master.id, "paid_until": paid_until.isoformat()})
+    ev.info("admin.grant_pro", master_id=master.id, paid_until=paid_until.isoformat())
     await message.answer(
         txt.pro_activated(
             master_name=master.name,
             master_telegram_id=master_telegram_id,
             until=_format_dt(paid_until),
         ),
+        parse_mode="HTML",
     )
 
 
 @router.message(AdminOnly(), Command("revoke_pro"))
 async def revoke_pro(message: Message, command: CommandObject) -> None:
+    bind_log_context(flow="admin", step="revoke_pro")
     parts = (command.args or "").split()
     if len(parts) != 1:  # noqa: PLR2004
-        await message.answer(txt.usage_revoke_pro())
+        await message.answer(txt.usage_revoke_pro(), parse_mode="HTML")
         return
     try:
         master_telegram_id = int(parts[0])
     except ValueError:
-        await message.answer(txt.master_id_must_be_number())
+        await message.answer(txt.master_id_must_be_number(), parse_mode="HTML")
         return
 
     async with active_session() as session:
@@ -116,11 +120,11 @@ async def revoke_pro(message: Message, command: CommandObject) -> None:
         try:
             master = await master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
-            await message.answer(txt.master_not_found())
+            await message.answer(txt.master_not_found(), parse_mode="HTML")
             return
         changed = await subs_repo.revoke_pro(master.id)
 
-    await message.answer(txt.pro_revoked(changed=bool(changed)))
+    await message.answer(txt.pro_revoked(changed=bool(changed)), parse_mode="HTML")
 
 
 @router.message(
@@ -129,14 +133,15 @@ async def revoke_pro(message: Message, command: CommandObject) -> None:
     Command("plan"),
 )
 async def admin_plan(message: Message, command: CommandObject) -> None:
+    bind_log_context(flow="admin", step="plan_admin")
     parts = (command.args or "").split()
     if len(parts) != 1:  # noqa: PLR2004
-        await message.answer(txt.usage_plan())
+        await message.answer(txt.usage_plan(), parse_mode="HTML")
         return
     try:
         master_telegram_id = int(parts[0])
     except ValueError:
-        await message.answer(txt.master_id_must_be_number())
+        await message.answer(txt.master_id_must_be_number(), parse_mode="HTML")
         return
 
     async with session_local() as session:
@@ -145,7 +150,7 @@ async def admin_plan(message: Message, command: CommandObject) -> None:
         try:
             master = await master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
-            await message.answer(txt.master_not_found())
+            await message.answer(txt.master_not_found(), parse_mode="HTML")
             return
 
         plan = await entitlements.get_plan(master_id=master.id)
@@ -159,11 +164,13 @@ async def admin_plan(message: Message, command: CommandObject) -> None:
             usage=usage,
             horizon_days=horizon,
         ),
+        parse_mode="HTML",
     )
 
 
 @router.message(Command("plan"))
 async def my_plan(message: Message) -> None:
+    bind_log_context(flow="admin", step="plan_self")
     telegram_id = message.from_user.id if message.from_user else None
     if telegram_id is None:
         return
@@ -174,7 +181,7 @@ async def my_plan(message: Message) -> None:
         try:
             master = await master_repo.get_by_telegram_id(telegram_id)
         except MasterNotFound:
-            await message.answer(txt.master_only())
+            await message.answer(txt.master_only(), parse_mode="HTML")
             return
 
         plan = await entitlements.get_plan(master_id=master.id)
@@ -194,15 +201,17 @@ async def my_plan(message: Message) -> None:
             usage=usage,
             horizon_days=horizon,
         ),
+        parse_mode="HTML",
     )
 
 
 @router.message(AdminOnly(), Command("invite_master"))
 async def invite_master(message: Message, command: CommandObject) -> None:
+    bind_log_context(flow="admin", step="invite_master")
     settings = get_settings()
     secret = settings.security.master_invite_secret
     if secret is None:
-        await message.answer(txt.invite_master_secret_missing())
+        await message.answer(txt.invite_master_secret_missing(), parse_mode="HTML")
         return
 
     ttl_hours = settings.security.master_invite_ttl_sec // 3600
@@ -210,12 +219,12 @@ async def invite_master(message: Message, command: CommandObject) -> None:
         try:
             ttl_hours = int((command.args or "").strip())
         except ValueError:
-            await message.answer(txt.usage_invite_master())
+            await message.answer(txt.usage_invite_master(), parse_mode="HTML")
             return
         if ttl_hours <= 0:
-            await message.answer(txt.invite_master_bad_ttl())
+            await message.answer(txt.invite_master_bad_ttl(), parse_mode="HTML")
             return
 
     token = create_master_invite_token(secret=secret.get_secret_value(), ttl_sec=ttl_hours * 3600)
     link = f"https://t.me/{settings.telegram.bot_username}?start=m_{encode_master_invite_for_start(token)}"
-    await message.answer(txt.invite_master_created(link=link, ttl_hours=ttl_hours))
+    await message.answer(txt.invite_master_created(link=link, ttl_hours=ttl_hours), parse_mode="HTML")
