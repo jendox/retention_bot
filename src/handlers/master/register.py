@@ -553,13 +553,25 @@ async def master_reg_confirm(
     telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
     logger.info("master_reg.confirm", extra={"telegram_id": telegram_id})
+    await callback.answer()
+
+    data = await state.get_data()
+    if data.get("confirm_in_progress"):
+        return
+    await state.update_data(confirm_in_progress=True)
+
+    if callback.message is not None:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("master_reg.confirm.disable_keyboard_failed", exc_info=True)
+
     await answer_tracked(
         callback.message,
         state,
         text=txt.creating_profile(),
         bucket=MASTER_REGISTRATION_BUCKET,
     )
-    data = await state.get_data()
     try:
         start_time = datetime.strptime(data["start_time"], "%H:%M").time()
         end_time = datetime.strptime(data["end_time"], "%H:%M").time()
