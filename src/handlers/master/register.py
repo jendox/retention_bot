@@ -33,7 +33,7 @@ from src.use_cases.master_registration import (
     CompleteMasterRegistrationRequest,
     StartMasterRegistration,
     StartMasterRegistrationOutcome,
-    StartMasterRegistrationRequest,
+    StartMasterRegistrationRequest, StartMasterRegistrationResult,
 )
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
@@ -66,6 +66,24 @@ _MINUTES_MAX = 59
 
 
 # ------------ helpers ------------
+
+def _normalize_token(token: str | None) -> str | None:
+    return (token or "").strip() or None
+
+
+def _get_invite_policy(settings, *, telegram_id: int) -> tuple[bool, str | None]:
+    invite_secret = settings.security.master_invite_secret
+    invite_only = bool(invite_secret) and not settings.security.master_public_registration
+
+    if not settings.security.master_public_registration and invite_secret is None:
+        logger.warning(
+            "master_reg.invite_misconfigured",
+            extra={"telegram_id": telegram_id},
+        )
+
+    invite_secret_value = invite_secret.get_secret_value() if invite_secret is not None else None
+    return invite_only, invite_secret_value
+
 
 def _parse_work_days(raw: str) -> list[int] | None:
     """
@@ -184,6 +202,45 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+async def _handle_start_result(
+    message: Message,
+    state: FSMContext,
+    *,
+    telegram_id: int,
+    user_ctx_storage: UserContextStorage,
+    contact: str,
+    result: StartMasterRegistrationResult,
+) -> bool:
+    if result.outcome == StartMasterRegistrationOutcome.ALREADY_MASTER:
+        await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
+        await send_master_main_menu(message.bot, telegram_id, show_switch_role=result.is_client)
+        try:
+            await message.delete()
+        except Exception:
+            logger.debug("master_reg.delete_failed", exc_info=True)
+        return True
+
+    if result.outcome == StartMasterRegistrationOutcome.INVITE_REQUIRED:
+        await answer_tracked(
+            message,
+            state,
+            text=txt.invite_required(contact=contact),
+            bucket=MASTER_REGISTRATION_BUCKET,
+        )
+        return True
+
+    if result.outcome == StartMasterRegistrationOutcome.INVITE_INVALID:
+        await answer_tracked(
+            message,
+            state,
+            text=txt.invite_invalid(contact=contact),
+            bucket=MASTER_REGISTRATION_BUCKET,
+        )
+        return True
+
+    return False
+
+
 # ------------ handlers ------------
 
 async def start_master_registration(
@@ -198,50 +255,41 @@ async def start_master_registration(
     This handler checks whether the user is already a master and whether registration requires an invite.
     If registration can proceed, it starts the FSM by asking for the master name.
     """
+    if message.from_user is None:
+        logger.warning("master_reg.start.no_from_user")
+        return
+
+    token = _normalize_token(token)
+
+    await cleanup_messages(state, message.bot, bucket=MASTER_REGISTRATION_BUCKET)
+    await state.clear()
+
     telegram_id = message.from_user.id
     logger.info(
         "master_reg.start",
         extra={"telegram_id": telegram_id, "has_token": bool(token)},
     )
     settings = get_settings()
-    invite_secret = settings.security.master_invite_secret
-    invite_only = bool(invite_secret) and not settings.security.master_public_registration
+    invite_only, invite_secret_value = _get_invite_policy(settings, telegram_id=telegram_id)
 
     async with session_local() as session:
         result = await StartMasterRegistration(session).execute(
             StartMasterRegistrationRequest(
                 telegram_id=telegram_id,
                 invite_only=invite_only,
-                invite_secret=invite_secret.get_secret_value() if invite_secret is not None else None,
+                invite_secret=invite_secret_value,
                 token=token,
             ),
         )
 
-    if result.outcome == StartMasterRegistrationOutcome.ALREADY_MASTER:
-        await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
-        await send_master_main_menu(message.bot, telegram_id, show_switch_role=result.is_client)
-        try:
-            await message.delete()
-        except Exception:
-            logger.debug("master_reg.delete_failed", exc_info=True)
-        return
-
-    if result.outcome == StartMasterRegistrationOutcome.INVITE_REQUIRED:
-        await answer_tracked(
-            message,
-            state,
-            text=txt.invite_required(contact=settings.billing.contact),
-            bucket=MASTER_REGISTRATION_BUCKET,
-        )
-        return
-
-    if result.outcome == StartMasterRegistrationOutcome.INVITE_INVALID:
-        await answer_tracked(
-            message,
-            state,
-            text=txt.invite_invalid(contact=settings.billing.contact),
-            bucket=MASTER_REGISTRATION_BUCKET,
-        )
+    if await _handle_start_result(
+        message,
+        state,
+        telegram_id=telegram_id,
+        user_ctx_storage=user_ctx_storage,
+        contact=settings.billing.contact,
+        result=result,
+    ):
         return
 
     await state.update_data(token=token, is_client=result.is_client)
