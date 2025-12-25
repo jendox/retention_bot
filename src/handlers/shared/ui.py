@@ -101,3 +101,23 @@ async def safe_bot_edit_message_text(
             return False
         logger.warning(event, error=str(exc))
         return False
+
+
+async def safe_bot_delete_message(
+    bot,
+    *,
+    chat_id: int,
+    message_id: int,
+    ev: EventLogger | None = None,
+    event: str = "ui.bot_delete_message_failed",
+) -> bool:
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        return True
+    except TelegramAPIError as exc:
+        logger = ev or EventLogger(__name__)
+        if isinstance(exc, TelegramBadRequest) and _is_delete_race(exc):
+            logger.debug("ui.delete_skipped", error=str(exc))
+            return False
+        logger.warning(event, error=str(exc))
+        return False

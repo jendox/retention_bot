@@ -9,6 +9,7 @@ from src.handlers.client.booking import start_client_add_booking
 from src.handlers.client.list_bookings import start_client_list_bookings
 from src.handlers.client.list_masters import start_client_list_masters
 from src.handlers.client.settings import open_client_settings
+from src.rate_limiter import RateLimiter
 from src.texts import client_menu as txt, common as common_txt
 from src.user_context import ActiveRole, UserContextStorage
 
@@ -77,6 +78,6 @@ async def client_switch_role(
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_SETTINGS)
-async def client_settings(message: Message, state: FSMContext) -> None:
+async def client_settings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     await state.clear()
-    await open_client_settings(message, state)
+    await open_client_settings(message, state, rate_limiter)

@@ -85,7 +85,13 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def setup_logging(*, debug: bool, service: str | None = None, env: str | None = None, version: str | None = None) -> None:
+def setup_logging(
+    *,
+    debug: bool,
+    service: str | None = None,
+    env: str | None = None,
+    version: str | None = None,
+) -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(logging.DEBUG if debug else logging.INFO)

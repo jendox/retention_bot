@@ -1,4 +1,4 @@
-import logging
+from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
@@ -6,6 +6,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
+from src.handlers.shared.flow import context_lost
+from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import Timezone
@@ -13,8 +19,8 @@ from src.texts import client_settings as txt
 from src.texts.buttons import btn_back
 from src.user_context import ActiveRole
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
+ev = EventLogger(__name__)
 
 SETTINGS_CB_PREFIX = "c:settings:"
 SETTINGS_MAIN_KEY = "client_settings_main"
@@ -53,130 +59,316 @@ def _render(*, name: str, tz: Timezone, notifications_enabled: bool) -> str:
     return txt.render_settings(name=name, tz_value=str(tz.value), notifications_enabled=notifications_enabled)
 
 
-async def open_client_settings(message: Message, state: FSMContext) -> None:
-    telegram_id = message.from_user.id
-    async with session_local() as session:
-        repo = ClientRepository(session)
-        try:
-            client = await repo.get_by_telegram_id(telegram_id)
-        except ClientNotFound:
-            await message.answer(txt.client_only())
-            return
-
-    data = await state.get_data()
-    main = data.get(SETTINGS_MAIN_KEY) or {}
-    prev_chat_id = main.get("chat_id")
-    prev_message_id = main.get("message_id")
-    if prev_chat_id and prev_message_id:
-        try:
-            await message.bot.delete_message(chat_id=prev_chat_id, message_id=prev_message_id)
-        except Exception:
-            logger.debug("client.settings.delete_prev_failed", exc_info=True)
-
-    settings_msg = await message.answer(
-        text=_render(
-            name=client.name,
-            tz=client.timezone,
-            notifications_enabled=getattr(client, "notifications_enabled", True),
-        ),
-        reply_markup=_kb_settings(notifications_enabled=getattr(client, "notifications_enabled", True)),
-    )
-    await state.update_data(
-        **{SETTINGS_MAIN_KEY: {"chat_id": settings_msg.chat.id, "message_id": settings_msg.message_id}},
-    )
-
-
-async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int) -> bool:
-    data = await state.get_data()
+def _get_main_ref(data: dict, *, telegram_id: int) -> tuple[int, int] | None:
     main = data.get(SETTINGS_MAIN_KEY) or {}
     chat_id = main.get("chat_id") or telegram_id
     message_id = main.get("message_id")
     if message_id is None:
-        return False
+        return None
+    return int(chat_id), int(message_id)
+
+
+async def _set_main_ref(state: FSMContext, *, chat_id: int, message_id: int) -> None:
+    await state.update_data(**{SETTINGS_MAIN_KEY: {"chat_id": int(chat_id), "message_id": int(message_id)}})
+
+
+async def _clear_main_ref(state: FSMContext) -> None:
+    await state.update_data(**{SETTINGS_MAIN_KEY: {}})
+
+
+async def _load_client(telegram_id: int):
     async with session_local() as session:
         repo = ClientRepository(session)
-        client = await repo.get_by_telegram_id(telegram_id)
-    await bot.edit_message_text(
+        return await repo.get_by_telegram_id(telegram_id)
+
+
+async def _render_and_edit_main(
+    *,
+    state: FSMContext,
+    bot,
+    telegram_id: int,
+) -> bool:
+    data = await state.get_data()
+    ref = _get_main_ref(data, telegram_id=telegram_id)
+    if ref is None:
+        return False
+    chat_id, message_id = ref
+
+    try:
+        client = await _load_client(telegram_id)
+    except ClientNotFound:
+        return False
+
+    return await safe_bot_edit_message_text(
+        bot,
         chat_id=chat_id,
         message_id=message_id,
         text=_render(
             name=client.name,
             tz=client.timezone,
-            notifications_enabled=getattr(client, "notifications_enabled", True),
+            notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
         ),
-        reply_markup=_kb_settings(notifications_enabled=getattr(client, "notifications_enabled", True)),
+        reply_markup=_kb_settings(notifications_enabled=bool(getattr(client, "notifications_enabled", True))),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_settings.edit_main_failed",
+    )
+
+
+async def open_client_settings(
+    message: Message,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_settings", step="open")
+    telegram_id = message.from_user.id
+    if not await rate_limit_message(message, rate_limiter, name="client_settings:open", ttl_sec=2):
+        return
+
+    try:
+        client = await _load_client(telegram_id)
+    except ClientNotFound:
+        await message.answer(txt.client_only())
+        return
+
+    data = await state.get_data()
+    ref = _get_main_ref(data, telegram_id=telegram_id)
+    if ref is not None:
+        chat_id, message_id = ref
+        await safe_bot_delete_message(
+            message.bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            ev=ev,
+            event="client_settings.delete_prev_failed",
+        )
+
+    settings_msg = await message.answer(
+        text=_render(
+            name=client.name,
+            tz=client.timezone,
+            notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
+        ),
+        reply_markup=_kb_settings(notifications_enabled=bool(getattr(client, "notifications_enabled", True))),
         parse_mode="HTML",
     )
-    return True
+    await _set_main_ref(state, chat_id=settings_msg.chat.id, message_id=settings_msg.message_id)
+
+
+async def _show_timezone_menu(callback: CallbackQuery) -> bool:
+    if callback.message is None:
+        return False
+    return await safe_edit_text(
+        callback.message,
+        text=txt.choose_timezone(),
+        reply_markup=_kb_timezones(),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_settings.edit_timezone_menu_failed",
+    )
+
+
+async def _edit_main_or_context_lost(
+    callback: CallbackQuery,
+    *,
+    state: FSMContext,
+    telegram_id: int,
+    reason: str,
+) -> bool:
+    ok = await _render_and_edit_main(state=state, bot=callback.bot, telegram_id=telegram_id)
+    if ok:
+        return True
+    await context_lost(callback, state, bucket=SETTINGS_MAIN_KEY, reason=reason)
+    return False
+
+
+async def _handle_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await safe_delete(callback.message, ev=ev, event="client_settings.delete_failed")
+    await _clear_main_ref(state)
+
+
+async def _ensure_main_ref_from_message(callback: CallbackQuery, state: FSMContext, *, telegram_id: int) -> None:
+    data = await state.get_data()
+    if _get_main_ref(data, telegram_id=telegram_id) is not None:
+        return
+    if callback.message is None:
+        return
+    await _set_main_ref(state, chat_id=callback.message.chat.id, message_id=callback.message.message_id)
+
+
+async def _handle_choose_timezone(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    ok = await _show_timezone_menu(callback)
+    if not ok:
+        await context_lost(callback, state, bucket=SETTINGS_MAIN_KEY, reason="missing_message_on_tz_menu")
+
+
+async def _handle_set_timezone(
+    callback: CallbackQuery,
+    *,
+    state: FSMContext,
+    telegram_id: int,
+    client_id: int,
+    raw_tz: str,
+) -> None:
+    try:
+        tz = Timezone(raw_tz)
+    except ValueError:
+        await callback.answer(txt.invalid_timezone(), show_alert=True)
+        return
+
+    async with active_session() as session:
+        repo = ClientRepository(session)
+        await repo.update_by_id(client_id, ClientUpdate(timezone=tz))
+
+    await callback.answer(txt.timezone_updated(), show_alert=True)
+    await _edit_main_or_context_lost(
+        callback,
+        state=state,
+        telegram_id=telegram_id,
+        reason="missing_main_ref_after_set_tz",
+    )
+
+
+async def _handle_toggle_notify(
+    callback: CallbackQuery,
+    *,
+    state: FSMContext,
+    telegram_id: int,
+    client_id: int,
+    current_enabled: bool,
+) -> None:
+    new_value = not bool(current_enabled)
+    async with active_session() as session:
+        repo = ClientRepository(session)
+        await repo.update_by_id(client_id, ClientUpdate(notifications_enabled=new_value))
+
+    await callback.answer(txt.saved(), show_alert=True)
+    await _edit_main_or_context_lost(
+        callback,
+        state=state,
+        telegram_id=telegram_id,
+        reason="missing_main_ref_after_toggle_notify",
+    )
+
+
+async def _handle_back_menu(callback: CallbackQuery, *, state: FSMContext, telegram_id: int) -> None:
+    await callback.answer()
+    await _edit_main_or_context_lost(
+        callback,
+        state=state,
+        telegram_id=telegram_id,
+        reason="missing_main_ref_on_back_menu",
+    )
+
+
+async def _load_client_or_alert(callback: CallbackQuery, state: FSMContext, *, telegram_id: int):
+    try:
+        return await _load_client(telegram_id)
+    except ClientNotFound:
+        await callback.answer(txt.client_only_alert(), show_alert=True)
+        await _clear_main_ref(state)
+        return None
+
+
+def _parse_action(data: str) -> tuple[str, str | None]:
+    if data == f"{SETTINGS_CB_PREFIX}back":
+        return "back", None
+    if data == f"{SETTINGS_CB_PREFIX}tz":
+        return "tz", None
+    if data.startswith(f"{SETTINGS_CB_PREFIX}set_tz:"):
+        return "set_tz", data.split(":", 2)[2]
+    if data == f"{SETTINGS_CB_PREFIX}toggle_notify":
+        return "toggle_notify", None
+    if data == f"{SETTINGS_CB_PREFIX}back_menu":
+        return "back_menu", None
+    return "unknown", None
 
 
 @router.callback_query(UserRole(ActiveRole.CLIENT), F.data.startswith(SETTINGS_CB_PREFIX))
-async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
+async def settings_callbacks(
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_settings", step="callback")
+    if not await rate_limit_callback(callback, rate_limiter, name="client_settings:callback", ttl_sec=1):
+        return
+
+    await _settings_callbacks_impl(callback=callback, state=state)
+
+
+async def _settings_callbacks_impl(*, callback: CallbackQuery, state: FSMContext) -> None:
     telegram_id = callback.from_user.id
     data = callback.data or ""
+    action, arg = _parse_action(data)
 
-    if data == f"{SETTINGS_CB_PREFIX}back":
-        await callback.answer()
-        try:
-            await callback.message.delete()
-        except Exception:
-            logger.debug("client.settings.delete_failed", exc_info=True)
+    if action == "back":
+        await _handle_back(callback, state)
         return
 
-    # Ensure the main settings message is tracked for single-screen UX.
-    data_ = await state.get_data()
-    main = data_.get(SETTINGS_MAIN_KEY)
-    if not main and callback.message:
-        await state.update_data(
-            **{SETTINGS_MAIN_KEY: {"chat_id": callback.message.chat.id, "message_id": callback.message.message_id}},
-        )
+    await _ensure_main_ref_from_message(callback, state, telegram_id=telegram_id)
 
-    async with session_local() as session:
-        repo = ClientRepository(session)
-        try:
-            client = await repo.get_by_telegram_id(telegram_id)
-        except ClientNotFound:
-            await callback.answer(txt.client_only_alert(), show_alert=True)
+    if action in {"set_tz", "toggle_notify"}:
+        client = await _load_client_or_alert(callback, state, telegram_id=telegram_id)
+        if client is None:
             return
-
-    if data == f"{SETTINGS_CB_PREFIX}tz":
-        await callback.answer()
-        await callback.message.edit_text(
-            text=txt.choose_timezone(),
-            reply_markup=_kb_timezones(),
+        await _dispatch_with_client(
+            callback,
+            state=state,
+            telegram_id=telegram_id,
+            action=action,
+            arg=arg,
+            client=client,
         )
         return
 
-    if data.startswith(f"{SETTINGS_CB_PREFIX}set_tz:"):
-        raw = data.split(":", 2)[2]
-        try:
-            tz = Timezone(raw)
-        except ValueError:
-            await callback.answer(txt.invalid_timezone(), show_alert=True)
-            return
+    await _dispatch_without_client(callback, state=state, telegram_id=telegram_id, action=action)
 
-        async with active_session() as session:
-            repo = ClientRepository(session)
-            await repo.update_by_id(client.id, ClientUpdate(timezone=tz))
 
-        await callback.answer(txt.timezone_updated(), show_alert=True)
-        await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+async def _dispatch_with_client(
+    callback: CallbackQuery,
+    *,
+    state: FSMContext,
+    telegram_id: int,
+    action: str,
+    arg: str | None,
+    client,
+) -> None:
+    if action == "set_tz":
+        await _handle_set_timezone(
+            callback,
+            state=state,
+            telegram_id=telegram_id,
+            client_id=client.id,
+            raw_tz=str(arg or ""),
+        )
         return
-
-    if data == f"{SETTINGS_CB_PREFIX}toggle_notify":
-        current = bool(getattr(client, "notifications_enabled", True))
-        new_value = not current
-        async with active_session() as session:
-            repo = ClientRepository(session)
-            await repo.update_by_id(client.id, ClientUpdate(notifications_enabled=new_value))
-
-        await callback.answer(txt.saved(), show_alert=True)
-        await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+    if action == "toggle_notify":
+        await _handle_toggle_notify(
+            callback,
+            state=state,
+            telegram_id=telegram_id,
+            client_id=client.id,
+            current_enabled=bool(getattr(client, "notifications_enabled", True)),
+        )
         return
+    await callback.answer()
 
-    if data == f"{SETTINGS_CB_PREFIX}back_menu":
-        await callback.answer()
-        await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+
+async def _dispatch_without_client(
+    callback: CallbackQuery,
+    *,
+    state: FSMContext,
+    telegram_id: int,
+    action: str,
+) -> None:
+    if action == "tz":
+        await _handle_choose_timezone(callback, state)
         return
-
+    if action == "back_menu":
+        await _handle_back_menu(callback, state=state, telegram_id=telegram_id)
+        return
     await callback.answer()

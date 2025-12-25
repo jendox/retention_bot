@@ -89,7 +89,13 @@ async def grant_pro(message: Message, command: CommandObject) -> None:
         await subs_repo.grant_pro(master.id, paid_until)
 
     logger.info("admin.grant_pro", extra={"master_id": master.id, "paid_until": paid_until.isoformat()})
-    await message.answer(txt.pro_activated(master_name=master.name, master_telegram_id=master_telegram_id, until=_format_dt(paid_until)))
+    await message.answer(
+        txt.pro_activated(
+            master_name=master.name,
+            master_telegram_id=master_telegram_id,
+            until=_format_dt(paid_until)
+        )
+    )
 
 
 @router.message(AdminOnly(), Command("revoke_pro"))
