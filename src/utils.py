@@ -173,3 +173,24 @@ def styled_text(text: str, color: str = None, bold: bool = False, italic: bool =
         return f'<span style="{style_attr}">{text}</span>'
 
     return text
+
+
+async def notify_admins(
+    bot: Bot,
+    admin_ids: Iterable[int],
+    text: str,
+    *,
+    parse_mode: str | None = None,
+) -> None:
+    """
+    Best-effort helper for one-off operational alerts to admins.
+    """
+    for admin_id in admin_ids:
+        try:
+            await bot.send_message(chat_id=int(admin_id), text=text, parse_mode=parse_mode)
+        except TelegramAPIError:
+            logger.warning(
+                "admin.notify_failed",
+                extra={"admin_id": int(admin_id)},
+                exc_info=True,
+            )

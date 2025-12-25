@@ -26,17 +26,25 @@ from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
 from src.schemas.enums import Timezone
 from src.settings import get_settings
-from src.texts import common as common_txt, master_registration as txt
+from src.texts import admin as admin_txt, common as common_txt, master_registration as txt
 from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
 from src.use_cases.master_registration import (
     CompleteMasterRegistration,
     CompleteMasterRegistrationRequest,
     StartMasterRegistration,
     StartMasterRegistrationOutcome,
-    StartMasterRegistrationRequest, StartMasterRegistrationResult,
+    StartMasterRegistrationRequest,
+    StartMasterRegistrationResult,
 )
 from src.user_context import ActiveRole, UserContextStorage
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
+from src.utils import (
+    answer_tracked,
+    cleanup_messages,
+    notify_admins,
+    track_callback_message,
+    track_message,
+    validate_phone,
+)
 
 router = Router(name=__name__)
 logger = logging.getLogger(__name__)
@@ -63,6 +71,7 @@ _TIME_RANGE_RE = re.compile(r"^\s*(\d{1,2}:\d{2})\s*[-–—−‒]\s*(\d{1,2}:\
 _DASH_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—−", "-"))
 _HOURS_MAX = 23
 _MINUTES_MAX = 59
+_INVITE_MISCONFIGURED_NOTIFIED = False
 
 
 # ------------ helpers ------------
@@ -271,6 +280,15 @@ async def start_master_registration(
     )
     settings = get_settings()
     invite_only, invite_secret_value = _get_invite_policy(settings, telegram_id=telegram_id)
+    if not settings.security.master_public_registration and settings.security.master_invite_secret is None:
+        global _INVITE_MISCONFIGURED_NOTIFIED  # noqa: PLW0603
+        if not _INVITE_MISCONFIGURED_NOTIFIED:
+            _INVITE_MISCONFIGURED_NOTIFIED = True
+            await notify_admins(
+                message.bot,
+                settings.admin.telegram_ids,
+                admin_txt.invite_policy_misconfigured(),
+            )
 
     async with session_local() as session:
         result = await StartMasterRegistration(session).execute(

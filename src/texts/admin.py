@@ -18,7 +18,7 @@ def status_label(*, is_pro: bool, source: str | None, t: Translator = _noop_t) -
     return status
 
 
-def render_plan_text(
+def render_plan_text(  # noqa: PLR0913
     *,
     title: str,
     status: str,
@@ -106,6 +106,15 @@ def usage_invite_master(*, t: Translator = _noop_t) -> str:
 
 def invite_master_secret_missing(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Не задан `SECURITY__MASTER_INVITE_SECRET`, приглашения мастерам недоступны.")
+
+
+def invite_policy_misconfigured(*, t: Translator = _noop_t) -> str:
+    return t(
+        "⚠️ Некорректные настройки регистрации мастера.\n\n"
+        "Сейчас `SECURITY__MASTER_PUBLIC_REGISTRATION=false`, но `SECURITY__MASTER_INVITE_SECRET` не задан.\n"
+        "В результате регистрация мастера станет публичной.\n\n"
+        "Проверь переменные окружения и перезапусти бота после исправления.",
+    )
 
 
 def invite_master_bad_ttl(*, t: Translator = _noop_t) -> str:
