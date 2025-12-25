@@ -27,9 +27,8 @@ from src.user_context import ActiveRole
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 
-RESCHEDULE_PREFIX = "m:r"
-CB_CONFIRM = f"{RESCHEDULE_PREFIX}:confirm"
-CB_CANCEL = f"{RESCHEDULE_PREFIX}:cancel"
+CB_CONFIRM = f"m:reschedule:confirm"
+CB_CANCEL = f"m:reschedule:cancel"
 
 
 class RescheduleStates(StatesGroup):
@@ -39,7 +38,7 @@ class RescheduleStates(StatesGroup):
 
 
 def _cb_slot(index: int) -> str:
-    return f"{RESCHEDULE_PREFIX}:slot:{index}"
+    return f"m:reschedule:slot:{index}"
 
 
 def _build_slots_keyboard(slots_local: list[datetime]) -> InlineKeyboardMarkup:
@@ -114,7 +113,11 @@ async def start_reschedule(
     await callback.answer()
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), StateFilter(RescheduleStates.selecting_date), SimpleCalendarCallback.filter())
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.selecting_date),
+    SimpleCalendarCallback.filter(),
+)
 async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext) -> None:
     calendar = SimpleCalendar()
     selected, picked_date = await calendar.process_selection(callback, callback_data)
@@ -184,7 +187,11 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     await callback.answer()
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), StateFilter(RescheduleStates.selecting_slot), F.data.startswith(f"{RESCHEDULE_PREFIX}:slot:"))
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.selecting_slot),
+    F.data.startswith(f"m:reschedule:slot:"),
+)
 async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     parts = (callback.data or "").split(":")
     if len(parts) != 4 or parts[0] != "m" or parts[1] != "r" or parts[2] != "slot":  # noqa: PLR2004
@@ -221,7 +228,11 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), StateFilter(RescheduleStates.confirm), F.data == CB_CONFIRM)
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.confirm),
+    F.data == CB_CONFIRM,
+)
 async def confirm(callback: CallbackQuery, state: FSMContext) -> None:
     from src.handlers.master.schedule import Scope, _send_schedule
 
