@@ -53,13 +53,13 @@ async def client_add_booking(message: Message, state: FSMContext, rate_limiter: 
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOKINGS)
-async def client_list_bookings(message: Message, state: FSMContext) -> None:
-    await start_client_list_bookings(message, state)
+async def client_list_bookings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    await start_client_list_bookings(message, state, rate_limiter)
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_MASTERS)
-async def client_list_masters(message: Message, state: FSMContext) -> None:
-    await start_client_list_masters(message, state)
+async def client_list_masters(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    await start_client_list_masters(message, state, rate_limiter)
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_SWITCH_ROLE)

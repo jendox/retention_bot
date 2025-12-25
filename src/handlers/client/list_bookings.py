@@ -1,5 +1,7 @@
-import logging
+from __future__ import annotations
+
 from datetime import UTC, datetime
+from html import escape as html_escape
 from textwrap import dedent
 
 from aiogram import Bot, F, Router
@@ -8,7 +10,14 @@ from aiogram.types import CallbackQuery, Message
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone
-from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
+from src.filters.user_role import UserRole
+from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.ui import safe_delete, safe_edit_text
+from src.notifications import BookingContext, NotificationEvent, RecipientKind
+from src.notifications.notifier import NotificationRequest, Notifier
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
@@ -16,9 +25,10 @@ from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, statu
 from src.texts import client_list_bookings as txt
 from src.texts.buttons import btn_cancel_booking
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
+from src.user_context import ActiveRole
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
+ev = EventLogger(__name__)
 
 
 def build_booking_cancel_keyboard(booking_id: int):
@@ -51,8 +61,9 @@ async def _list_bookings(
     for booking in bookings:
         slot_client = to_zone(booking.start_at, client_timezone)
         badge = status_badge(booking.status)
+        master_name_safe = html_escape(str(getattr(booking.master, "name", "")))
         text = dedent(f"""
-            <b>{booking.master.name}</b>\n
+            <b>{master_name_safe}</b>\n
             {badge} {BOOKING_STATUS_MAP[booking.status]}
             📅 {slot_client:%d.%m.%Y}
             ⏰ {slot_client:%H:%M}
@@ -61,10 +72,17 @@ async def _list_bookings(
         can_cancel = booking.start_at > datetime.now(UTC)
         reply_markup = build_booking_cancel_keyboard(booking.id) if can_cancel else None
 
-        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode="HTML")
 
 
-async def start_client_list_bookings(message: Message, state: FSMContext) -> None:
+async def start_client_list_bookings(
+    message: Message,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_list_bookings", step="start")
+    if not await rate_limit_message(message, rate_limiter, name="client_list_bookings:start", ttl_sec=2):
+        return
     telegram_id = message.from_user.id
 
     async with session_local() as session:
@@ -91,11 +109,19 @@ async def start_client_list_bookings(message: Message, state: FSMContext) -> Non
 
     await message.answer(txt.title())
     await _list_bookings(message.bot, telegram_id, bookings, client.timezone)
-    await message.delete()
+    await safe_delete(message, ev=ev, event="client_list_bookings.delete_menu_message_failed")
 
 
-@router.callback_query(F.data.startswith("c:booking:"))
-async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(UserRole(ActiveRole.CLIENT), F.data.startswith("c:booking:"))
+async def client_cancel_booking(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_list_bookings", step="cancel")
+    if not await rate_limit_callback(callback, rate_limiter, name="client_list_bookings:cancel", ttl_sec=2):
+        return
     booking_id = _parse_booking_id(callback.data)
     if booking_id is None:
         await callback.answer(txt.invalid_command(), show_alert=True)
@@ -136,23 +162,30 @@ async def client_cancel_booking(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer(txt.cancelled_alert())
 
-    if callback.message:
-        await callback.message.edit_text(txt.cancelled_text())
+    if callback.message is not None:
+        await safe_edit_text(
+            callback.message,
+            text=txt.cancelled_text(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_list_bookings.edit_cancelled_failed",
+        )
 
     # уведомляем мастера (в его TZ)
     slot_master = to_zone(booking.start_at, booking.master.timezone)
     slot_master_str = slot_master.strftime("%d.%m.%Y %H:%M")
 
-    notification = NotificationService(callback.bot)
-    await notification.send_booking(
-        event=NotificationEvent.BOOKING_CANCELLED_BY_CLIENT,
-        recipient=RecipientKind.MASTER,
-        chat_id=booking.master.telegram_id,
-        context=BookingContext(
-            booking_id=booking.id,
-            master_name=booking.master.name,
-            client_name=booking.client.name,
-            slot_str=slot_master_str,
-            duration_min=booking.duration_min,
+    await notifier.maybe_send(
+        NotificationRequest(
+            event=NotificationEvent.BOOKING_CANCELLED_BY_CLIENT,
+            recipient=RecipientKind.MASTER,
+            chat_id=booking.master.telegram_id,
+            context=BookingContext(
+                booking_id=booking.id,
+                master_name=html_escape(str(getattr(booking.master, "name", ""))),
+                client_name=html_escape(str(getattr(booking.client, "name", ""))),
+                slot_str=slot_master_str,
+                duration_min=booking.duration_min,
+            ),
         ),
     )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from html import escape as html_escape
 
 from aiogram import F, Router
@@ -198,7 +198,7 @@ async def start_booking_for_master(
     await state.set_state(ClientBooking.selecting_date)
 
 
-def _get_client_day(picked_date: datetime, *, client_tz_info) -> datetime.date:
+def _get_client_day(picked_date: datetime, *, client_tz_info) -> date:
     if picked_date.tzinfo is None:
         return picked_date.date()
     return picked_date.astimezone(client_tz_info).date()
@@ -217,9 +217,9 @@ async def _validate_booking_day(
     session,
     *,
     master_id: int,
-    client_day: datetime.date,
+    client_day: date,
     client_tz_info,
-) -> tuple[bool, datetime.date, datetime.date]:
+) -> tuple[bool, date, date]:
     today_client = datetime.now(tz=client_tz_info).date()
     min_date = today_client + timedelta(days=1)
     entitlements = EntitlementsService(session)
@@ -228,7 +228,7 @@ async def _validate_booking_day(
     return (min_date <= client_day <= max_date), min_date, max_date
 
 
-async def _get_free_slots(session, *, master_id: int, client_day: datetime.date, client_tz: Timezone):
+async def _get_free_slots(session, *, master_id: int, client_day: date, client_tz: Timezone):
     use_case = GetMasterFreeSlots(session)
     return await use_case.execute(master_id=master_id, client_day=client_day, client_tz=client_tz)
 
