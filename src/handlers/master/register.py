@@ -13,7 +13,6 @@ Invite validation and "already a master" checks are performed in `StartMasterReg
 """
 
 import logging
-import re
 from datetime import datetime, time
 
 from aiogram import F, Router
@@ -67,11 +66,14 @@ MASTER_REGISTRATION_CB = {
     "cancel": "m:registration:cancel",
 }
 
-_TIME_RANGE_RE = re.compile(r"^\s*(\d{1,2}:\d{2})\s*[-–—−‒]\s*(\d{1,2}:\d{2})\s*$")
 _DASH_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—−", "-"))
 _HOURS_MAX = 23
 _MINUTES_MAX = 59
 _INVITE_MISCONFIGURED_NOTIFIED = False
+_NAME_MAX_LEN = 64
+_SLOT_SIZE_MIN_MINUTES = 5
+_SLOT_SIZE_MAX_MINUTES = 240
+_SLOT_SIZE_STEP_MINUTES = 5
 
 
 # ------------ helpers ------------
@@ -92,6 +94,10 @@ def _get_invite_policy(settings, *, telegram_id: int) -> tuple[bool, str | None]
 
     invite_secret_value = invite_secret.get_secret_value() if invite_secret is not None else None
     return invite_only, invite_secret_value
+
+
+def _normalize_name(raw: str | None) -> str:
+    return " ".join((raw or "").split()).strip()
 
 
 def _parse_work_days(raw: str) -> list[int] | None:
@@ -149,18 +155,43 @@ def _parse_hhmm(raw: str) -> time | None:
     return time(hour=hours, minute=minutes)
 
 
+def _parse_hour(raw: str) -> time | None:
+    raw = raw.strip()
+    try:
+        hours = int(raw)
+    except ValueError:
+        return None
+    if not (0 <= hours <= _HOURS_MAX):
+        return None
+    return time(hour=hours, minute=0)
+
+
+def _parse_time_value(raw: str) -> time | None:
+    """
+    Parse either "H:MM"/"HH:MM" or "H"/"HH" (treated as full hour).
+    """
+    raw = raw.strip()
+    if ":" in raw:
+        return _parse_hhmm(raw)
+    return _parse_hour(raw)
+
+
 def _parse_time_range(raw: str) -> tuple[time, time] | None:
     """
-    Parse a time range in the format "HH:MM-HH:MM".
+    Parse a time range.
 
-    Example: "10:00-19:00" -> (time(10, 0), time(19, 0))
+    Accepted formats:
+    - "H:MM-H:MM" / "HH:MM-HH:MM"
+    - "H-H" / "HH-HH" (treated as "H:00-HH:00")
+
+    Dash can be "-", "–", "—" and similar.
     """
-    match = _TIME_RANGE_RE.match(raw)
-    if not match:
+    text = raw.replace(" ", "").translate(_DASH_TRANSLATION)
+    if "-" not in text:
         return None
-    start_str, end_str = match.groups()
-    start_time = _parse_hhmm(start_str)
-    end_time = _parse_hhmm(end_str)
+    start_str, end_str = text.split("-", 1)
+    start_time = _parse_time_value(start_str)
+    end_time = _parse_time_value(end_str)
     if start_time is None or end_time is None:
         return None
     if start_time >= end_time:
@@ -183,8 +214,9 @@ def _parse_slot_size(raw: str) -> int | None:
     except ValueError:
         return None
 
-    allowed = {15, 20, 30, 45, 60, 90, 120}
-    if minutes not in allowed:
+    if minutes < _SLOT_SIZE_MIN_MINUTES or minutes > _SLOT_SIZE_MAX_MINUTES:
+        return None
+    if minutes % _SLOT_SIZE_STEP_MINUTES != 0:
         return None
     return minutes
 
@@ -324,7 +356,7 @@ async def start_master_registration(
 @router.message(StateFilter(MasterRegistration.name))
 async def process_master_name(message: Message, state: FSMContext) -> None:
     await track_message(state, message, bucket=MASTER_REGISTRATION_BUCKET)
-    name = (message.text or "").strip()
+    name = _normalize_name(message.text)
     if not name:
         logger.debug(
             "master_reg.name.invalid",
@@ -334,6 +366,20 @@ async def process_master_name(message: Message, state: FSMContext) -> None:
             message,
             state,
             text=txt.name_not_recognized(),
+            bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
+        )
+        return
+
+    if len(name) > _NAME_MAX_LEN:
+        logger.debug(
+            "master_reg.name.too_long",
+            extra={"telegram_id": message.from_user.id if message.from_user else None, "len": len(name)},
+        )
+        await answer_tracked(
+            message,
+            state,
+            text=txt.name_too_long(max_len=_NAME_MAX_LEN),
             bucket=MASTER_REGISTRATION_BUCKET,
             reply_markup=_build_cancel_keyboard(),
         )

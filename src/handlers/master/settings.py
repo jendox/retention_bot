@@ -165,7 +165,7 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith(SETTINGS_CB_PREFIX))
-async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None:
+async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None:  # noqa: C901, PLR0911, PLR0912, PLR0915
     telegram_id = callback.from_user.id
     data = callback.data or ""
 
@@ -329,20 +329,42 @@ def _parse_work_days(raw: str) -> list[int] | None:
         return None
 
 
-def _parse_time_range(raw: str):
-    from datetime import datetime as dt
+def _parse_time_range(raw: str):  # noqa: C901
+    from datetime import time as t
 
-    text = raw.replace(" ", "")
+    dash_translation = str.maketrans(dict.fromkeys("‐‑‒–—−", "-"))
+    hours_max = 23
+    minutes_max = 59
+
+    def parse_time_value(value: str) -> t | None:
+        value = value.strip()
+        if ":" in value:
+            hours_str, minutes_str = value.split(":", 1)
+            try:
+                hours = int(hours_str)
+                minutes = int(minutes_str)
+            except ValueError:
+                return None
+            if not (0 <= hours <= hours_max and 0 <= minutes <= minutes_max):
+                return None
+            return t(hour=hours, minute=minutes)
+
+        try:
+            hours = int(value)
+        except ValueError:
+            return None
+        if not (0 <= hours <= hours_max):
+            return None
+        return t(hour=hours, minute=0)
+
+    text = raw.replace(" ", "").translate(dash_translation)
     if "-" not in text:
         return None
     start_str, end_str = text.split("-", 1)
-    try:
-        start_dt = dt.strptime(start_str, "%H:%M")
-        end_dt = dt.strptime(end_str, "%H:%M")
-    except ValueError:
+    start_t = parse_time_value(start_str)
+    end_t = parse_time_value(end_str)
+    if start_t is None or end_t is None:
         return None
-    start_t = start_dt.time()
-    end_t = end_dt.time()
     if start_t >= end_t:
         return None
     return start_t, end_t
@@ -356,8 +378,12 @@ def _parse_slot_size(raw: str) -> int | None:
         minutes = int(text)
     except ValueError:
         return None
-    allowed = {15, 20, 30, 45, 60, 90, 120}
-    return minutes if minutes in allowed else None
+    min_minutes = 5
+    max_minutes = 240
+    step = 5
+    if minutes < min_minutes or minutes > max_minutes:
+        return None
+    return minutes if minutes % step == 0 else None
 
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_phone))

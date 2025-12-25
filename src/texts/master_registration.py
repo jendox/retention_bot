@@ -20,6 +20,13 @@ def name_not_recognized(*, t: Translator = _noop_t) -> str:
     )
 
 
+def name_too_long(*, max_len: int, t: Translator = _noop_t) -> str:
+    return t(
+        "Имя слишком длинное 🤔\n"
+        f"Пожалуйста, введи имя короче (до <code>{max_len}</code> символов).",
+    )
+
+
 def ask_phone(*, name: str, t: Translator = _noop_t) -> str:
     return t(
         f"Отлично, <b>{html.quote(name)}</b>! ✨\n\n"
@@ -63,7 +70,8 @@ def ask_work_time(*, t: Translator = _noop_t) -> str:
         "<b>Твоё рабочее время в течение дня?</b>\n"
         "Напиши в формате <code>H:MM-H:MM</code>.\n"
         "Можно использовать тире <code>-</code>, <code>–</code> или <code>—</code>.\n\n"
-        "Например: <code>9:00-18:00</code> или <code>10:00–19:00</code>",
+        "Также можно написать просто часы — тогда минуты будут <code>:00</code>.\n\n"
+        "Примеры: <code>9:00-18:00</code>, <code>10:00–19:00</code>, <code>10-19</code>",
     )
 
 
@@ -72,7 +80,8 @@ def work_time_not_recognized(*, t: Translator = _noop_t) -> str:
         "Не получилось разобрать время 🕒\n\n"
         "Напиши, пожалуйста, в формате <code>H:MM-H:MM</code>.\n"
         "Можно использовать тире <code>-</code>, <code>–</code> или <code>—</code>.\n\n"
-        "Примеры: <code>9:00-18:00</code>, <code>10:00–19:00</code>",
+        "Можно писать просто часы — например <code>10-19</code>.\n\n"
+        "Примеры: <code>9:00-18:00</code>, <code>10:00–19:00</code>, <code>10-19</code>",
     )
 
 
@@ -80,15 +89,15 @@ def ask_slot_size(*, t: Translator = _noop_t) -> str:
     return t(
         "Супер! ✅\n\n"
         "<b>Какой длительности обычно одна запись?</b>\n"
-        "Напиши количество минут.\n\n"
-        "Например: <code>30</code>, <code>60</code> или <code>90</code>.",
+        "Напиши количество минут (кратно <code>5</code>).\n\n"
+        "Например: <code>30</code>, <code>45</code>, <code>60</code>.",
     )
 
 
 def slot_size_not_recognized(*, t: Translator = _noop_t) -> str:
     return t(
         "Хмм, не похоже на подходящую длительность слота ⏱️\n\n"
-        "Напиши количество минут, например: <code>30</code>, <code>60</code> или <code>90</code>.",
+        "Напиши количество минут (кратно <code>5</code>), например: <code>30</code>, <code>45</code>, <code>60</code>.",
     )
 
 

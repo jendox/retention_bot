@@ -125,15 +125,18 @@ def ask_work_days(*, t: Translator = _noop_t) -> str:
 
 def ask_work_time(*, t: Translator = _noop_t) -> str:
     return t(
-        "Введи рабочее время в формате <code>HH:MM-HH:MM</code>.\n"
-        "Например: <code>10:00-19:00</code>",
+        "Введи рабочее время в формате <code>H:MM-H:MM</code>.\n"
+        "Можно использовать тире <code>-</code>, <code>–</code> или <code>—</code>.\n"
+        "Также можно написать просто часы — тогда минуты будут <code>:00</code>.\n\n"
+        "Примеры: <code>10:00-19:00</code>, <code>10:00–19:00</code>, <code>10-19</code>",
     )
 
 
 def ask_slot_size(*, t: Translator = _noop_t) -> str:
     return t(
         "Введи длительность слота в минутах.\n"
-        "Например: <code>30</code>, <code>60</code>, <code>90</code>.",
+        "Число должно быть кратно <code>5</code>.\n\n"
+        "Например: <code>30</code>, <code>45</code>, <code>60</code>.",
     )
 
 
@@ -146,11 +149,14 @@ def invalid_days(*, t: Translator = _noop_t) -> str:
 
 
 def invalid_work_time(*, t: Translator = _noop_t) -> str:
-    return t("Не получилось разобрать время. Пример: <code>10:00-19:00</code>.")
+    return t(
+        "Не получилось разобрать время. "
+        "Примеры: <code>10:00-19:00</code>, <code>10:00–19:00</code>, <code>10-19</code>.",
+    )
 
 
 def invalid_slot_size(*, t: Translator = _noop_t) -> str:
-    return t("Нужны минуты из списка: 15, 20, 30, 45, 60, 90, 120.")
+    return t("Нужны минуты, кратные <code>5</code> (например: <code>30</code>, <code>45</code>, <code>60</code>).")
 
 
 def minutes(*, value: int, t: Translator = _noop_t) -> str:
