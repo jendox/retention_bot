@@ -15,7 +15,7 @@ Invite validation and "already a master" checks are performed in `StartMasterReg
 import logging
 from datetime import datetime, time
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -98,6 +98,11 @@ def _get_invite_policy(settings, *, telegram_id: int) -> tuple[bool, str | None]
 
 def _normalize_name(raw: str | None) -> str:
     return " ".join((raw or "").split()).strip()
+
+
+async def _reset_master_registration(state: FSMContext, bot: Bot) -> None:
+    await cleanup_messages(state, bot, bucket=MASTER_REGISTRATION_BUCKET)
+    await state.clear()
 
 
 def _parse_work_days(raw: str) -> list[int] | None:
@@ -302,8 +307,7 @@ async def start_master_registration(
 
     token = _normalize_token(token)
 
-    await cleanup_messages(state, message.bot, bucket=MASTER_REGISTRATION_BUCKET)
-    await state.clear()
+    await _reset_master_registration(state, message.bot)
 
     telegram_id = message.from_user.id
     logger.info(
@@ -322,15 +326,36 @@ async def start_master_registration(
                 admin_txt.invite_policy_misconfigured(),
             )
 
-    async with session_local() as session:
-        result = await StartMasterRegistration(session).execute(
-            StartMasterRegistrationRequest(
-                telegram_id=telegram_id,
-                invite_only=invite_only,
-                invite_secret=invite_secret_value,
-                token=token,
-            ),
+    try:
+        async with session_local() as session:
+            result = await StartMasterRegistration(session).execute(
+                StartMasterRegistrationRequest(
+                    telegram_id=telegram_id,
+                    invite_only=invite_only,
+                    invite_secret=invite_secret_value,
+                    token=token,
+                ),
+            )
+    except Exception:
+        logger.exception("master_reg.start_failed", extra={"telegram_id": telegram_id})
+        await answer_tracked(
+            message,
+            state,
+            text=common_txt.generic_error(),
+            bucket=MASTER_REGISTRATION_BUCKET,
         )
+        return
+
+    logger.info(
+        "master_reg.start_result",
+        extra={
+            "telegram_id": telegram_id,
+            "outcome": str(result.outcome.value),
+            "is_client": bool(result.is_client),
+            "invite_only": bool(invite_only),
+            "has_token": bool(token),
+        },
+    )
 
     if await _handle_start_result(
         message,
@@ -545,7 +570,7 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
     StateFilter(MasterRegistration.confirm),
     F.data == MASTER_REGISTRATION_CB["confirm"],
 )
-async def master_reg_confirm(
+async def master_reg_confirm(  # noqa: C901
     callback: CallbackQuery,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
@@ -576,31 +601,45 @@ async def master_reg_confirm(
         start_time = datetime.strptime(data["start_time"], "%H:%M").time()
         end_time = datetime.strptime(data["end_time"], "%H:%M").time()
     except Exception:
-        await callback.answer(txt.broken_state_retry(), show_alert=True)
-        await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
-        await state.clear()
+        if callback.message is not None:
+            await callback.message.answer(txt.broken_state_retry())
+        await _reset_master_registration(state, callback.bot)
         return
 
-    async with active_session() as session:
-        result = await CompleteMasterRegistration(session).execute(
-            CompleteMasterRegistrationRequest(
-                telegram_id=telegram_id,
-                name=data["name"],
-                phone=data["phone"],
-                work_days=data["work_days"],
-                start_time=start_time,
-                end_time=end_time,
-                slot_size_min=int(data["slot_size_min"]),
-                timezone=Timezone.EUROPE_MINSK,
-            ),
-        )
-        logger.info("master.registration.completed", extra={"master_id": result.master_id, "telegram_id": telegram_id})
+    try:
+        async with active_session() as session:
+            result = await CompleteMasterRegistration(session).execute(
+                CompleteMasterRegistrationRequest(
+                    telegram_id=telegram_id,
+                    name=data["name"],
+                    phone=data["phone"],
+                    work_days=data["work_days"],
+                    start_time=start_time,
+                    end_time=end_time,
+                    slot_size_min=int(data["slot_size_min"]),
+                    timezone=Timezone.EUROPE_MINSK,
+                ),
+            )
+    except Exception:
+        logger.exception("master_reg.complete_failed", extra={"telegram_id": telegram_id})
+        if callback.message is not None:
+            await callback.message.answer(txt.profile_creation_failed(contact=get_settings().billing.contact))
+        await _reset_master_registration(state, callback.bot)
+        return
+
+    logger.info(
+        "master_reg.complete_result",
+        extra={
+            "telegram_id": telegram_id,
+            "master_id": result.master_id,
+            "outcome": str(result.outcome.value),
+        },
+    )
 
     await callback.message.answer(txt.done())
     is_client = bool(data.get("is_client"))
 
-    await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
-    await state.clear()
+    await _reset_master_registration(state, callback.bot)
     await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
     await send_master_main_menu(callback.bot, telegram_id, show_switch_role=is_client)
 
@@ -621,8 +660,7 @@ async def master_reg_restart(
         "master_reg.restart",
         extra={"telegram_id": callback.from_user.id if callback.from_user else None},
     )
-    await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
-    await state.clear()
+    await _reset_master_registration(state, callback.bot)
     await start_master_registration(callback.message, state, user_ctx_storage, token)
 
 
@@ -639,5 +677,4 @@ async def master_reg_restart(
 )
 async def master_reg_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer(common_txt.cancelled(), show_alert=True)
-    await cleanup_messages(state, callback.bot, bucket=MASTER_REGISTRATION_BUCKET)
-    await state.clear()
+    await _reset_master_registration(state, callback.bot)

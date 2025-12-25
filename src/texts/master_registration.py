@@ -137,6 +137,15 @@ def broken_state_retry(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Что-то пошло не так. Попробуй зарегистрироваться заново.")
 
 
+def profile_creation_failed(*, contact: str, t: Translator = _noop_t) -> str:
+    return t(
+        "⚠️ Не получилось создать профиль мастера.\n\n"
+        "Попробуй ещё раз чуть позже.\n\n"
+        "Если проблема не проходит — напиши: "
+        f"{html.quote(contact)}",
+    )
+
+
 def invite_required(*, contact: str, t: Translator = _noop_t) -> str:
     return t(
         "⚠️ Регистрация мастера доступна только по пригласительной ссылке.\n\n"
