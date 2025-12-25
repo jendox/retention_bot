@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aiogram import html
+
 from src.texts.base import Translator, noop_t as _noop_t
 
 
@@ -7,20 +9,20 @@ def ask_name(*, t: Translator = _noop_t) -> str:
     return t(
         "Привет! 👋\n"
         "Давай настроим твой профиль мастера в BeautyDesk.\n\n"
-        "Как тебя зовут? (Например: Маша)",
+        "Как тебя зовут? (Например: Мария)",
     )
 
 
 def name_not_recognized(*, t: Translator = _noop_t) -> str:
     return t(
         "Я не понял имя 🤔\n"
-        "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Маша</b>",
+        "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Мария</b>",
     )
 
 
 def ask_phone(*, name: str, t: Translator = _noop_t) -> str:
     return t(
-        f"Отлично, <b>{name}</b>! ✨\n\n"
+        f"Отлично, <b>{html.quote(name)}</b>! ✨\n\n"
         "Теперь добавь номер телефона для связи (в формате <code>375291234567</code>):",
     )
 
@@ -59,16 +61,18 @@ def ask_work_time(*, t: Translator = _noop_t) -> str:
     return t(
         "Принято! ✅\n\n"
         "<b>Твоё рабочее время в течение дня?</b>\n"
-        "Напиши в формате <code>HH:MM-HH:MM</code>.\n\n"
-        "Например: <code>10:00-19:00</code>",
+        "Напиши в формате <code>H:MM-H:MM</code>.\n"
+        "Можно использовать тире <code>-</code>, <code>–</code> или <code>—</code>.\n\n"
+        "Например: <code>9:00-18:00</code> или <code>10:00–19:00</code>",
     )
 
 
 def work_time_not_recognized(*, t: Translator = _noop_t) -> str:
     return t(
         "Не получилось разобрать время 🕒\n\n"
-        "Напиши, пожалуйста, в формате <code>HH:MM-HH:MM</code>.\n"
-        "Например: <code>10:00-19:00</code>",
+        "Напиши, пожалуйста, в формате <code>H:MM-H:MM</code>.\n"
+        "Можно использовать тире <code>-</code>, <code>–</code> или <code>—</code>.\n\n"
+        "Примеры: <code>9:00-18:00</code>, <code>10:00–19:00</code>",
     )
 
 
@@ -99,11 +103,11 @@ def confirm(
 ) -> str:
     return t(
         "Проверь, пожалуйста, данные 👇\n\n"
-        f"<b>Имя:</b> {name}\n"
-        f"<b>Телефон:</b> {phone}\n"
-        f"<b>Рабочие дни:</b> {work_days}\n"
-        f"<b>Время работы:</b> {work_time}\n"
-        f"<b>Длительность слота:</b> {slot_size_min} мин.\n\n"
+        f"<b>Имя:</b> {html.quote(name)}\n"
+        f"<b>Телефон:</b> {html.quote(phone)}\n"
+        f"<b>Рабочие дни:</b> {html.quote(work_days)}\n"
+        f"<b>Время работы:</b> {html.quote(work_time)}\n"
+        f"<b>Длительность записи:</b> {html.quote(slot_size_min)} мин.\n\n"
         "Всё верно?",
     )
 
@@ -128,7 +132,7 @@ def invite_required(*, contact: str, t: Translator = _noop_t) -> str:
     return t(
         "⚠️ Регистрация мастера доступна только по пригласительной ссылке.\n\n"
         "Напиши сюда — и мы пришлём ссылку: "
-        f"{contact}",
+        f"{html.quote(contact)}",
     )
 
 
@@ -136,5 +140,5 @@ def invite_invalid(*, contact: str, t: Translator = _noop_t) -> str:
     return t(
         "⚠️ Похоже, ссылка для регистрации устарела или уже не работает.\n\n"
         "Напиши сюда — и мы пришлём новую: "
-        f"{contact}",
+        f"{html.quote(contact)}",
     )

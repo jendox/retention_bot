@@ -1,3 +1,18 @@
+"""
+Master registration use-cases.
+
+This module contains two high-level operations used by the Telegram bot master registration flow:
+
+1) StartMasterRegistration
+   - Detects whether the user is already a master and whether they also exist as a client.
+   - Optionally enforces invite-only registration (token must be present and valid).
+   - Returns an outcome used by the handler to either show the master menu, ask for an invite, or start the FSM.
+
+2) CompleteMasterRegistration
+   - Creates a master profile (idempotent via telegram_id).
+   - Ensures the master has an active trial subscription if none exists.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -55,6 +70,14 @@ class StartMasterRegistration:
             return False
 
     async def execute(self, request: StartMasterRegistrationRequest) -> StartMasterRegistrationResult:
+        """
+        Validate whether a user can start master registration.
+
+        The invite policy is controlled outside of this use-case via `request.invite_only` and
+        `request.invite_secret` (usually derived from settings). When invite-only is enabled,
+        a valid token must be provided; token claims are not used further in this flow, only
+        the fact that the token is valid.
+        """
         is_master = await self._check_if_master(request.telegram_id)
         is_client = await self._check_if_client(request.telegram_id)
 
@@ -116,6 +139,13 @@ class CompleteMasterRegistration:
         self._session = session
 
     async def execute(self, request: CompleteMasterRegistrationRequest) -> CompleteMasterRegistrationResult:
+        """
+        Create a master profile and ensure a trial subscription exists.
+
+        This operation is idempotent for a given `telegram_id`: if the master already exists, it is loaded and
+        the outcome is `ALREADY_EXISTS`. In both cases, if the master has no subscription record, a trial
+        subscription is created/updated with `TRIAL_DAYS` duration.
+        """
         master_repo = MasterRepository(self._session)
         subscription_repo = SubscriptionRepository(self._session)
 

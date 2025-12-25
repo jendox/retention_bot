@@ -1,4 +1,19 @@
+"""
+Master registration (Telegram bot) handler.
+
+This file implements an aiogram FSM that collects the data required to create a master profile:
+- name
+- phone
+- work days (0..6 in DB, where 0 is Monday)
+- work time range
+- slot size in minutes
+
+Entry point is `start_master_registration(...)`, which can be called with an optional invite `token`.
+Invite validation and "already a master" checks are performed in `StartMasterRegistration` use-case.
+"""
+
 import logging
+import re
 from datetime import datetime, time
 
 from aiogram import F, Router
@@ -44,18 +59,25 @@ MASTER_REGISTRATION_CB = {
     "cancel": "m:registration:cancel",
 }
 
+_TIME_RANGE_RE = re.compile(r"^\s*(\d{1,2}:\d{2})\s*[-–—−‒]\s*(\d{1,2}:\d{2})\s*$")
+_DASH_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—−", "-"))
+_HOURS_MAX = 23
+_MINUTES_MAX = 59
+
 
 # ------------ helpers ------------
 
 def _parse_work_days(raw: str) -> list[int] | None:
     """
-    Parse week days:
+    Parse a week day specification entered by the user.
+
     - "1-5" -> [0,1,2,3,4]
     - "1,3,5" -> [0,2,4]
-    where 1 = monday, 7 = sunday.
-    In the database saved like 0-6.
+
+    User input uses 1..7 where 1 = Monday and 7 = Sunday.
+    The database stores days as 0..6 where 0 = Monday.
     """
-    text = raw.replace(" ", "")
+    text = raw.replace(" ", "").translate(_DASH_TRANSLATION)
     if not text:
         return None
 
@@ -85,31 +107,46 @@ def _parse_work_days(raw: str) -> list[int] | None:
         return None
 
 
-def _parse_time_range(raw: str) -> tuple[time, time] | None:
-    """
-    String parse "10:00-19:00" в (time(10,0), time(19,0)).
-    """
-    text = raw.replace(" ", "")
-    if "-" not in text:
+def _parse_hhmm(raw: str) -> time | None:
+    raw = raw.strip()
+    if ":" not in raw:
         return None
-    start_str, end_str = text.split("-", 1)
+    hours_str, minutes_str = raw.split(":", 1)
     try:
-        start_dt = datetime.strptime(start_str, "%H:%M")
-        end_dt = datetime.strptime(end_str, "%H:%M")
+        hours = int(hours_str)
+        minutes = int(minutes_str)
     except ValueError:
         return None
+    if not (0 <= hours <= _HOURS_MAX and 0 <= minutes <= _MINUTES_MAX):
+        return None
+    return time(hour=hours, minute=minutes)
 
-    start_t = start_dt.time()
-    end_t = end_dt.time()
-    if start_t >= end_t:
+
+def _parse_time_range(raw: str) -> tuple[time, time] | None:
+    """
+    Parse a time range in the format "HH:MM-HH:MM".
+
+    Example: "10:00-19:00" -> (time(10, 0), time(19, 0))
+    """
+    match = _TIME_RANGE_RE.match(raw)
+    if not match:
+        return None
+    start_str, end_str = match.groups()
+    start_time = _parse_hhmm(start_str)
+    end_time = _parse_hhmm(end_str)
+    if start_time is None or end_time is None:
+        return None
+    if start_time >= end_time:
         return None
 
-    return start_t, end_t
+    return start_time, end_time
 
 
 def _parse_slot_size(raw: str) -> int | None:
     """
-    Ожидаем количество минут. Разумные значения: 15, 20, 30, 45, 60, 90, 120.
+    Parse a slot size in minutes.
+
+    Only a small set of values is allowed to keep the schedule grid predictable for clients.
     """
     text = raw.strip()
     if not text:
@@ -155,6 +192,12 @@ async def start_master_registration(
     user_ctx_storage: UserContextStorage,
     token: str | None = None,
 ) -> None:
+    """
+    Start the master registration flow.
+
+    This handler checks whether the user is already a master and whether registration requires an invite.
+    If registration can proceed, it starts the FSM by asking for the master name.
+    """
     telegram_id = message.from_user.id
     logger.info(
         "master_reg.start",
@@ -165,8 +208,7 @@ async def start_master_registration(
     invite_only = bool(invite_secret) and not settings.security.master_public_registration
 
     async with session_local() as session:
-        starter = StartMasterRegistration(session)
-        result = await starter.execute(
+        result = await StartMasterRegistration(session).execute(
             StartMasterRegistrationRequest(
                 telegram_id=telegram_id,
                 invite_only=invite_only,
