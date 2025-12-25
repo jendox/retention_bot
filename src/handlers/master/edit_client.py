@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
+from src.handlers.master.ui import safe_bot_edit_message_text, safe_edit_text
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientUpdate
 from src.texts import common as common_txt, edit_client as txt
@@ -110,16 +111,16 @@ async def _get_last_card_message_ref(state: FSMContext) -> tuple[int | None, int
 async def _update_card(message: Message, state: FSMContext, selected: dict) -> None:
     chat_id, message_id = await _get_last_card_message_ref(state)
     if chat_id is not None and message_id is not None:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=_render_client_card(selected),
-                reply_markup=_kb_actions(),
-            )
+        ok = await safe_bot_edit_message_text(
+            message.bot,
+            chat_id=int(chat_id),
+            message_id=int(message_id),
+            text=_render_client_card(selected),
+            reply_markup=_kb_actions(),
+            event="edit_client.update_card_failed",
+        )
+        if ok:
             return
-        except Exception:
-            logger.debug("edit_client.update_card_failed", exc_info=True)
 
     card = await message.answer(_render_client_card(selected), reply_markup=_kb_actions())
     await track_message(state, card, bucket=EDIT_CLIENT_CARD_BUCKET)
@@ -257,9 +258,11 @@ async def pick_client(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(edit_client_selected=selected)
     if callback.message:
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             text=_render_client_card(selected),
             reply_markup=_kb_actions(),
+            event="edit_client.pick_failed",
         )
     await state.set_state(EditClientStates.action)
 

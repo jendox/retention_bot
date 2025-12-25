@@ -6,12 +6,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session
 from src.datetime_utils import to_zone
+from src.handlers.master.guards import rate_limit_callback
+from src.handlers.master.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.schemas.enums import BookingStatus
 from src.texts import master_booking_review as txt
 from src.texts.buttons import btn_cancel_booking
@@ -64,10 +67,12 @@ def _review_error_text(error: ReviewMasterBookingError | None) -> str:
 async def _disable_keyboard(callback: CallbackQuery) -> None:
     if callback.message is None:
         return
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        ev.debug("master_booking_review.disable_keyboard_failed")
+    await safe_edit_reply_markup(
+        callback.message,
+        reply_markup=None,
+        ev=ev,
+        event="master_booking_review.disable_keyboard_failed",
+    )
 
 
 def _master_review_text(*, booking, new_status: BookingStatus) -> str:
@@ -128,6 +133,7 @@ async def _maybe_notify_client(
 async def master_review_booking(
     callback: CallbackQuery,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     parsed = _parse_review_callback(callback.data or "")
@@ -136,6 +142,15 @@ async def master_review_booking(
         return
 
     booking_id, action = parsed
+    if not await rate_limit_callback(
+        callback,
+        rate_limiter,
+        name="master_booking_review:action",
+        ttl_sec=2,
+        booking_id=booking_id,
+        action=action,
+    ):
+        return
     master_telegram_id = callback.from_user.id
     bind_log_context(flow="master_booking_review", step=action)
 
@@ -182,7 +197,13 @@ async def master_review_booking(
     master_text = _master_review_text(booking=booking, new_status=new_status)
 
     if callback.message:
-        await callback.message.edit_text(master_text, parse_mode="HTML")
+        await safe_edit_text(
+            callback.message,
+            text=master_text,
+            parse_mode="HTML",
+            ev=ev,
+            event="master_booking_review.edit_failed",
+        )
     await callback.answer(txt.done(), show_alert=False)
 
     await _maybe_notify_client(

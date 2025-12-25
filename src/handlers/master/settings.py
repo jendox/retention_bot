@@ -1,7 +1,6 @@
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -9,6 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
+from src.handlers.master.ui import safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
@@ -163,26 +163,18 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
     if message_id is None:
         return False
     master, plan = await _load_master_and_plan(telegram_id)
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=_render_details(master=master, plan=plan),
-            reply_markup=_kb_settings(
-                notify_clients=bool(getattr(master, "notify_clients", True)),
-                plan_is_pro=plan.is_pro,
-            ),
-            parse_mode="HTML",
-        )
-    except TelegramBadRequest as exc:
-        # Telegram can reject no-op edits (same text + markup). That's fine for "refresh" UX.
-        if "message is not modified" in str(exc).lower():
-            logger.debug(
-                "master.settings.message_not_modified",
-                extra={"chat_id": chat_id, "message_id": message_id},
-            )
-        else:
-            raise
+    await safe_bot_edit_message_text(
+        bot,
+        chat_id=int(chat_id),
+        message_id=int(message_id),
+        text=_render_details(master=master, plan=plan),
+        reply_markup=_kb_settings(
+            notify_clients=bool(getattr(master, "notify_clients", True)),
+            plan_is_pro=plan.is_pro,
+        ),
+        parse_mode="HTML",
+        event="master.settings.refresh_failed",
+    )
     return True
 
 
@@ -193,10 +185,8 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
 
     if data == f"{SETTINGS_CB_PREFIX}back":
         await callback.answer()
-        try:
-            await callback.message.delete()
-        except Exception:
-            logger.debug("master.settings.delete_failed", exc_info=True)
+        if callback.message is not None:
+            await safe_delete(callback.message, event="master.settings.delete_failed")
         return
 
     try:
@@ -219,10 +209,13 @@ async def settings_callbacks(callback: CallbackQuery, state: FSMContext) -> None
 
     if data == f"{SETTINGS_CB_PREFIX}tz":
         await callback.answer()
-        await callback.message.edit_text(
-            text=txt.choose_timezone(),
-            reply_markup=_kb_timezones(),
-        )
+        if callback.message is not None:
+            await safe_edit_text(
+                callback.message,
+                text=txt.choose_timezone(),
+                reply_markup=_kb_timezones(),
+                event="master.settings.edit_failed",
+            )
         return
 
     if data == f"{SETTINGS_CB_PREFIX}phone":

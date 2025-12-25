@@ -3,10 +3,10 @@ from html import escape as html_escape
 from math import ceil
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import active_session
+from src.handlers.master.ui import safe_delete, safe_edit_reply_markup, safe_edit_text
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.repositories import MasterNotFound, MasterRepository
@@ -83,26 +83,15 @@ def _build_page_payload(
     return text, keyboard, total_pages
 
 
-async def _safe_edit_text(message, *, text: str, reply_markup: InlineKeyboardMarkup) -> None:
-    try:
-        await message.edit_text(text=text, reply_markup=reply_markup)
-    except TelegramBadRequest as exc:
-        if "message is not modified" in str(exc).lower():
-            ev.debug("master_list_clients.not_modified")
-            return
-        ev.warning("master_list_clients.edit_failed", error=str(exc))
-
-
 async def _close_clients_list(message) -> None:
-    try:
-        await message.delete()
-    except TelegramBadRequest as exc:
-        # Best-effort cleanup: deletion is racy; hide keyboard if needed.
-        ev.debug("master_list_clients.close_delete_failed", error=str(exc))
-        try:
-            await message.edit_reply_markup(reply_markup=None)
-        except TelegramBadRequest as exc2:
-            ev.debug("master_list_clients.close_disable_keyboard_failed", error=str(exc2))
+    ok = await safe_delete(message, ev=ev, event="master_list_clients.close_delete_failed")
+    if not ok:
+        await safe_edit_reply_markup(
+            message,
+            reply_markup=None,
+            ev=ev,
+            event="master_list_clients.close_disable_keyboard_failed",
+        )
 
 
 async def _fetch_clients_or_alert(callback: CallbackQuery, *, telegram_id: int) -> Sequence | None:
@@ -237,10 +226,12 @@ async def master_clients_pagination(callback: CallbackQuery) -> None:
         return
 
     if not all_clients:
-        await _safe_edit_text(
+        await safe_edit_text(
             callback.message,
             text=txt.no_clients_now(),
             reply_markup=_build_empty_clients_keyboard(),
+            ev=ev,
+            event="master_list_clients.edit_failed",
         )
         return
 
@@ -248,4 +239,10 @@ async def master_clients_pagination(callback: CallbackQuery) -> None:
     if payload is None:
         return
     text, keyboard, _ = payload
-    await _safe_edit_text(callback.message, text=text, reply_markup=keyboard)
+    await safe_edit_text(
+        callback.message,
+        text=text,
+        reply_markup=keyboard,
+        ev=ev,
+        event="master_list_clients.edit_failed",
+    )

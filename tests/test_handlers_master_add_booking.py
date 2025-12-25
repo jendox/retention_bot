@@ -36,6 +36,7 @@ class MemoryState:
 async def _fake_active_session():
     yield object()
 
+
 @asynccontextmanager
 async def _fake_session_local():
     yield object()
@@ -251,3 +252,148 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.message.edit_text.assert_awaited()
         data = await state.get_data()
         self.assertFalse(bool(data.get("confirm_in_progress")))
+
+    async def test_smoke_happy_path_search_choose_date_slot_confirm(self) -> None:
+        from src.handlers.master import add_booking as h
+        from src.schemas.enums import Timezone
+
+        state = MemoryState()
+
+        bot = SimpleNamespace(send_message=AsyncMock())
+        start_message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            text="",
+            bot=bot,
+            chat=SimpleNamespace(id=10),
+            answer=AsyncMock(),
+        )
+
+        class _Client:
+            def __init__(self, client_id: int) -> None:
+                self.id = client_id
+                self.name = "Client"
+                self.phone = None
+                self.telegram_id = None
+                self.timezone = Timezone.EUROPE_MINSK
+                self.notifications_enabled = True
+
+            def to_state_dict(self) -> dict:
+                return {
+                    "id": self.id,
+                    "name": self.name,
+                    "phone": self.phone,
+                    "telegram_id": self.telegram_id,
+                    "timezone": str(self.timezone.value),
+                    "notifications_enabled": self.notifications_enabled,
+                }
+
+        master = SimpleNamespace(
+            id=1,
+            slot_size_min=60,
+            timezone=Timezone.EUROPE_MINSK,
+            clients=[_Client(2)],
+        )
+
+        slot_utc = datetime.now(UTC) + timedelta(days=1)
+
+        class _Calendar:
+            async def start_calendar(self):
+                return SimpleNamespace()
+
+            async def process_selection(self, callback, callback_data):
+                return True, slot_utc
+
+        class _Entitlements:
+            def __init__(self, session) -> None:
+                pass
+
+            async def max_booking_horizon_days(self, *, master_id: int):
+                return 30
+
+        class _Slots:
+            def __init__(self, session) -> None:
+                pass
+
+            async def execute(self, *, master_id, client_day, client_tz):
+                return SimpleNamespace(slots_utc=[slot_utc], master_day=client_day)
+
+        class _Create:
+            def __init__(self, session) -> None:
+                pass
+
+            async def execute(self, request):
+                return CreateMasterBookingResult(
+                    ok=True,
+                    booking=SimpleNamespace(id=7),
+                    master=SimpleNamespace(id=1, name="M", slot_size_min=60, notify_clients=True),
+                )
+
+        with (
+            patch.object(h, "track_message", AsyncMock()),
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "answer_tracked", AsyncMock()),
+            patch.object(h, "_load_master_with_clients", AsyncMock(return_value=master)),
+            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(h, "session_local", _fake_session_local),
+            patch.object(h, "EntitlementsService", _Entitlements),
+            patch.object(h, "GetMasterFreeSlots", _Slots),
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "CreateMasterBooking", _Create),
+            patch.object(h, "cleanup_messages", AsyncMock()),
+        ):
+            await h.start_add_booking(start_message, state)
+            self.assertEqual(state._state, h.AddBookingStates.search_client)
+
+            query_message = SimpleNamespace(
+                from_user=SimpleNamespace(id=10),
+                text="Cli",
+                bot=bot,
+                chat=SimpleNamespace(id=10),
+                answer=AsyncMock(),
+            )
+            await h.search_client(query_message, state)
+
+            choose_cb = SimpleNamespace(
+                from_user=SimpleNamespace(id=10),
+                data="m:add_booking:client:2",
+                bot=bot,
+                message=SimpleNamespace(edit_text=AsyncMock()),
+                answer=AsyncMock(),
+            )
+            await h.choose_client(choose_cb, state)
+            self.assertEqual(state._state, h.AddBookingStates.selecting_date)
+
+            pick_date_cb = SimpleNamespace(
+                from_user=SimpleNamespace(id=10),
+                data="",
+                bot=bot,
+                message=SimpleNamespace(edit_text=AsyncMock()),
+                answer=AsyncMock(),
+            )
+            await h.pick_date(callback=pick_date_cb, callback_data=SimpleNamespace(), state=state)
+            self.assertEqual(state._state, h.AddBookingStates.selecting_slot)
+
+            pick_slot_cb = SimpleNamespace(
+                from_user=SimpleNamespace(id=10),
+                data="m:add_booking:slot:0",
+                bot=bot,
+                message=SimpleNamespace(edit_text=AsyncMock()),
+                answer=AsyncMock(),
+            )
+            await h.pick_slot(pick_slot_cb, state)
+            self.assertEqual(state._state, h.AddBookingStates.confirm)
+
+            confirm_cb = SimpleNamespace(
+                from_user=SimpleNamespace(id=10),
+                data="m:add_booking:confirm",
+                bot=bot,
+                message=SimpleNamespace(edit_reply_markup=AsyncMock()),
+                answer=AsyncMock(),
+            )
+            await h.confirm_booking(
+                callback=confirm_cb,
+                state=state,
+                notifier=SimpleNamespace(maybe_send=AsyncMock(return_value=True)),
+            )
+
+        self.assertEqual(await state.get_data(), {})

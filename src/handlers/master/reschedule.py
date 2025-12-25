@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from html import escape as html_escape
 
@@ -13,12 +14,16 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
 from src.filters.user_role import UserRole
+from src.handlers.master.flow import context_lost
+from src.handlers.master.guards import rate_limit_callback
+from src.handlers.master.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import BookingNotFound, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BookingStatus, Timezone
@@ -47,6 +52,15 @@ class RescheduleStates(StatesGroup):
     selecting_date = State()
     selecting_slot = State()
     confirm = State()
+
+
+@dataclass(frozen=True)
+class _ConfirmMeta:
+    booking_id: int
+    new_start_at: datetime
+    client_tg: int | None
+    return_scope: str | None
+    return_page: int | None
 
 
 def _cb_slot(index: int) -> str:
@@ -93,8 +107,15 @@ async def _restore_calendar(callback: CallbackQuery, state: FSMContext) -> None:
     calendar = SimpleCalendar()
     reply_markup = await calendar.start_calendar()
     if callback.message is not None:
-        await callback.message.edit_text(txt.choose_new_date(), reply_markup=reply_markup)
-        return
+        ok = await safe_edit_text(
+            callback.message,
+            text=txt.choose_new_date(),
+            reply_markup=reply_markup,
+            ev=ev,
+            event="master_reschedule.edit_failed",
+        )
+        if ok:
+            return
     await _send_and_track(
         state=state,
         bot=callback.bot,
@@ -114,8 +135,15 @@ async def _show_slots_list(
     text = txt.slots_title(day=picked_day)
     reply_markup = _build_slots_keyboard(slots_local)
     if callback.message is not None:
-        await callback.message.edit_text(text=text, reply_markup=reply_markup)
-        return
+        ok = await safe_edit_text(
+            callback.message,
+            text=text,
+            reply_markup=reply_markup,
+            ev=ev,
+            event="master_reschedule.edit_failed",
+        )
+        if ok:
+            return
     await _send_and_track(
         state=state,
         bot=callback.bot,
@@ -290,10 +318,12 @@ async def _confirm_error_same_slot(callback: CallbackQuery, state: FSMContext) -
 async def _disable_callback_keyboard(callback: CallbackQuery) -> None:
     if callback.message is None:
         return
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        ev.debug("master_reschedule.confirm.disable_keyboard_failed")
+    await safe_edit_reply_markup(
+        callback.message,
+        reply_markup=None,
+        ev=ev,
+        event="master_reschedule.confirm.disable_keyboard_failed",
+    )
 
 
 async def _execute_reschedule(
@@ -320,6 +350,49 @@ async def _execute_reschedule(
             admin_alerter=admin_alerter,
         )
         return RescheduleMasterBookingResult(ok=False)
+
+
+async def _apply_confirm_result(
+    *,
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    result: RescheduleMasterBookingResult,
+    meta: _ConfirmMeta,
+) -> None:
+    ev.info(
+        "master_reschedule.confirm_result",
+        ok=bool(result.ok),
+        error=str(result.error.value) if result.error else None,
+        booking_id=meta.booking_id,
+    )
+
+    if not result.ok:
+        await _handle_confirm_error(error=result.error, callback=callback, state=state)
+        if result.error != RescheduleMasterBookingError.SLOT_NOT_AVAILABLE:
+            await _return_to_schedule(callback, scope=meta.return_scope, page=meta.return_page)
+        return
+
+    booking = result.booking
+    if booking is None:
+        ev.warning("master_reschedule.state_invalid", reason="missing_booking_result")
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_booking_result")
+        return
+
+    await callback.answer(txt.updated(), show_alert=True)
+
+    if meta.client_tg is not None:
+        await _notify_client_about_reschedule(
+            callback=callback,
+            notifier=notifier,
+            booking=booking,
+            new_start_at=meta.new_start_at,
+            client_tg=meta.client_tg,
+            plan_is_pro=result.plan_is_pro,
+        )
+
+    await _reset_reschedule(state, callback.bot)
+    await _return_to_schedule(callback, scope=meta.return_scope, page=meta.return_page)
 
 
 async def _handle_confirm_error(
@@ -400,6 +473,7 @@ async def _return_to_schedule(callback: CallbackQuery, *, scope: str | None, pag
 async def start_reschedule(
     callback: CallbackQuery,
     state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
     *,
     booking_id: int,
     scope,
@@ -410,6 +484,14 @@ async def start_reschedule(
     `scope` is expected to be src.handlers.master.schedule.Scope.
     """
     bind_log_context(flow="master_reschedule", step="start")
+    if not await rate_limit_callback(
+        callback,
+        rate_limiter,
+        name="master_reschedule:start",
+        ttl_sec=2,
+        booking_id=booking_id,
+    ):
+        return
     ev.info("master_reschedule.start", booking_id=booking_id)
 
     booking, deny_text, deny_meta, deny_exc = await _load_booking_for_start(
@@ -453,8 +535,15 @@ async def start_reschedule(
     StateFilter(RescheduleStates.selecting_date),
     SimpleCalendarCallback.filter(),
 )
-async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext) -> None:
+async def pick_date(
+    callback: CallbackQuery,
+    callback_data: SimpleCalendarCallback,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
     bind_log_context(flow="master_reschedule", step="pick_date")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_reschedule:pick_date", ttl_sec=1):
+        return
     selected, picked_date = await SimpleCalendar().process_selection(callback, callback_data)
     if not selected:
         return
@@ -463,8 +552,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
     state_data = _pick_date_state(data)
     if state_data is None:
         ev.warning("master_reschedule.state_invalid", reason="missing_state", stage="pick_date")
-        await callback.answer(txt.broken_state(), show_alert=True)
-        await _reset_reschedule(state, callback.bot)
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_state")
         return
     booking_id, master_id, master_tz_name = state_data
 
@@ -477,21 +565,14 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
             picked_day=picked_day,
             master_tz=master_tz,
         )
-    except Exception as exc:
-        await ev.aexception("master_reschedule.pick_date_failed", stage="horizon", exc=exc)
-        await callback.answer(txt.update_failed(), show_alert=True)
-        await _restore_calendar(callback, state)
-        return
+        if not allowed:
+            await callback.answer(
+                text=txt.date_out_of_range(today=today_master, max_day=max_day),
+                show_alert=True,
+            )
+            await _restore_calendar(callback, state)
+            return
 
-    if not allowed:
-        await callback.answer(
-            text=txt.date_out_of_range(today=today_master, max_day=max_day),
-            show_alert=True,
-        )
-        await _restore_calendar(callback, state)
-        return
-
-    try:
         result = await _fetch_free_slots_for_day(
             master_id=master_id,
             master_day=picked_day,
@@ -499,7 +580,7 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
             exclude_booking_id=booking_id,
         )
     except Exception as exc:
-        await ev.aexception("master_reschedule.pick_date_failed", stage="free_slots", exc=exc)
+        await ev.aexception("master_reschedule.pick_date_failed", stage="use_case", exc=exc)
         await callback.answer(txt.update_failed(), show_alert=True)
         await _restore_calendar(callback, state)
         return
@@ -559,7 +640,7 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     client_name = data.get("reschedule_client_name") or txt.client_fallback()
     if not slots_iso or master_tz_name is None or index < 0 or index >= len(slots_iso):
         ev.warning("master_reschedule.state_invalid", reason="slot_out_of_range", index=index, slots_len=len(slots_iso))
-        await callback.answer(txt.broken_state(), show_alert=True)
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="slot_out_of_range")
         return
 
     slot_utc = datetime.fromisoformat(slots_iso[index])
@@ -568,14 +649,29 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
 
     if callback.message:
         client_name_safe = html_escape(str(client_name))
-        await callback.message.edit_text(
+        ok = await safe_edit_text(
+            callback.message,
             text=txt.confirm(
                 client_name=client_name_safe,
                 day=f"{slot_local:%d.%m.%Y}",
                 time_str=f"{slot_local:%H:%M}",
             ),
             reply_markup=_build_confirm_keyboard(),
+            ev=ev,
+            event="master_reschedule.edit_failed",
         )
+        if not ok:
+            await _send_and_track(
+                state=state,
+                bot=callback.bot,
+                chat_id=callback.from_user.id,
+                text=txt.confirm(
+                    client_name=client_name_safe,
+                    day=f"{slot_local:%d.%m.%Y}",
+                    time_str=f"{slot_local:%H:%M}",
+                ),
+                reply_markup=_build_confirm_keyboard(),
+            )
     else:
         client_name_safe = html_escape(str(client_name))
         await _send_and_track(
@@ -602,10 +698,18 @@ async def confirm(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_reschedule", step="confirm")
     data = await state.get_data()
+    if not await rate_limit_callback(
+        callback,
+        rate_limiter,
+        name="master_reschedule:confirm",
+        ttl_sec=2,
+    ):
+        return
     if data.get("confirm_in_progress"):
         ev.debug("master_reschedule.confirm_duplicate_click")
         await callback.answer()
@@ -616,8 +720,7 @@ async def confirm(
     state_data = _confirm_state(data)
     if state_data is None:
         ev.warning("master_reschedule.state_invalid", reason="missing_confirm_data")
-        await callback.answer(txt.broken_state(), show_alert=True)
-        await _reset_reschedule(state, callback.bot)
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_confirm_data")
         return
     booking_id, new_start_at, client_tg, return_scope, return_page = state_data
     result = await _execute_reschedule(
@@ -626,41 +729,19 @@ async def confirm(
         new_start_at=new_start_at,
         admin_alerter=admin_alerter,
     )
-
-    ev.info(
-        "master_reschedule.confirm_result",
-        ok=bool(result.ok),
-        error=str(result.error.value) if result.error else None,
-        booking_id=booking_id,
-    )
-
-    if not result.ok:
-        await _handle_confirm_error(error=result.error, callback=callback, state=state)
-        if result.error != RescheduleMasterBookingError.SLOT_NOT_AVAILABLE:
-            await _return_to_schedule(callback, scope=return_scope, page=return_page)
-        return
-
-    booking = result.booking
-    if booking is None:
-        ev.warning("master_reschedule.state_invalid", reason="missing_booking_result")
-        await callback.answer(txt.update_failed(), show_alert=True)
-        await _reset_reschedule(state, callback.bot)
-        return
-
-    await callback.answer(txt.updated(), show_alert=True)
-
-    if client_tg is not None:
-        await _notify_client_about_reschedule(
-            callback=callback,
-            notifier=notifier,
-            booking=booking,
+    await _apply_confirm_result(
+        callback=callback,
+        state=state,
+        notifier=notifier,
+        result=result,
+        meta=_ConfirmMeta(
+            booking_id=booking_id,
             new_start_at=new_start_at,
             client_tg=client_tg,
-            plan_is_pro=result.plan_is_pro,
-        )
-
-    await _reset_reschedule(state, callback.bot)
-    await _return_to_schedule(callback, scope=return_scope, page=return_page)
+            return_scope=return_scope,
+            return_page=return_page,
+        ),
+    )
 
 
 @router.callback_query(

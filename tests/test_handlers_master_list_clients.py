@@ -37,20 +37,17 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_close_falls_back_to_hiding_keyboard_on_delete_race(self) -> None:
         from src.handlers.master import list_clients as h
 
-        class _BadRequest(Exception):
-            pass
-
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
             data=f"{h.CLIENTS_PAGE_PREFIX}close",
             answer=AsyncMock(),
             message=SimpleNamespace(
-                delete=AsyncMock(side_effect=_BadRequest("message to delete not found")),
+                delete=AsyncMock(),
                 edit_reply_markup=AsyncMock(),
             ),
         )
 
-        with patch.object(h, "TelegramBadRequest", _BadRequest):
+        with patch.object(h, "safe_delete", AsyncMock(return_value=False)):
             await h.master_clients_pagination(callback)
 
         callback.message.edit_reply_markup.assert_awaited_with(reply_markup=None)

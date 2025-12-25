@@ -15,12 +15,14 @@ from src.filters.user_role import UserRole
 from src.handlers.master.add_booking import start_add_booking
 from src.handlers.master.add_client import start_add_client
 from src.handlers.master.edit_client import start_edit_client
+from src.handlers.master.guards import rate_limit_message
 from src.handlers.master.invite_client import start_invite_client
 from src.handlers.master.list_clients import start_clients_entry
 from src.handlers.master.schedule import master_schedule
 from src.handlers.master.settings import open_master_settings
 from src.notifications.notifier import Notifier
 from src.observability.alerts import AdminAlerter
+from src.rate_limiter import RateLimiter
 from src.texts import common as common_txt, master_menu as txt
 from src.user_context import ActiveRole, UserContextStorage
 
@@ -106,10 +108,11 @@ async def master_add_client(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     await callback.answer()
-    await start_add_client(callback, state, notifier, admin_alerter=admin_alerter)
+    await start_add_client(callback, state, notifier, rate_limiter, admin_alerter=admin_alerter)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["search"])
@@ -122,10 +125,11 @@ async def master_invite_client(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     await callback.answer()
-    await start_invite_client(callback, state, notifier, admin_alerter=admin_alerter)
+    await start_invite_client(callback, state, notifier, rate_limiter, admin_alerter=admin_alerter)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["back"])
@@ -150,7 +154,9 @@ async def master_switch_role(
 
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_ADD_BOOKING)
-async def master_add_booking(message: Message, state: FSMContext) -> None:
+async def master_add_booking(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    if not await rate_limit_message(message, rate_limiter, name="master_add_booking:start", ttl_sec=2):
+        return
     await start_add_booking(message, state)
 
 

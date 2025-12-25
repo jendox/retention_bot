@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from html import escape as html_escape
 
@@ -11,6 +12,9 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
+from src.handlers.master.flow import context_lost
+from src.handlers.master.guards import rate_limit_callback
+from src.handlers.master.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
@@ -18,6 +22,7 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.schemas import MasterWithClients
 from src.schemas.enums import Timezone
@@ -27,6 +32,7 @@ from src.use_cases.create_master_booking import (
     CreateMasterBooking,
     CreateMasterBookingError,
     CreateMasterBookingRequest,
+    CreateMasterBookingResult,
 )
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
@@ -43,6 +49,16 @@ class AddBookingStates(StatesGroup):
     selecting_date = State()
     selecting_slot = State()
     confirm = State()
+
+
+@dataclass(frozen=True)
+class _ConfirmInput:
+    slot_dt: datetime
+    client: dict
+    master_id: int
+    master_tz_enum: Timezone
+    master_day: date | None
+    slots: list[datetime]
 
 
 def _filter_clients(clients: Iterable, query: str) -> list:
@@ -118,8 +134,15 @@ async def _restore_calendar(callback: CallbackQuery, state: FSMContext) -> None:
     calendar = SimpleCalendar()
     reply_markup = await calendar.start_calendar()
     if callback.message is not None:
-        await callback.message.edit_text(text=txt.choose_date(), reply_markup=reply_markup)
-        return
+        ok = await safe_edit_text(
+            callback.message,
+            text=txt.choose_date(),
+            reply_markup=reply_markup,
+            ev=ev,
+            event="master_add_booking.edit_failed",
+        )
+        if ok:
+            return
     await _send_and_track(
         state=state,
         bot=callback.bot,
@@ -127,6 +150,250 @@ async def _restore_calendar(callback: CallbackQuery, state: FSMContext) -> None:
         text=txt.choose_date(),
         reply_markup=reply_markup,
     )
+
+
+async def _validate_picked_day_in_horizon(
+    session,
+    *,
+    master_id: int,
+    picked_date: datetime,
+    master_tz_enum: Timezone,
+) -> tuple[bool, date, date, date]:
+    entitlements = EntitlementsService(session)
+    horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
+    master_tz_info = get_timezone(str(master_tz_enum.value))
+    today_master = datetime.now(tz=master_tz_info).date()
+    picked_day = picked_date.date() if picked_date.tzinfo is None else picked_date.astimezone(master_tz_info).date()
+    max_date = today_master + timedelta(days=horizon_days)
+    return (today_master <= picked_day <= max_date), picked_day, today_master, max_date
+
+
+async def _pick_date_state(state: FSMContext) -> tuple[int, Timezone] | None:
+    data = await state.get_data()
+    master_id = data.get("master_id")
+    master_timezone = data.get("master_timezone")
+    if master_id is None or master_timezone is None:
+        return None
+    return int(master_id), Timezone(master_timezone)
+
+
+async def _edit_or_send(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    if callback.message is not None:
+        ok = await safe_edit_text(
+            callback.message,
+            text=text,
+            reply_markup=reply_markup,
+            ev=ev,
+            event="master_add_booking.edit_failed",
+        )
+        if ok:
+            return
+    await _send_and_track(
+        state=state,
+        bot=callback.bot,
+        chat_id=callback.from_user.id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+
+
+def _parse_confirm_input(data: dict) -> _ConfirmInput | None:
+    slot_iso = data.get("selected_slot")
+    client = data.get("client", {})
+    master_id = data.get("master_id")
+    master_timezone = data.get("master_timezone")
+    if slot_iso is None or master_id is None or not client or master_timezone is None:
+        return None
+    try:
+        slot_dt = datetime.fromisoformat(str(slot_iso))
+        master_tz_enum = Timezone(str(master_timezone))
+    except ValueError:
+        return None
+
+    master_day = _parse_iso_date(data.get("master_day"))
+    slots = [datetime.fromisoformat(x) for x in (data.get("slots") or [])]
+    return _ConfirmInput(
+        slot_dt=slot_dt,
+        client=dict(client),
+        master_id=int(master_id),
+        master_tz_enum=master_tz_enum,
+        master_day=master_day,
+        slots=slots,
+    )
+
+
+async def _create_booking(
+    request: CreateMasterBookingRequest,
+    *,
+    admin_alerter: AdminAlerter | None,
+) -> CreateMasterBookingResult:
+    try:
+        async with active_session() as session:
+            return await CreateMasterBooking(session).execute(request)
+    except Exception as exc:
+        await ev.aexception("master_add_booking.confirm_failed", stage="use_case", exc=exc, admin_alerter=admin_alerter)
+        raise
+
+
+async def _handle_slot_taken(callback: CallbackQuery, state: FSMContext, *, confirm: _ConfirmInput) -> None:
+    await callback.answer(text=txt.slot_taken(), show_alert=True)
+    await state.update_data(confirm_in_progress=False)
+    if confirm.master_day and confirm.slots:
+        slots_markup = _build_slots_keyboard([to_zone(dt, confirm.master_tz_enum) for dt in confirm.slots])
+        await _edit_or_send(
+            callback,
+            state,
+            text=txt.slots_title(day=confirm.master_day),
+            reply_markup=slots_markup,
+        )
+        await state.set_state(AddBookingStates.selecting_slot)
+        return
+    await _restore_calendar(callback, state)
+    await state.set_state(AddBookingStates.selecting_date)
+
+
+async def _handle_quota_exceeded(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    *,
+    result: CreateMasterBookingResult,
+) -> None:
+    warned = False
+    if result.usage is not None and result.bookings_limit is not None:
+        warned = await notifier.maybe_send(
+            NotificationRequest(
+                event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
+                recipient=RecipientKind.MASTER,
+                chat_id=callback.from_user.id,
+                context=LimitsContext(
+                    usage=result.usage,
+                    bookings_limit=int(result.bookings_limit),
+                ),
+                facts=NotificationFacts(
+                    event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=callback.from_user.id,
+                    plan_is_pro=bool(result.plan_is_pro),
+                ),
+            ),
+        )
+    if not warned:
+        await callback.answer(text=txt.quota_reached(), show_alert=True)
+    await _reset_add_booking(state, callback.bot)
+
+
+async def _handle_success(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    *,
+    confirm: _ConfirmInput,
+    result: CreateMasterBookingResult,
+) -> None:
+    booking = result.booking
+    master = result.master
+    if booking is None or master is None:
+        ev.warning("master_add_booking.state_invalid", reason="missing_result_objects")
+        await context_lost(callback, state, bucket=ADD_BOOKING_BUCKET, reason="missing_result_objects")
+        return
+
+    if result.warn_master_bookings_near_limit and result.usage is not None and result.bookings_limit is not None:
+        await notifier.maybe_send(
+            NotificationRequest(
+                event=NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
+                recipient=RecipientKind.MASTER,
+                chat_id=callback.from_user.id,
+                context=LimitsContext(
+                    usage=result.usage,
+                    bookings_limit=int(result.bookings_limit),
+                ),
+                facts=NotificationFacts(
+                    event=NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=callback.from_user.id,
+                    plan_is_pro=bool(result.plan_is_pro),
+                ),
+            ),
+        )
+
+    client_has_tg = confirm.client.get("telegram_id") is not None
+    await callback.answer(text=txt.created(client_has_tg=client_has_tg), show_alert=True)
+
+    if client_has_tg:
+        allow_client_notifications = (
+            bool(result.plan_is_pro)
+            and bool(getattr(master, "notify_clients", True))
+            and bool(confirm.client.get("notifications_enabled", True))
+        )
+        if allow_client_notifications:
+            client_tz_val = confirm.client.get("timezone")
+            client_tz_enum = Timezone(client_tz_val) if client_tz_val else None
+            slot_client = to_zone(confirm.slot_dt, client_tz_enum) if client_tz_enum else confirm.slot_dt
+
+            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+            reply_markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking.id}:cancel")],
+                ],
+            )
+
+            await notifier.maybe_send(
+                NotificationRequest(
+                    event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
+                    recipient=RecipientKind.CLIENT,
+                    chat_id=confirm.client["telegram_id"],
+                    context=BookingContext(
+                        booking_id=booking.id,
+                        master_name=master.name,
+                        client_name=confirm.client.get("name") or "",
+                        slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
+                        duration_min=master.slot_size_min,
+                    ),
+                    facts=NotificationFacts(
+                        event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
+                        recipient=RecipientKind.CLIENT,
+                        chat_id=confirm.client["telegram_id"],
+                        plan_is_pro=bool(result.plan_is_pro),
+                        master_notify_clients=allow_client_notifications,
+                        client_notifications_enabled=bool(confirm.client.get("notifications_enabled", True)),
+                        booking_start_at_utc=confirm.slot_dt,
+                    ),
+                    reply_markup=reply_markup,
+                ),
+            )
+
+    await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
+    await state.clear()
+
+
+async def _handle_confirm_result(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    *,
+    confirm: _ConfirmInput,
+    result: CreateMasterBookingResult,
+) -> None:
+    if not result.ok:
+        if result.error == CreateMasterBookingError.QUOTA_EXCEEDED:
+            await _handle_quota_exceeded(callback, state, notifier, result=result)
+            return
+        if result.error == CreateMasterBookingError.SLOT_NOT_AVAILABLE:
+            await _handle_slot_taken(callback, state, confirm=confirm)
+            return
+        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
+        await _reset_add_booking(state, callback.bot)
+        return
+
+    await _handle_success(callback, state, notifier, confirm=confirm, result=result)
 
 
 def _parse_iso_date(value: str | None) -> date | None:
@@ -247,45 +514,62 @@ async def choose_client(callback: CallbackQuery, state: FSMContext) -> None:
     reply_markup = await calendar.start_calendar()
 
     if callback.message is not None:
-        await callback.message.edit_text(
+        ok = await safe_edit_text(
+            callback.message,
+            text=txt.choose_date(),
+            reply_markup=reply_markup,
+            ev=ev,
+            event="master_add_booking.edit_failed",
+        )
+        if not ok:
+            await _send_and_track(
+                state=state,
+                bot=callback.bot,
+                chat_id=callback.from_user.id,
+                text=txt.choose_date(),
+                reply_markup=reply_markup,
+            )
+    else:
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
             text=txt.choose_date(),
             reply_markup=reply_markup,
         )
-    else:
-        await callback.bot.send_message(chat_id=callback.from_user.id, text=txt.choose_date(), reply_markup=reply_markup)
     await state.set_state(AddBookingStates.selecting_date)
 
 
 @router.callback_query(StateFilter(AddBookingStates.selecting_date), SimpleCalendarCallback.filter())
-async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallback, state: FSMContext) -> None:
+async def pick_date(
+    callback: CallbackQuery,
+    callback_data: SimpleCalendarCallback,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
     bind_log_context(flow="master_add_booking", step="pick_date")
     await track_callback_message(state, callback, bucket=ADD_BOOKING_BUCKET)
+    if not await rate_limit_callback(callback, rate_limiter, name="master_add_booking:pick_date", ttl_sec=1):
+        return
 
-    calendar = SimpleCalendar()
-    selected, picked_date = await calendar.process_selection(callback, callback_data)
+    selected, picked_date = await SimpleCalendar().process_selection(callback, callback_data)
     if not selected:
         return
 
-    data = await state.get_data()
-    master_id = data.get("master_id")
-    master_timezone = data.get("master_timezone")
-    if master_id is None or master_timezone is None:
+    state_data = await _pick_date_state(state)
+    if state_data is None:
         ev.warning("master_add_booking.state_invalid", reason="missing_master_data")
-        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
+        await context_lost(callback, state, bucket=ADD_BOOKING_BUCKET, reason="missing_master_data")
         return
-    master_tz_enum = Timezone(master_timezone)
+    master_id, master_tz_enum = state_data
 
     try:
         async with session_local() as session:
-            entitlements = EntitlementsService(session)
-            horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
-            master_tz_info = get_timezone(str(master_tz_enum.value))
-            today_master = datetime.now(tz=master_tz_info).date()
-            picked_day = (
-                picked_date.date() if picked_date.tzinfo is None else picked_date.astimezone(master_tz_info).date()
+            allowed, picked_day, today_master, max_date = await _validate_picked_day_in_horizon(
+                session,
+                master_id=master_id,
+                picked_date=picked_date,
+                master_tz_enum=master_tz_enum,
             )
-            max_date = today_master + timedelta(days=horizon_days)
-            if not (today_master <= picked_day <= max_date):
+            if not allowed:
                 await callback.answer(
                     text=txt.date_out_of_range(today=today_master, max_date=max_date),
                     show_alert=True,
@@ -293,8 +577,11 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
                 await _restore_calendar(callback, state)
                 return
 
-            use_case = GetMasterFreeSlots(session)
-            result = await use_case.execute(master_id=master_id, client_day=picked_day, client_tz=master_tz_enum)
+            result = await GetMasterFreeSlots(session).execute(
+                master_id=master_id,
+                client_day=picked_day,
+                client_tz=master_tz_enum,
+            )
     except Exception as exc:
         await ev.aexception("master_add_booking.pick_date_failed", stage="use_case", exc=exc)
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
@@ -308,19 +595,20 @@ async def pick_date(callback: CallbackQuery, callback_data: SimpleCalendarCallba
         await _restore_calendar(callback, state)
         return
 
-    ev.info("master_add_booking.slots_result", outcome="slots", master_id=master_id, day=str(picked_day), slots=len(slots))
+    ev.info(
+        "master_add_booking.slots_result",
+        outcome="slots",
+        master_id=master_id,
+        day=str(picked_day),
+        slots=len(slots),
+    )
     await state.update_data(slots=[dt.isoformat() for dt in slots], master_day=result.master_day.isoformat())
-    if callback.message is not None:
-        await callback.message.edit_text(
-            text=txt.slots_title(day=picked_day),
-            reply_markup=_build_slots_keyboard([to_zone(dt, master_tz_enum) for dt in slots]),
-        )
-    else:
-        await callback.bot.send_message(
-            chat_id=callback.from_user.id,
-            text=txt.slots_title(day=picked_day),
-            reply_markup=_build_slots_keyboard([to_zone(dt, master_tz_enum) for dt in slots]),
-        )
+    await _edit_or_send(
+        callback,
+        state,
+        text=txt.slots_title(day=picked_day),
+        reply_markup=_build_slots_keyboard([to_zone(dt, master_tz_enum) for dt in slots]),
+    )
     await state.set_state(AddBookingStates.selecting_slot)
 
 
@@ -340,8 +628,13 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     slots_iso: list[str] = data.get("slots", [])
     if not slots_iso or index < 0 or index >= len(slots_iso):
-        ev.warning("master_add_booking.state_invalid", reason="slot_out_of_range", index=index, slots_len=len(slots_iso))
-        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
+        ev.warning(
+            "master_add_booking.state_invalid",
+            reason="slot_out_of_range",
+            index=index,
+            slots_len=len(slots_iso),
+        )
+        await context_lost(callback, state, bucket=ADD_BOOKING_BUCKET, reason="slot_out_of_range")
         return
 
     slot_dt = datetime.fromisoformat(slots_iso[index])
@@ -354,13 +647,27 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
 
     client_name_safe = html_escape(str(client.get("name") or ""))
     if callback.message is not None:
-        await callback.message.edit_text(
+        ok = await safe_edit_text(
+            callback.message,
             text=txt.confirm_booking(
                 client_name=client_name_safe,
                 slot_str=slot_master_tz.strftime("%d.%m.%Y %H:%M"),
             ),
             reply_markup=_build_confirm_keyboard(),
+            ev=ev,
+            event="master_add_booking.edit_failed",
         )
+        if not ok:
+            await _send_and_track(
+                state=state,
+                bot=callback.bot,
+                chat_id=callback.from_user.id,
+                text=txt.confirm_booking(
+                    client_name=client_name_safe,
+                    slot_str=slot_master_tz.strftime("%d.%m.%Y %H:%M"),
+                ),
+                reply_markup=_build_confirm_keyboard(),
+            )
     else:
         await callback.bot.send_message(
             chat_id=callback.from_user.id,
@@ -378,10 +685,13 @@ async def confirm_booking(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_add_booking", step="confirm")
     await track_callback_message(state, callback, bucket=ADD_BOOKING_BUCKET)
+    if not await rate_limit_callback(callback, rate_limiter, name="master_add_booking:confirm", ttl_sec=2):
+        return
 
     data = await state.get_data()
     if data.get("confirm_in_progress"):
@@ -390,35 +700,29 @@ async def confirm_booking(
         return
     await state.update_data(confirm_in_progress=True)
     if callback.message is not None:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            logger.debug("master_add_booking.confirm.disable_keyboard_failed", exc_info=True)
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=None,
+            ev=ev,
+            event="master_add_booking.confirm.disable_keyboard_failed",
+        )
 
-    slot_iso = data.get("selected_slot")
-    client = data.get("client", {})
-    master_id = data.get("master_id")
-    master_timezone = data.get("master_timezone")
-    master_tz_enum = Timezone(master_timezone) if master_timezone else None
-    if slot_iso is None or master_id is None or not client or master_tz_enum is None:
+    confirm = _parse_confirm_input(data)
+    if confirm is None:
         ev.warning("master_add_booking.state_invalid", reason="missing_confirm_data")
-        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
-        await _reset_add_booking(state, callback.bot)
+        await context_lost(callback, state, bucket=ADD_BOOKING_BUCKET, reason="missing_confirm_data")
         return
 
-    slot_dt = datetime.fromisoformat(slot_iso)
-
     try:
-        async with active_session() as session:
-            result = await CreateMasterBooking(session).execute(
-                CreateMasterBookingRequest(
-                    master_id=int(master_id),
-                    client_id=int(client["id"]),
-                    start_at_utc=slot_dt,
-                ),
-            )
-    except Exception as exc:
-        await ev.aexception("master_add_booking.confirm_failed", stage="use_case", exc=exc, admin_alerter=admin_alerter)
+        result = await _create_booking(
+            CreateMasterBookingRequest(
+                master_id=confirm.master_id,
+                client_id=int(confirm.client["id"]),
+                start_at_utc=confirm.slot_dt,
+            ),
+            admin_alerter=admin_alerter,
+        )
+    except Exception:
         await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
         await _reset_add_booking(state, callback.bot)
         return
@@ -428,145 +732,11 @@ async def confirm_booking(
         ok=bool(result.ok),
         error=str(result.error.value) if result.error else None,
         booking_id=result.booking.id if result.booking else None,
-        master_id=master_id,
-        client_id=client.get("id"),
+        master_id=confirm.master_id,
+        client_id=confirm.client.get("id"),
     )
 
-    if not result.ok:
-        if result.error == CreateMasterBookingError.QUOTA_EXCEEDED:
-            warned = False
-            if result.usage is not None and result.bookings_limit is not None:
-                warned = await notifier.maybe_send(
-                    NotificationRequest(
-                        event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
-                        recipient=RecipientKind.MASTER,
-                        chat_id=callback.from_user.id,
-                        context=LimitsContext(
-                            usage=result.usage,
-                            bookings_limit=int(result.bookings_limit),
-                        ),
-                        facts=NotificationFacts(
-                            event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
-                            recipient=RecipientKind.MASTER,
-                            chat_id=callback.from_user.id,
-                            plan_is_pro=bool(result.plan_is_pro),
-                        ),
-                    ),
-                )
-            if not warned:
-                await callback.answer(text=txt.quota_reached(), show_alert=True)
-            await _reset_add_booking(state, callback.bot)
-            return
-        if result.error == CreateMasterBookingError.SLOT_NOT_AVAILABLE:
-            await callback.answer(text=txt.slot_taken(), show_alert=True)
-            await state.update_data(confirm_in_progress=False)
-            master_day = _parse_iso_date(data.get("master_day"))
-            slots = [datetime.fromisoformat(x) for x in (data.get("slots") or [])]
-            if master_day and slots:
-                slots_markup = _build_slots_keyboard([to_zone(dt, master_tz_enum) for dt in slots])
-                if callback.message is not None:
-                    await callback.message.edit_text(
-                        text=txt.slots_title(day=master_day),
-                        reply_markup=slots_markup,
-                    )
-                else:
-                    await _send_and_track(
-                        state=state,
-                        bot=callback.bot,
-                        chat_id=callback.from_user.id,
-                        text=txt.slots_title(day=master_day),
-                        reply_markup=slots_markup,
-                    )
-                await state.set_state(AddBookingStates.selecting_slot)
-            else:
-                await _restore_calendar(callback, state)
-                await state.set_state(AddBookingStates.selecting_date)
-            return
-        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
-        await _reset_add_booking(state, callback.bot)
-        return
-
-    booking = result.booking
-    master = result.master
-    if booking is None or master is None:
-        ev.warning("master_add_booking.state_invalid", reason="missing_result_objects")
-        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
-        await _reset_add_booking(state, callback.bot)
-        return
-
-    if result.warn_master_bookings_near_limit and result.usage is not None and result.bookings_limit is not None:
-        await notifier.maybe_send(
-            NotificationRequest(
-                event=NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
-                recipient=RecipientKind.MASTER,
-                chat_id=callback.from_user.id,
-                context=LimitsContext(
-                    usage=result.usage,
-                    bookings_limit=int(result.bookings_limit),
-                ),
-                facts=NotificationFacts(
-                    event=NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
-                    recipient=RecipientKind.MASTER,
-                    chat_id=callback.from_user.id,
-                    plan_is_pro=bool(result.plan_is_pro),
-                ),
-            ),
-        )
-
-    client_has_tg = client.get("telegram_id") is not None
-
-    text = txt.created(client_has_tg=client_has_tg)
-
-    await callback.answer(text=text, show_alert=True)
-
-    if client_has_tg:
-        allow_client_notifications = (
-            bool(result.plan_is_pro)
-            and bool(getattr(master, "notify_clients", True))
-            and bool(client.get("notifications_enabled", True))
-        )
-
-        if allow_client_notifications:
-            client_tz_val = client.get("timezone")
-            client_tz_enum = Timezone(client_tz_val) if client_tz_val else None
-            slot_client = to_zone(slot_dt, client_tz_enum) if client_tz_enum else slot_dt
-
-            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-            reply_markup = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text=btn_cancel_booking(),
-                            callback_data=f"c:booking:{booking.id}:cancel",
-                        ),
-                    ],
-                ],
-            )
-
-            await notifier.maybe_send(
-                NotificationRequest(
-                    event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
-                    recipient=RecipientKind.CLIENT,
-                    chat_id=client["telegram_id"],
-                    context=BookingContext(
-                        booking_id=booking.id,
-                        master_name=master.name,
-                        client_name=client.get("name") or "",
-                        slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
-                        duration_min=master.slot_size_min,
-                    ),
-                    facts=NotificationFacts(
-                        event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
-                        recipient=RecipientKind.CLIENT,
-                        chat_id=client["telegram_id"],
-                        master_notify_clients=allow_client_notifications,
-                    ),
-                    reply_markup=reply_markup,
-                ),
-            )
-
-    await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
-    await state.clear()
+    await _handle_confirm_result(callback, state, notifier, confirm=confirm, result=result)
 
 
 @router.callback_query(

@@ -62,7 +62,7 @@ class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
             await h.master_review_booking(callback=callback, notifier=notifier)
 
         callback.message.edit_text.assert_awaited()
-        edited_text = callback.message.edit_text.await_args.args[0]
+        edited_text = callback.message.edit_text.await_args.kwargs["text"]
         self.assertIn("&lt;b&gt;C&lt;/b&gt;", edited_text)
         notifier.maybe_send.assert_awaited()
 

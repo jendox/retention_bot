@@ -11,12 +11,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
 from src.filters.user_role import UserRole
+from src.handlers.master.guards import rate_limit_callback
+from src.handlers.master.ui import safe_delete, safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, status_badge
@@ -285,7 +288,14 @@ async def _send_or_edit(
     reply_markup: InlineKeyboardMarkup,
 ) -> None:
     if callback.message is not None:
-        await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
+        await safe_edit_text(
+            callback.message,
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+            ev=ev,
+            event="master_schedule.edit_failed",
+        )
         return
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
@@ -559,10 +569,11 @@ async def _handle_action_reschedule(
     scope: Scope,
     page: int,
     state: FSMContext,
+    rate_limiter: RateLimiter | None,
 ) -> None:
     from src.handlers.master.reschedule import start_reschedule
 
-    await start_reschedule(callback, state, booking_id=booking_id, scope=scope, page=page)
+    await start_reschedule(callback, state, rate_limiter, booking_id=booking_id, scope=scope, page=page)
 
 
 # ---------- entrypoint ----------
@@ -584,16 +595,16 @@ async def noop(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.in_(SCHEDULE_CB.values()))
-async def master_schedule_period_callbacks(callback: CallbackQuery) -> None:
+async def master_schedule_period_callbacks(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_schedule", step="choose_period")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_schedule:navigate", ttl_sec=1):
+        return
     data = callback.data or ""
 
     if data == SCHEDULE_CB["back_menu"]:
         await callback.answer(txt.back_to_main_menu())
-        try:
-            await callback.message.delete()
-        except Exception:
-            ev.debug("schedule.delete_menu_failed")
+        if callback.message is not None:
+            await safe_delete(callback.message, ev=ev, event="schedule.delete_menu_failed")
         return
 
     if data == SCHEDULE_CB["back_periods"]:
@@ -612,7 +623,7 @@ async def master_schedule_period_callbacks(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:s:"))
-async def master_schedule_pagination(callback: CallbackQuery) -> None:
+async def master_schedule_pagination(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_schedule", step="pagination")
     # m:s:<scope>:p:<page>
     parts = (callback.data or "").split(":")
@@ -625,12 +636,21 @@ async def master_schedule_pagination(callback: CallbackQuery) -> None:
         ev.debug("schedule.pagination_parse_failed")
         return
 
+    if not await rate_limit_callback(
+        callback,
+        rate_limiter,
+        name="master_schedule:navigate",
+        ttl_sec=1,
+        scope=str(getattr(scope, "value", scope)),
+        page=page,
+    ):
+        return
     await callback.answer()
     await _send_schedule(callback, scope=scope, page=page)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:b:"))
-async def master_open_booking_card(callback: CallbackQuery) -> None:
+async def master_open_booking_card(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_schedule", step="open_booking")
     # m:b:<booking_id>:s:<scope>:p:<page>
     parts = (callback.data or "").split(":")
@@ -642,7 +662,14 @@ async def master_open_booking_card(callback: CallbackQuery) -> None:
         await callback.answer(txt.open_booking_error(), show_alert=False)
         ev.debug("schedule.open_booking_parse_failed")
         return
-
+    if not await rate_limit_callback(
+        callback,
+        rate_limiter,
+        name="master_schedule:open_booking",
+        ttl_sec=1,
+        booking_id=booking_id,
+    ):
+        return
     await callback.answer()
     await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
 
@@ -652,6 +679,7 @@ async def master_booking_actions(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_schedule", step="action")
@@ -665,6 +693,16 @@ async def master_booking_actions(
     except Exception:
         await callback.answer(txt.action_error(), show_alert=False)
         ev.debug("schedule.action_parse_failed")
+        return
+
+    if not await rate_limit_callback(
+        callback,
+        rate_limiter,
+        name="master_schedule:action",
+        ttl_sec=2,
+        action=action,
+        booking_id=booking_id,
+    ):
         return
 
     handlers = {
@@ -684,6 +722,7 @@ async def master_booking_actions(
             scope=scope,
             page=page,
             state=state,
+            rate_limiter=rate_limiter,
         ),
     }
     handler = handlers.get(action)

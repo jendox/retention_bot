@@ -6,6 +6,9 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session
 from src.filters.user_role import UserRole
+from src.handlers.master.flow import context_lost
+from src.handlers.master.guards import rate_limit_callback
+from src.handlers.master.ui import safe_edit_reply_markup
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
@@ -13,9 +16,14 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.texts import common as common_txt, master_add_client as txt
 from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
-from src.use_cases.create_client_offline import CreateClientOffline, CreateClientOfflineError
+from src.use_cases.create_client_offline import (
+    CreateClientOffline,
+    CreateClientOfflineCreateResult,
+    CreateClientOfflineError,
+)
 from src.use_cases.entitlements import Usage
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
@@ -101,14 +109,94 @@ async def _send_warning_message(
     return await notifier.maybe_send(request)
 
 
+async def _handle_confirm_result(
+    *,
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    telegram_id: int,
+    result: CreateClientOfflineCreateResult,
+) -> None:
+    if result.ok:
+        ev.info(
+            "master_add_client.confirm_result",
+            ok=True,
+            master_id=result.master_id,
+            client_id=result.client_id,
+        )
+        await callback.answer(txt.done_offline(), show_alert=True)
+        await _reset_add_client(state, callback.bot)
+
+        if result.warn_master_clients_near_limit:
+            await _send_warning_message(
+                chat_id=telegram_id,
+                event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+                usage=result.usage,
+                plan_is_pro=result.plan_is_pro,
+                clients_limit=result.clients_limit,
+                notifier=notifier,
+            )
+        return
+
+    if result.error == CreateClientOfflineError.PHONE_CONFLICT:
+        ev.info(
+            "master_add_client.confirm_result",
+            ok=False,
+            error=str(result.error.value),
+            reason="phone_conflict",
+        )
+        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
+        await answer_tracked(
+            callback.message,
+            state,
+            text=txt.ask_phone_conflict_retry(),
+            bucket=ADD_CLIENT_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
+        )
+        await state.set_state(AddClientStates.phone)
+        await state.update_data(confirm_in_progress=False)
+        return
+
+    if result.error == CreateClientOfflineError.QUOTA_EXCEEDED:
+        ev.info(
+            "master_add_client.confirm_result",
+            ok=False,
+            error=str(result.error.value),
+            clients_count=result.usage.clients_count if getattr(result, "usage", None) else None,
+            clients_limit=result.clients_limit,
+        )
+        if not await _send_warning_message(
+            chat_id=telegram_id,
+            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
+            usage=result.usage,
+            plan_is_pro=result.plan_is_pro,
+            clients_limit=result.clients_limit,
+            notifier=notifier,
+        ):
+            await callback.answer(txt.quota_reached(), show_alert=True)
+        await _reset_add_client(state, callback.bot)
+        return
+
+    ev.warning(
+        "master_add_client.confirm_result",
+        ok=False,
+        error=str(result.error.value) if result.error else None,
+    )
+    await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
+    await _reset_add_client(state, callback.bot)
+
+
 async def start_add_client(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     *,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_add_client", step="start")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_add_client:start", ttl_sec=2):
+        return
     telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
     ev.info("master_add_client.start")
@@ -281,9 +369,12 @@ async def master_add_client_confirm(
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_add_client", step="confirm")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_add_client:confirm", ttl_sec=2):
+        return
     telegram_id = callback.from_user.id
     await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
     await callback.answer()
@@ -295,10 +386,12 @@ async def master_add_client_confirm(
     await state.update_data(confirm_in_progress=True)
 
     if callback.message is not None:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            ev.debug("master_add_client.confirm.disable_keyboard_failed")
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=None,
+            ev=ev,
+            event="master_add_client.confirm.disable_keyboard_failed",
+        )
 
     name = data.get("name")
     phone = data.get("phone")
@@ -309,8 +402,7 @@ async def master_add_client_confirm(
             has_name=bool(name),
             has_phone=bool(phone),
         )
-        await callback.answer(txt.missing_data(), show_alert=True)
-        await _reset_add_client(state, callback.bot)
+        await context_lost(callback, state, bucket=ADD_CLIENT_BUCKET, reason="missing_data")
         return
 
     try:
@@ -331,68 +423,10 @@ async def master_add_client_confirm(
         await _reset_add_client(state, callback.bot)
         return
 
-    if result.ok:
-        ev.info(
-            "master_add_client.confirm_result",
-            ok=True,
-            master_id=result.master_id,
-            client_id=result.client_id,
-        )
-        await callback.answer(txt.done_offline(), show_alert=True)
-        await _reset_add_client(state, callback.bot)
-
-        if result.warn_master_clients_near_limit:
-            await _send_warning_message(
-                chat_id=telegram_id,
-                event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
-                usage=result.usage,
-                plan_is_pro=result.plan_is_pro,
-                clients_limit=result.clients_limit,
-                notifier=notifier,
-            )
-        return
-
-    if result.error == CreateClientOfflineError.PHONE_CONFLICT:
-        ev.info(
-            "master_add_client.confirm_result",
-            ok=False,
-            error=str(result.error.value),
-            reason="phone_conflict",
-        )
-        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
-        await answer_tracked(
-            callback.message,
-            state,
-            text=txt.ask_phone_conflict_retry(),
-            bucket=ADD_CLIENT_BUCKET,
-            reply_markup=_build_cancel_keyboard(),
-        )
-        await state.set_state(AddClientStates.phone)
-        return
-
-    if result.error == CreateClientOfflineError.MASTER_NOT_FOUND:
-        ev.warning("master_add_client.confirm_result", ok=False, error=str(result.error.value))
-        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
-    elif result.error == CreateClientOfflineError.QUOTA_EXCEEDED:
-        ev.info(
-            "master_add_client.confirm_result",
-            ok=False,
-            error=str(result.error.value),
-            clients_count=result.usage.clients_count if getattr(result, "usage", None) else None,
-            clients_limit=result.clients_limit,
-        )
-        if not await _send_warning_message(
-            chat_id=telegram_id,
-            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
-            usage=result.usage,
-            plan_is_pro=result.plan_is_pro,
-            clients_limit=result.clients_limit,
-            notifier=notifier,
-        ):
-            await callback.answer(txt.quota_reached(), show_alert=True)
-    else:
-        ev.warning("master_add_client.confirm_result", ok=False,
-                   error=str(result.error.value) if result.error else None)
-        await callback.answer(text=txt.err_for_preflight(result.error), show_alert=True)
-
-    await _reset_add_client(state, callback.bot)
+    await _handle_confirm_result(
+        callback=callback,
+        state=state,
+        notifier=notifier,
+        telegram_id=telegram_id,
+        result=result,
+    )

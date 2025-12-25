@@ -23,6 +23,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
+from src.handlers.master.ui import safe_edit_reply_markup
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -576,14 +577,12 @@ async def master_reg_confirm(  # noqa: C901
     await state.update_data(confirm_in_progress=True)
 
     if callback.message is not None:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception as exc:
-            logger.debug(
-                "master_reg.confirm.disable_keyboard_failed",
-                exc_info=True,
-                extra={"error_type": type(exc).__name__},
-            )
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=None,
+            ev=ev,
+            event="master_reg.confirm.disable_keyboard_failed",
+        )
 
     await answer_tracked(
         callback.message,
