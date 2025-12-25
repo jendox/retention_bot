@@ -1,21 +1,30 @@
 from enum import StrEnum
+from html import escape as html_escape
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import active_session
+from src.notifications.context import LimitsContext
+from src.notifications.notifier import NotificationRequest, Notifier, build_facts
+from src.notifications.policy import NotificationFacts
+from src.notifications.renderer import render as render_notification
+from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
-from src.repositories import MasterRepository
 from src.texts import common as common_txt, master_invite_client as txt
 from src.texts.buttons import btn_cancel
-from src.use_cases.create_client_invite import CreateClientInvite
-from src.use_cases.entitlements import EntitlementsService
-from src.utils import answer_tracked, cleanup_messages
+from src.use_cases.create_master_client_invite import (
+    CreateMasterClientInvite,
+    CreateMasterClientInviteOutcome,
+)
+from src.use_cases.entitlements import Usage
+from src.utils import answer_tracked, cleanup_messages, track_callback_message
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
@@ -80,37 +89,46 @@ async def _reset_invite_flow(state: FSMContext, bot) -> None:
     await state.clear()
 
 
+async def _maybe_send_limits_notification(
+    *,
+    chat_id: int,
+    event: NotificationEvent,
+    usage: Usage,
+    clients_limit: int | None,
+    plan_is_pro: bool,
+    notifier: Notifier,
+) -> bool:
+    request = NotificationRequest(
+        chat_id=chat_id,
+        event=event,
+        recipient=RecipientKind.MASTER,
+        context=LimitsContext(usage=usage, clients_limit=clients_limit),
+        facts=NotificationFacts(
+            event=event,
+            recipient=RecipientKind.MASTER,
+            chat_id=chat_id,
+            plan_is_pro=plan_is_pro,
+        ),
+    )
+    return await notifier.maybe_send(request)
+
+
 async def start_invite_client(
     callback: CallbackQuery,
     state: FSMContext,
+    notifier: Notifier,
     *,
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_invite_client", step="start")
     telegram_id = callback.from_user.id
+    await cleanup_messages(state, callback.bot, bucket=INVITE_CLIENT_BUCKET)
+    await state.clear()
+    await track_callback_message(state, callback, bucket=INVITE_CLIENT_BUCKET)
     try:
         async with active_session() as session:
-            master_repo = MasterRepository(session)
-            master = await master_repo.get_by_telegram_id(telegram_id)
-
-            entitlements = EntitlementsService(session)
-            check = await entitlements.can_attach_client(master_id=master.id)
-            if not check.allowed:
-                ev.info(
-                    "master_invite_client.quota_exceeded",
-                    current=check.current,
-                    limit=check.limit,
-                )
-                await answer_tracked(
-                    callback.message,
-                    state,
-                    text=txt.quota_reached(current=check.current, limit=check.limit),
-                    bucket=INVITE_CLIENT_BUCKET,
-                )
-                return
-
-            use_case = CreateClientInvite(session)
-            result = await use_case.execute_for_telegram(master_telegram_id=telegram_id)
+            use_case = CreateMasterClientInvite(session)
+            result = await use_case.execute(master_telegram_id=telegram_id)
     except Exception as exc:
         await ev.aexception(
             "master_invite_client.start_failed",
@@ -122,16 +140,69 @@ async def start_invite_client(
         await _reset_invite_flow(state, callback.bot)
         return
 
-    ev.info("master_invite_client.invite_created", master_id=result.master_id)
+    if result.outcome == CreateMasterClientInviteOutcome.MASTER_NOT_FOUND:
+        ev.warning("master_invite_client.master_not_found")
+        await callback.answer(common_txt.generic_error(), show_alert=True)
+        await _reset_invite_flow(state, callback.bot)
+        return
+
+    assert result.plan is not None
+    assert result.usage is not None
+    plan_is_pro = bool(result.plan.is_pro)
+
+    if result.outcome == CreateMasterClientInviteOutcome.QUOTA_EXCEEDED:
+        ev.info(
+            "master_invite_client.quota_exceeded",
+            current=result.usage.clients_count,
+            limit=result.clients_limit,
+        )
+        sent = await _maybe_send_limits_notification(
+            chat_id=telegram_id,
+            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
+            usage=result.usage,
+            clients_limit=result.clients_limit,
+            plan_is_pro=plan_is_pro,
+            notifier=notifier,
+        )
+        if not sent:
+            await callback.answer(
+                txt.quota_reached(current=result.usage.clients_count, limit=result.clients_limit),
+                show_alert=True,
+            )
+        await _reset_invite_flow(state, callback.bot)
+        return
+
+    assert result.invite_link is not None
+    assert result.master_name is not None
+    ev.info("master_invite_client.invite_created")
 
     await state.update_data(
-        invite_link=result.link,
+        invite_link=result.invite_link,
         master_name=result.master_name,
     )
 
     warning = ""
-    if check.limit is not None and check.current >= int(check.limit * 0.8):  # noqa: PLR2004
-        warning = txt.warn_near_limit(current=check.current, limit=int(check.limit))
+    warn_request = NotificationRequest(
+        chat_id=telegram_id,
+        event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+        recipient=RecipientKind.MASTER,
+        context=LimitsContext(usage=result.usage, clients_limit=result.clients_limit),
+        facts=NotificationFacts(
+            event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+            recipient=RecipientKind.MASTER,
+            chat_id=telegram_id,
+            plan_is_pro=plan_is_pro,
+        ),
+    )
+    if notifier.policy.check(build_facts(warn_request)).allowed:
+        # Keep the chat clean: include warning inline instead of separate notification.
+        warning_text = render_notification(
+            event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
+            recipient=RecipientKind.MASTER,
+            context=LimitsContext(usage=result.usage, clients_limit=result.clients_limit),
+        ).text
+        if warning_text:
+            warning = "\n\n" + warning_text
 
     await answer_tracked(
         callback.message,
@@ -174,13 +245,18 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
         return
 
     await callback.answer()
-    text = txt.render_invite_message(kind=str(kind.value), master_name=master_name, invite_link=invite_link)
+    safe_master_name = html_escape(master_name, quote=False)
+    safe_invite_link = html_escape(invite_link, quote=True)
+    text = txt.render_invite_message(kind=str(kind.value), master_name=safe_master_name, invite_link=safe_invite_link)
 
     if callback.message is not None:
         try:
             await callback.message.edit_text(txt.done_copy_prompt())
-        except Exception:
-            ev.debug("master_invite_client.disable_keyboard_failed")
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                ev.debug("master_invite_client.not_modified")
+            else:
+                ev.debug("master_invite_client.disable_keyboard_failed", error=str(exc))
         await callback.message.answer(text)
     else:
         await callback.bot.send_message(chat_id=callback.from_user.id, text=text)

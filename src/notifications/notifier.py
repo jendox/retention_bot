@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from aiogram import Bot
@@ -20,17 +20,35 @@ class NotificationRequest:
     meta: dict[str, Any] | None = None
 
 
+def build_facts(request: NotificationRequest) -> NotificationFacts:
+    """
+    Build NotificationFacts for a request, automatically enriching with context fields
+    when possible (keeps handlers minimal/noisy).
+    """
+    facts = request.facts or NotificationFacts(
+        event=request.event,
+        recipient=request.recipient,
+        chat_id=request.chat_id,
+    )
+
+    if isinstance(request.context, LimitsContext):
+        if facts.usage is None:
+            facts = replace(facts, usage=request.context.usage)
+        if facts.clients_limit is None and request.context.clients_limit is not None:
+            facts = replace(facts, clients_limit=request.context.clients_limit)
+        if facts.bookings_limit is None and request.context.bookings_limit is not None:
+            facts = replace(facts, bookings_limit=request.context.bookings_limit)
+
+    return facts
+
+
 async def maybe_notify(
     *,
     bot: Bot,
     policy: NotificationPolicy,
     request: NotificationRequest,
 ) -> bool:
-    facts = request.facts or NotificationFacts(
-        event=request.event,
-        recipient=request.recipient,
-        chat_id=request.chat_id,
-    )
+    facts = build_facts(request)
     decision = policy.check(facts)
     if not decision.allowed:
         return False

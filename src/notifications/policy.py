@@ -6,6 +6,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from src.notifications.types import NotificationEvent, RecipientKind
+from src.use_cases.entitlements import Usage
 
 
 class DenyReason(StrEnum):
@@ -25,11 +26,11 @@ class PolicyDecision:
     detail: str | None = None
 
     @classmethod
-    def allow(cls) -> "PolicyDecision":
+    def allow(cls) -> PolicyDecision:
         return cls(True)
 
     @classmethod
-    def deny(cls, reason: DenyReason, *, detail: str | None = None) -> "PolicyDecision":
+    def deny(cls, reason: DenyReason, *, detail: str | None = None) -> PolicyDecision:
         return cls(False, reason=reason, detail=detail)
 
 
@@ -51,6 +52,11 @@ class NotificationFacts:
     # Доп. контекст
     booking_start_at_utc: datetime | None = None
     now_utc: datetime | None = None
+
+    # Limits context (for master-facing warning/limit events)
+    usage: Usage | None = None
+    clients_limit: int | None = None
+    bookings_limit: int | None = None
 
 
 class NotificationPolicy(Protocol):
@@ -93,42 +99,104 @@ class DefaultNotificationPolicy:
         NotificationEvent.FOLLOWUP_THANK_YOU,
     }
 
+    _NEAR_LIMIT_THRESHOLD = 0.8
+
     def check(self, facts: NotificationFacts) -> PolicyDecision:
         if facts.chat_id is None:
             return PolicyDecision.deny(DenyReason.NO_CHAT_ID)
 
-        # 1) Master-facing: разрешаем только известные события мастеру
         if facts.recipient == RecipientKind.MASTER:
-            if facts.event not in self.MASTER_ALLOWED_EVENTS:
-                return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
-            if facts.event in self.MASTER_FREE_ONLY_EVENTS:
-                if facts.plan_is_pro is None:
-                    return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_only_event_requires_plan")
-                if facts.plan_is_pro:
-                    return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_only_event_for_pro_master")
-            return PolicyDecision.allow()
+            return self._check_master(facts)
 
-        # 2) Client-facing: только определённые события
         if facts.recipient == RecipientKind.CLIENT:
-            if facts.event not in self.CLIENT_EVENTS_PRO:
-                return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
-
-            # Pro required
-            if not facts.plan_is_pro:
-                return PolicyDecision.deny(DenyReason.PRO_REQUIRED)
-
-            # Тумблеры
-            if not facts.master_notify_clients:
-                return PolicyDecision.deny(DenyReason.MASTER_NOTIFICATIONS_DISABLED)
-            if not facts.client_notifications_enabled:
-                return PolicyDecision.deny(DenyReason.CLIENT_NOTIFICATIONS_DISABLED)
-
-            # (опционально) защита от отправки в прошлое — полезно для reminders/кнопок cancel
-            if facts.booking_start_at_utc is not None:
-                now = facts.now_utc or datetime.now(UTC)
-                if facts.booking_start_at_utc <= now:
-                    return PolicyDecision.deny(DenyReason.PAST_BOOKING)
-
-            return PolicyDecision.allow()
+            return self._check_client(facts)
 
         return PolicyDecision.deny(DenyReason.UNKNOWN, detail=f"recipient={facts.recipient.value}")
+
+    def _check_master(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.event not in self.MASTER_ALLOWED_EVENTS:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
+
+        if facts.event not in self.MASTER_FREE_ONLY_EVENTS:
+            return PolicyDecision.allow()
+
+        return self._check_master_free_only(facts)
+
+    def _check_master_free_only(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.plan_is_pro is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_only_event_requires_plan")
+        if facts.plan_is_pro:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_only_event_for_pro_master")
+        if facts.usage is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="limits_event_requires_usage")
+        return self._check_master_limits_event(facts)
+
+    def _check_master_limits_event(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.event == NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT:
+            return self._check_warn_near_clients(facts)
+        if facts.event == NotificationEvent.LIMIT_CLIENTS_REACHED:
+            return self._check_clients_reached(facts)
+        if facts.event == NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT:
+            return self._check_warn_near_bookings(facts)
+        if facts.event == NotificationEvent.LIMIT_BOOKINGS_REACHED:
+            return self._check_bookings_reached(facts)
+        return PolicyDecision.allow()
+
+    def _check_warn_near_clients(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.clients_limit is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="clients_limit_missing")
+        if facts.usage is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="limits_event_requires_usage")
+        if facts.usage.clients_count < int(facts.clients_limit * self._NEAR_LIMIT_THRESHOLD):
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="clients_threshold_not_reached")
+        return PolicyDecision.allow()
+
+    def _check_clients_reached(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.clients_limit is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="clients_limit_missing")
+        if facts.usage is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="limits_event_requires_usage")
+        if facts.usage.clients_count < facts.clients_limit:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="clients_limit_not_reached")
+        return PolicyDecision.allow()
+
+    def _check_warn_near_bookings(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.bookings_limit is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="bookings_limit_missing")
+        if facts.usage is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="limits_event_requires_usage")
+        threshold = int(facts.bookings_limit * self._NEAR_LIMIT_THRESHOLD)
+        if facts.usage.bookings_created_this_month < threshold:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="bookings_threshold_not_reached")
+        return PolicyDecision.allow()
+
+    def _check_bookings_reached(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.bookings_limit is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="bookings_limit_missing")
+        if facts.usage is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="limits_event_requires_usage")
+        if facts.usage.bookings_created_this_month < facts.bookings_limit:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="bookings_limit_not_reached")
+        return PolicyDecision.allow()
+
+    def _check_client(self, facts: NotificationFacts) -> PolicyDecision:
+        if facts.event not in self.CLIENT_EVENTS_PRO:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
+
+        if not facts.plan_is_pro:
+            return PolicyDecision.deny(DenyReason.PRO_REQUIRED)
+
+        if not facts.master_notify_clients:
+            return PolicyDecision.deny(DenyReason.MASTER_NOTIFICATIONS_DISABLED)
+        if not facts.client_notifications_enabled:
+            return PolicyDecision.deny(DenyReason.CLIENT_NOTIFICATIONS_DISABLED)
+
+        if facts.booking_start_at_utc is not None and self._is_past_booking(facts):
+            return PolicyDecision.deny(DenyReason.PAST_BOOKING)
+
+        return PolicyDecision.allow()
+
+    def _is_past_booking(self, facts: NotificationFacts) -> bool:
+        now = facts.now_utc or datetime.now(UTC)
+        assert facts.booking_start_at_utc is not None
+        return facts.booking_start_at_utc <= now

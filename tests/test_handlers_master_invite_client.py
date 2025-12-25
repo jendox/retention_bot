@@ -5,8 +5,6 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from src.use_cases.create_client_invite import CreateClientInviteResult
-
 
 class MemoryState:
     def __init__(self) -> None:
@@ -38,90 +36,105 @@ async def _fake_active_session():
 class MasterInviteClientHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_start_invite_client_quota_exceeded(self) -> None:
         from src.handlers.master import invite_client as h
+        from src.notifications.policy import DefaultNotificationPolicy
+        from src.use_cases.create_master_client_invite import (
+            CreateMasterClientInviteOutcome,
+            CreateMasterClientInviteResult,
+        )
 
         state = MemoryState()
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
-            bot=SimpleNamespace(),
+            bot=SimpleNamespace(delete_message=AsyncMock(), send_message=AsyncMock()),
             message=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=10)),
             answer=AsyncMock(),
         )
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
 
-        class _MasterRepo:
+        class _UseCase:
             def __init__(self, session) -> None:
                 pass
 
-            async def get_by_telegram_id(self, telegram_id: int):
-                return SimpleNamespace(id=1, telegram_id=telegram_id, name="M")
+            async def execute(self, *, master_telegram_id: int):
+                return CreateMasterClientInviteResult(
+                    outcome=CreateMasterClientInviteOutcome.QUOTA_EXCEEDED,
+                    plan=SimpleNamespace(is_pro=False),
+                    usage=SimpleNamespace(clients_count=10, bookings_created_this_month=0),
+                    clients_limit=10,
+                )
 
-        class _Entitlements:
-            def __init__(self, session) -> None:
-                pass
-
-            async def can_attach_client(self, master_id: int):
-                return SimpleNamespace(allowed=False, current=10, limit=10)
-
-        answer_tracked = AsyncMock()
         with (
             patch.object(h, "active_session", _fake_active_session),
-            patch.object(h, "MasterRepository", _MasterRepo),
-            patch.object(h, "EntitlementsService", _Entitlements),
-            patch.object(h, "answer_tracked", answer_tracked),
+            patch.object(h, "CreateMasterClientInvite", _UseCase),
         ):
-            await h.start_invite_client(callback=callback, state=state)
+            await h.start_invite_client(callback=callback, state=state, notifier=notifier)
 
-        answer_tracked.assert_awaited()
+        notifier.maybe_send.assert_awaited()
         self.assertIsNone(state._state)
 
     async def test_start_invite_client_success_sets_state(self) -> None:
         from src.handlers.master import invite_client as h
+        from src.notifications.policy import DefaultNotificationPolicy
+        from src.use_cases.create_master_client_invite import (
+            CreateMasterClientInviteOutcome,
+            CreateMasterClientInviteResult,
+        )
 
         state = MemoryState()
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
-            bot=SimpleNamespace(send_message=AsyncMock()),
+            bot=SimpleNamespace(send_message=AsyncMock(), delete_message=AsyncMock()),
             message=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=10)),
             answer=AsyncMock(),
         )
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
 
-        class _MasterRepo:
+        class _UseCase:
             def __init__(self, session) -> None:
                 pass
 
-            async def get_by_telegram_id(self, telegram_id: int):
-                return SimpleNamespace(id=1, telegram_id=telegram_id, name="Master")
-
-        class _Entitlements:
-            def __init__(self, session) -> None:
-                pass
-
-            async def can_attach_client(self, master_id: int):
-                return SimpleNamespace(allowed=True, current=0, limit=10)
-
-        class _CreateInvite:
-            def __init__(self, session) -> None:
-                pass
-
-            async def execute_for_telegram(self, *, master_telegram_id: int) -> CreateClientInviteResult:
-                return CreateClientInviteResult(
-                    token="t",
-                    link="https://t.me/x?start=c_t",
-                    master_id=1,
+            async def execute(self, *, master_telegram_id: int):
+                return CreateMasterClientInviteResult(
+                    outcome=CreateMasterClientInviteOutcome.OK,
+                    invite_link="https://t.me/x?start=c_t",
                     master_name="Master",
+                    plan=SimpleNamespace(is_pro=False),
+                    usage=SimpleNamespace(clients_count=0, bookings_created_this_month=0),
+                    clients_limit=10,
                 )
 
         answer_tracked = AsyncMock()
         with (
             patch.object(h, "active_session", _fake_active_session),
-            patch.object(h, "MasterRepository", _MasterRepo),
-            patch.object(h, "EntitlementsService", _Entitlements),
-            patch.object(h, "CreateClientInvite", _CreateInvite),
+            patch.object(h, "CreateMasterClientInvite", _UseCase),
             patch.object(h, "answer_tracked", answer_tracked),
         ):
-            await h.start_invite_client(callback=callback, state=state)
+            await h.start_invite_client(callback=callback, state=state, notifier=notifier)
 
         data = await state.get_data()
         self.assertEqual(data["invite_link"], "https://t.me/x?start=c_t")
         self.assertEqual(data["master_name"], "Master")
         self.assertEqual(state._state, h.MasterInviteClient.choosing_format)
         answer_tracked.assert_awaited()
+
+    async def test_choose_format_escapes_user_content_in_message(self) -> None:
+        from src.handlers.master import invite_client as h
+
+        state = MemoryState()
+        await state.update_data(invite_link='https://t.me/x?start="bad"', master_name="<b>M</b>")
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            data="m:invite:friendly",
+            message=SimpleNamespace(edit_text=AsyncMock(), answer=AsyncMock()),
+            bot=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+
+        with patch.object(h, "_reset_invite_flow", AsyncMock()):
+            await h.master_invite_choose_format(callback=callback, state=state)
+
+        callback.message.answer.assert_awaited()
+        sent_text = callback.message.answer.await_args.args[0]
+        self.assertIn("&lt;b&gt;M&lt;/b&gt;", sent_text)
+        self.assertIn("href=\"https://t.me/x?start=&quot;bad&quot;\"", sent_text)

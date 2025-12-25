@@ -118,9 +118,14 @@ async def master_search_client(callback: CallbackQuery, state: FSMContext) -> No
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["invite"])
-async def master_invite_client(callback: CallbackQuery, state: FSMContext, admin_alerter: AdminAlerter | None = None) -> None:
+async def master_invite_client(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    admin_alerter: AdminAlerter | None = None,
+) -> None:
     await callback.answer()
-    await start_invite_client(callback, state, admin_alerter=admin_alerter)
+    await start_invite_client(callback, state, notifier, admin_alerter=admin_alerter)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["back"])
