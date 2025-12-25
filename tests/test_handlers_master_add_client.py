@@ -120,7 +120,8 @@ class MasterAddClientHandlerTests(unittest.IsolatedAsyncioTestCase):
         answer.assert_awaited()
 
     async def test_confirm_missing_data_clears_state(self) -> None:
-        from src.handlers.master import add_client as h, flow as flow_h
+        from src.handlers.master import add_client as h
+        from src.handlers.shared import flow as flow_h
 
         state = MemoryState()
         await state.update_data(name="N")  # missing phone

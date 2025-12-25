@@ -15,11 +15,11 @@ from src.filters.user_role import UserRole
 from src.handlers.master.add_booking import start_add_booking
 from src.handlers.master.add_client import start_add_client
 from src.handlers.master.edit_client import start_edit_client
-from src.handlers.master.guards import rate_limit_message
 from src.handlers.master.invite_client import start_invite_client
 from src.handlers.master.list_clients import start_clients_entry
 from src.handlers.master.schedule import master_schedule
 from src.handlers.master.settings import open_master_settings
+from src.handlers.shared.guards import rate_limit_message
 from src.notifications.notifier import Notifier
 from src.observability.alerts import AdminAlerter
 from src.rate_limiter import RateLimiter

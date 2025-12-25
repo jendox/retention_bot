@@ -6,7 +6,7 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import active_session
-from src.handlers.master.ui import safe_delete, safe_edit_reply_markup, safe_edit_text
+from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup, safe_edit_text
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.repositories import MasterNotFound, MasterRepository

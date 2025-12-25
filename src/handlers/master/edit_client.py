@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
-from src.handlers.master.ui import safe_bot_edit_message_text, safe_edit_text
+from src.handlers.shared.ui import safe_bot_edit_message_text, safe_edit_text
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientUpdate
 from src.texts import common as common_txt, edit_client as txt

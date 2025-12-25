@@ -6,8 +6,8 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session
 from src.datetime_utils import to_zone
-from src.handlers.master.guards import rate_limit_callback
-from src.handlers.master.ui import safe_edit_reply_markup, safe_edit_text
+from src.handlers.shared.guards import rate_limit_callback
+from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts

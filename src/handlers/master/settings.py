@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
-from src.handlers.master.ui import safe_bot_edit_message_text, safe_delete, safe_edit_text
+from src.handlers.shared.ui import safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone

@@ -18,7 +18,7 @@ async def context_lost(
     reason: str,
 ) -> None:
     """
-    Consistent handler for "state is missing/corrupted" cases in master flows.
+    Consistent handler for "state is missing/corrupted" cases in FSM-based flows.
     """
     ev.warning("flow.context_lost", flow=bucket, reason=reason)
     await callback.answer(common_txt.context_lost(), show_alert=True)

@@ -8,9 +8,9 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.core.sa import active_session
-from src.handlers.master.flow import context_lost
-from src.handlers.master.guards import rate_limit_callback
-from src.handlers.master.ui import safe_edit_text
+from src.handlers.shared.flow import context_lost
+from src.handlers.shared.guards import rate_limit_callback
+from src.handlers.shared.ui import safe_edit_text
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier, build_facts
 from src.notifications.policy import NotificationFacts

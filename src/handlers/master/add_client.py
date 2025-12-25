@@ -6,9 +6,9 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session
 from src.filters.user_role import UserRole
-from src.handlers.master.flow import context_lost
-from src.handlers.master.guards import rate_limit_callback
-from src.handlers.master.ui import safe_edit_reply_markup
+from src.handlers.shared.flow import context_lost
+from src.handlers.shared.guards import rate_limit_callback
+from src.handlers.shared.ui import safe_edit_reply_markup
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
