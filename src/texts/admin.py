@@ -39,7 +39,7 @@ def render_plan_text(
         f"<b>Новые записи (мес):</b> {bookings_current}/{bookings_limit}\n"
         f"<b>Горизонт записи:</b> {horizon_days} дней"
     )
-    if not "Pro" in status:
+    if "Pro" not in status:
         text += (
             "\n\n"
             "Чтобы подключить Pro — напиши: "

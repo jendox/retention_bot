@@ -147,6 +147,8 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+# ------------ handlers ------------
+
 async def start_master_registration(
     message: Message,
     state: FSMContext,

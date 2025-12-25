@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, time
+from datetime import UTC, datetime, time, timedelta
 from enum import StrEnum
 
 from sqlalchemy.exc import IntegrityError
@@ -38,21 +38,25 @@ class StartMasterRegistration:
     def __init__(self, session) -> None:
         self._session = session
 
-    async def execute(self, request: StartMasterRegistrationRequest) -> StartMasterRegistrationResult:
+    async def _check_if_master(self, telegram_id: int) -> bool:
         master_repo = MasterRepository(self._session)
-        client_repo = ClientRepository(self._session)
-
         try:
-            await master_repo.get_by_telegram_id(request.telegram_id)
-            is_master = True
+            await master_repo.get_by_telegram_id(telegram_id)
+            return True
         except MasterNotFound:
-            is_master = False
+            return False
 
+    async def _check_if_client(self, telegram_id: int) -> bool:
+        client_repo = ClientRepository(self._session)
         try:
-            await client_repo.get_by_telegram_id(request.telegram_id)
-            is_client = True
+            await client_repo.get_by_telegram_id(telegram_id)
+            return True
         except ClientNotFound:
-            is_client = False
+            return False
+
+    async def execute(self, request: StartMasterRegistrationRequest) -> StartMasterRegistrationResult:
+        is_master = await self._check_if_master(request.telegram_id)
+        is_client = await self._check_if_client(request.telegram_id)
 
         if is_master:
             return StartMasterRegistrationResult(
@@ -138,6 +142,7 @@ class CompleteMasterRegistration:
             await subscription_repo.upsert_trial(master.id, trial_until)
 
         return CompleteMasterRegistrationResult(
-            outcome=CompleteMasterRegistrationOutcome.CREATED if created else CompleteMasterRegistrationOutcome.ALREADY_EXISTS,
+            outcome=CompleteMasterRegistrationOutcome.CREATED if created
+            else CompleteMasterRegistrationOutcome.ALREADY_EXISTS,
             master_id=master.id,
         )
