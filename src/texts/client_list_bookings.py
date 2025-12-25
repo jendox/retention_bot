@@ -14,6 +14,30 @@ def title(*, t: Translator = _noop_t) -> str:
     return t("Твои активные записи 🗓")
 
 
+def title_page(*, page: int, total_pages: int, t: Translator = _noop_t) -> str:
+    return t(f"Твои активные записи 🗓 (страница {page}/{total_pages})")
+
+
+def details_title(*, t: Translator = _noop_t) -> str:
+    return t("Детали записи 🗓")
+
+
+def cancel_confirm(*, t: Translator = _noop_t) -> str:
+    return t("Точно отменить запись?")
+
+
+def btn_prev(*, t: Translator = _noop_t) -> str:
+    return t("⬅️ Назад")
+
+
+def btn_next(*, t: Translator = _noop_t) -> str:
+    return t("Вперёд ➡️")
+
+
+def btn_close(*, t: Translator = _noop_t) -> str:
+    return t("✖️ Закрыть")
+
+
 def invalid_command(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Некорректная команда.")
 

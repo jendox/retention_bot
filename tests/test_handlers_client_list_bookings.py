@@ -61,7 +61,7 @@ class ClientListBookingsHandlerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(h, "ClientRepository", _ClientRepo),
             patch.object(h, "BookingRepository", _BookingRepo),
         ):
-            await h.client_cancel_booking(callback=callback, state=SimpleNamespace(), notifier=notifier)
+            await h.client_cancel_booking_legacy(callback=callback, notifier=notifier)
 
         notifier.maybe_send.assert_awaited()
         request = notifier.maybe_send.await_args.args[0]
@@ -79,14 +79,31 @@ class ClientListBookingsHandlerTests(unittest.IsolatedAsyncioTestCase):
             master=SimpleNamespace(name="<b>X</b>"),
         )
 
-        bot = SimpleNamespace(send_message=AsyncMock())
-        await h._list_bookings(
-            bot=bot,
-            chat_id=10,
-            bookings=[booking],
-            client_timezone=Timezone("Europe/Minsk"),
-        )
-
-        sent = bot.send_message.await_args.kwargs["text"]
+        sent = h._build_booking_row_text(index=1, booking=booking, client_timezone=Timezone("Europe/Minsk"))
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", sent)
         self.assertNotIn("<b>X</b>", sent)
+
+    async def test_close_falls_back_to_hiding_keyboard_on_delete_race(self) -> None:
+        from src.handlers.client import list_bookings as h
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            data="c:bookings:close",
+            answer=AsyncMock(),
+            message=SimpleNamespace(
+                delete=AsyncMock(),
+                edit_reply_markup=AsyncMock(),
+            ),
+            bot=SimpleNamespace(),
+        )
+
+        state = SimpleNamespace(
+            get_data=AsyncMock(return_value={h.LIST_BOOKINGS_MAIN_KEY: {"chat_id": 10, "message_id": 1}}),
+            set_data=AsyncMock(),
+        )
+
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=False))
+        with patch.object(h, "safe_delete", AsyncMock(return_value=False)):
+            await h.client_bookings_callbacks(callback=callback, state=state, notifier=notifier)
+
+        callback.message.edit_reply_markup.assert_awaited_with(reply_markup=None)

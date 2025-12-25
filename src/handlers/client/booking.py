@@ -12,6 +12,7 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
+from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_edit_text
@@ -50,6 +51,7 @@ from src.use_cases.create_client_booking import (
 )
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
+from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
 
 router = Router(name=__name__)
@@ -155,6 +157,7 @@ async def start_client_add_booking(
 
 
 @router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.selecting_master),
     F.data.startswith("book:master:"),
 )
@@ -234,6 +237,7 @@ async def _get_free_slots(session, *, master_id: int, client_day: date, client_t
 
 
 @router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.selecting_date),
     SimpleCalendarCallback.filter(),
 )
@@ -306,6 +310,7 @@ async def process_booking_calendar(
 
 
 @router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.selecting_slot),
     F.data.startswith("book:slot:"),
 )
@@ -347,6 +352,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 
 
 @router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.confirm),
     F.data == "book:cancel",
 )
@@ -359,6 +365,7 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(
         ClientBooking.selecting_master,
         ClientBooking.selecting_date,
@@ -377,6 +384,7 @@ async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> Non
 
 
 @router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.confirm),
     F.data == "book:confirm",
 )
@@ -423,7 +431,7 @@ async def _booking_confirm_impl(*, callback: CallbackQuery, state: FSMContext, n
                 await callback.answer(text=booking_limit_reached(), show_alert=True)
                 return
             if result.error == CreateClientBookingError.SLOT_NOT_AVAILABLE:
-                await callback.answer(text=slot_not_available(), show_alert=True)
+                await _recover_after_slot_not_available(callback=callback, state=state)
                 return
             await callback.answer(state_broken_alert(), show_alert=True)
             return
@@ -480,3 +488,59 @@ async def _booking_confirm_impl(*, callback: CallbackQuery, state: FSMContext, n
                 ),
             ),
         )
+
+
+async def _recover_after_slot_not_available(*, callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer(text=slot_not_available(), show_alert=True)
+
+    data = await state.get_data()
+    master_id = data.get("master_id")
+    client_timezone: Timezone | None = data.get("client_timezone")
+    client_day_iso = data.get("client_day")
+
+    if master_id is None or client_timezone is None or not isinstance(client_day_iso, str):
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_recovery_data")
+        return
+
+    try:
+        client_day = date.fromisoformat(client_day_iso)
+    except ValueError:
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="invalid_client_day")
+        return
+
+    async with session_local() as session:
+        free = await _get_free_slots(
+            session,
+            master_id=int(master_id),
+            client_day=client_day,
+            client_tz=client_timezone,
+        )
+
+    if callback.message is None:
+        return
+
+    if not free.slots_utc:
+        calendar = SimpleCalendar()
+        reply_markup = await calendar.start_calendar()
+        await safe_edit_text(
+            callback.message,
+            text=choose_date(),
+            reply_markup=reply_markup,
+            ev=ev,
+            event="client_booking.edit_choose_date_failed",
+        )
+        await state.set_state(ClientBooking.selecting_date)
+        return
+
+    await state.update_data(
+        booking_slots_utc=[dt.isoformat() for dt in free.slots_utc],
+        selected_slot_index=None,
+    )
+    await safe_edit_text(
+        callback.message,
+        text=choose_time(client_day=client_day),
+        reply_markup=_build_slots_keyboard(free.slots_for_client),
+        ev=ev,
+        event="client_booking.edit_choose_time_failed",
+    )
+    await state.set_state(ClientBooking.selecting_slot)
