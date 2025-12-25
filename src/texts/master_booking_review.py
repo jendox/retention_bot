@@ -15,6 +15,14 @@ def already_handled(*, t: Translator = _noop_t) -> str:
     return t("ℹ️ Эта запись уже обработана.")
 
 
+def past_booking(*, t: Translator = _noop_t) -> str:
+    return t("ℹ️ Нельзя подтвердить прошедшую запись.")
+
+
+def failed(*, t: Translator = _noop_t) -> str:
+    return t("⚠️ Не удалось обработать запись.")
+
+
 def done(*, t: Translator = _noop_t) -> str:
     return t("✅ Готово.")
 
