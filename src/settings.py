@@ -72,6 +72,7 @@ class ObservabilitySettings(BaseModel):
     alerts_throttle_sec_by_event: dict[str, int] = Field(default_factory=dict)
     alerts_events: set[str] | None = None
     alerts_level_by_event: dict[str, str] = Field(default_factory=dict)
+    alerts_text_by_event: dict[str, str] = Field(default_factory=dict)
 
     # Per-event log sampling rates in range [0..1]. If an event is present here and its rate < 1,
     # EventLogger will emit it only for a subset of updates (deterministically by trace_id when possible).
@@ -114,6 +115,33 @@ class ObservabilitySettings(BaseModel):
                 k, v = part.split("=", 1)
                 k = k.strip()
                 v = v.strip().upper()
+                if not k or not v:
+                    continue
+                items[k] = v
+            return items
+        return value
+
+    @field_validator("alerts_text_by_event", mode="before")
+    @classmethod
+    def _parse_alert_texts(cls, value):
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {str(k): str(v) for k, v in value.items()}
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return {}
+            # Format: "event=Some text;event2=Another text"
+            # Semicolon separator allows using commas inside texts.
+            items: dict[str, str] = {}
+            for part in raw.split(";"):
+                part = part.strip()
+                if not part or "=" not in part:
+                    continue
+                k, v = part.split("=", 1)
+                k = k.strip()
+                v = v.strip()
                 if not k or not v:
                     continue
                 items[k] = v

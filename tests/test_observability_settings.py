@@ -21,3 +21,11 @@ class ObservabilitySettingsParsingTests(unittest.TestCase):
         self.assertEqual(settings.observability.alerts_level_by_event["a.b"], "WARNING")
         self.assertEqual(settings.observability.alerts_level_by_event["c.d"], "ERROR")
 
+    def test_parses_alert_text_by_event(self):
+        settings = AppSettings(
+            telegram={"bot_token": "x", "bot_username": "u"},
+            database={"postgres_url": "p", "redis_url": "r"},
+            observability={"alerts_text_by_event": "a.b=Hello;a.c=Text with, comma"},
+        )
+        self.assertEqual(settings.observability.alerts_text_by_event["a.b"], "Hello")
+        self.assertEqual(settings.observability.alerts_text_by_event["a.c"], "Text with, comma")

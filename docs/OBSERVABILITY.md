@@ -17,6 +17,7 @@ Alerts are controlled by `AppSettings.observability`:
 - `OBSERVABILITY__ALERTS_DEFAULT_THROTTLE_SEC` (default `600`)
 - `OBSERVABILITY__ALERTS_EVENTS` (optional allowlist: `event1,event2,...`)
 - `OBSERVABILITY__ALERTS_LEVEL_BY_EVENT` (optional overrides: `event=WARNING,event2=ERROR`)
+- `OBSERVABILITY__ALERTS_TEXT_BY_EVENT` (optional overrides: `event=Some text;event2=Another text`)
 - `OBSERVABILITY__ALERTS_THROTTLE_SEC_BY_EVENT` (optional overrides: `event=1800,event2=600`)
 
 ### Recommended minimal allowlist for production
@@ -39,4 +40,3 @@ Example:
 `OBSERVABILITY__LOG_SAMPLE_RATE_BY_EVENT=handler.ok=0.01,master_reg.input_invalid=0.1,master_reg.rate_limited=0.01`
 
 Sampling is deterministic per `trace_id` when available (so a single update is either fully sampled-in or sampled-out).
-

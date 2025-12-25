@@ -137,7 +137,11 @@ class EventLoggerTests(unittest.IsolatedAsyncioTestCase):
         settings = AppSettings(
             telegram={"bot_token": "x", "bot_username": "u"},
             database={"postgres_url": "p", "redis_url": "r"},
-            observability={"alerts_events": {"custom.event"}, "alerts_level_by_event": {"custom.event": "WARNING"}},
+            observability={
+                "alerts_events": {"custom.event"},
+                "alerts_level_by_event": {"custom.event": "WARNING"},
+                "alerts_text_by_event": {"custom.event": "Custom human text"},
+            },
         )
         token = app_settings.set(settings)
         try:
@@ -148,5 +152,6 @@ class EventLoggerTests(unittest.IsolatedAsyncioTestCase):
             kwargs = admin_alerter.notify.await_args.kwargs
             self.assertEqual(kwargs["event"], "custom.event")
             self.assertEqual(kwargs["level"], "WARNING")
+            self.assertEqual(kwargs["text"], "Custom human text")
         finally:
             app_settings.reset(token)

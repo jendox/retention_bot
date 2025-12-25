@@ -119,9 +119,11 @@ class EventLogger:
         throttle_sec = settings.observability.alerts_throttle_sec_by_event.get(event, spec.throttle_sec)
         level_override = settings.observability.alerts_level_by_event.get(event)
         level_to_send = level_override or spec.level
+        text_override = settings.observability.alerts_text_by_event.get(event)
+        text_to_send = text_override or spec.text
         return await admin_alerter.notify(
             event=event,
-            text=spec.text,
+            text=text_to_send,
             level=level_to_send,
             throttle_key=spec.throttle_key,
             throttle_sec=throttle_sec,
