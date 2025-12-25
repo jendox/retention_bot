@@ -68,7 +68,6 @@ async def main():
     )
     redis: Redis | None = None
     admin_alerter: AdminAlerter | None = None
-    bot: Bot | None = None
 
     try:
         token = settings.telegram.bot_token.get_secret_value()

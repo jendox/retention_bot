@@ -216,8 +216,35 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_nested_delimiter="__",
         env_ignore_empty=True,
+        enable_decoding=False,
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        """
+        Filter dotenv keys like `OBSERVABILITY=` (empty string) that pydantic-settings otherwise tries to JSON-decode
+        for nested models, which would crash during parsing.
+        """
+
+        top_level = {"telegram", "database", "admin", "billing", "security", "observability"}
+
+        def filtered_dotenv():
+            env_vars = getattr(dotenv_settings, "env_vars", None)
+            if isinstance(env_vars, dict):
+                for key in list(env_vars.keys()):
+                    if key.lower() in top_level and not str(env_vars.get(key, "")).strip():
+                        env_vars.pop(key, None)
+            return dotenv_settings()
+
+        return init_settings, env_settings, filtered_dotenv, file_secret_settings
 
     @classmethod
     def load(cls, *, env_file: str | None = None) -> Self:
