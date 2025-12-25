@@ -8,10 +8,58 @@ from typing import Any
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
+from src.observability.context import bind_log_context, new_trace_id, reset_log_context, set_log_context
 from src.rate_limiter import RateLimiter
 from src.user_context import UserContextStorage
 
 logger = logging.getLogger(__name__)
+
+
+class LogContextMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        event_ = getattr(event, "event", None)
+        from_user = getattr(event_, "from_user", None)
+        chat = getattr(event_, "chat", None)
+        message = getattr(event_, "message", None)
+
+        ctx: dict[str, Any] = {
+            "trace_id": new_trace_id(),
+            "update_id": getattr(event, "update_id", None),
+            "event_type": type(event_).__name__ if event_ is not None else type(event).__name__,
+            "handler": f"{getattr(handler, '__module__', '')}.{getattr(handler, '__name__', '')}".strip("."),
+        }
+        if from_user is not None:
+            ctx["telegram_id"] = from_user.id
+            if getattr(from_user, "username", None):
+                ctx["telegram_username"] = from_user.username
+        if chat is not None:
+            ctx["chat_id"] = chat.id
+        if message is not None:
+            ctx["message_id"] = getattr(message, "message_id", None)
+
+        token = set_log_context(ctx)
+        try:
+            return await handler(event, data)
+        finally:
+            reset_log_context(token)
+
+
+class HandlerLogContextMiddleware(BaseMiddleware):
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        bind_log_context(
+            handler=f"{getattr(handler, '__module__', '')}.{getattr(handler, '__name__', '')}".strip("."),
+        )
+        return await handler(event, data)
 
 
 class LoggingMiddleware(BaseMiddleware):
@@ -24,37 +72,23 @@ class LoggingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        event_ = getattr(event, "event", None)
-        from_user = getattr(event_, "from_user", None)
-        chat = getattr(event_, "chat", None)
-
-        extra = {
-            "update_id": getattr(event, "update_id", None),
-            "event_type": type(event_).__name__ if event_ is not None else type(event).__name__,
-            "handler": f"{handler.__module__}",
-        }
-        if from_user is not None:
-            extra["telegram_id"] = from_user.id
-        if chat is not None:
-            extra["chat_id"] = chat.id
-
-        active_role = data.get("active_role")
-        if active_role is not None:
-            extra["active_role"] = str(active_role)
-
         started = time.perf_counter()
         try:
             result = await handler(event, data)
-        except Exception:
+        except Exception as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
-            logger.error("handler.error", exc_info=True, extra={**extra, "duration_ms": duration_ms})
+            # Keep one canonical error log in the global error handler; here we only add timing in debug.
+            logger.debug(
+                "handler.exception",
+                extra={"duration_ms": duration_ms, "error_type": type(exc).__name__},
+            )
             raise
 
         duration_ms = int((time.perf_counter() - started) * 1000)
         if duration_ms >= self._slow_threshold_ms:
-            logger.warning("handler.slow", extra={**extra, "duration_ms": duration_ms})
+            logger.warning("handler.slow", extra={"duration_ms": duration_ms})
         else:
-            logger.debug("handler.ok", extra={**extra, "duration_ms": duration_ms})
+            logger.debug("handler.ok", extra={"duration_ms": duration_ms})
         return result
 
 
@@ -74,6 +108,7 @@ class UserContextMiddleware(BaseMiddleware):
             role = await self._storage.get_role(from_user.id)
             data["active_role"] = role
             data["user_ctx_storage"] = self._storage
+            bind_log_context(active_role=str(role))
 
         return await handler(event, data)
 

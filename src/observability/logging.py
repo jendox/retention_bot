@@ -6,6 +6,8 @@ import sys
 import traceback
 from datetime import UTC, datetime
 
+from src.observability.context import get_log_context
+
 _RESERVED_ATTRS: set[str] = {
     "args",
     "asctime",
@@ -34,13 +36,39 @@ _RESERVED_ATTRS: set[str] = {
 
 
 class JsonFormatter(logging.Formatter):
+    def __init__(
+        self,
+        *,
+        service: str | None = None,
+        env: str | None = None,
+        version: str | None = None,
+    ) -> None:
+        super().__init__()
+        base: dict[str, object] = {}
+        if service:
+            base["service"] = service
+        if env:
+            base["env"] = env
+        if version:
+            base["version"] = version
+        self._base = base
+
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
+            **self._base,
             "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "event": record.getMessage(),
         }
+
+        ctx = get_log_context()
+        if ctx:
+            for k, v in ctx.items():
+                if k in payload:
+                    payload[f"ctx_{k}"] = v
+                else:
+                    payload[k] = v
 
         if record.exc_info:
             payload["exception"] = "".join(traceback.format_exception(*record.exc_info)).strip()
@@ -57,14 +85,14 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def setup_logging(*, debug: bool) -> None:
+def setup_logging(*, debug: bool, service: str | None = None, env: str | None = None, version: str | None = None) -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(logging.DEBUG if debug else logging.INFO)
 
     handler = logging.StreamHandler(stream=sys.stdout)
     handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    handler.setFormatter(JsonFormatter())
+    handler.setFormatter(JsonFormatter(service=service, env=env, version=version))
     root.addHandler(handler)
 
     # Keep dependencies quieter in production; debug enables them.
