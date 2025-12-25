@@ -120,5 +120,17 @@ def cancelled_ok(*, t: Translator = _noop_t) -> str:
     return t("✅ Запись отменена.")
 
 
+def cancel_confirm_prompt(*, t: Translator = _noop_t) -> str:
+    return t("⚠️ Точно отменить запись?")
+
+
+def btn_cancel_yes(*, t: Translator = _noop_t) -> str:
+    return t("✅ Да, отменить")
+
+
+def btn_cancel_no(*, t: Translator = _noop_t) -> str:
+    return t("◀️ Не отменять")
+
+
 def unknown_action(*, t: Translator = _noop_t) -> str:
     return t("Неизвестное действие.")

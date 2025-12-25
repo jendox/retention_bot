@@ -1,7 +1,7 @@
-import logging
 from calendar import monthrange
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
+from html import escape as html_escape
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -9,8 +9,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
-from src.datetime_utils import get_timezone
+from src.datetime_utils import get_timezone, to_zone
 from src.filters.user_role import UserRole
+from src.notifications import BookingContext, NotificationEvent, RecipientKind
+from src.notifications.notifier import NotificationRequest, Notifier
+from src.notifications.policy import NotificationFacts
+from src.observability.alerts import AdminAlerter
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, status_badge
@@ -19,7 +25,7 @@ from src.texts.buttons import btn_back, btn_cancel_booking
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 router = Router(name=__name__)
 
 
@@ -55,6 +61,7 @@ TITLE_MAP: dict[Scope, str] = {
     Scope.WEEK: txt.title_week(),
     Scope.MONTH: txt.title_month(),
 }
+
 
 # ---------- callback builders (short + stable) ----------
 
@@ -110,11 +117,12 @@ def _button_text(booking, tz: ZoneInfo, scope: Scope) -> str:
     badge = status_badge(booking.status)
 
     client = getattr(booking, "client", None)
-    client_name = getattr(client, "name", None) or txt.client_fallback(getattr(booking, "client_id", ""))
+    client_name = getattr(client, "name", None) or txt.client_fallback(client_id=getattr(booking, "client_id", ""))
+    client_name_safe = html_escape(str(client_name))
 
     if scope in Scope.long():
-        return f"{badge} {local_dt:%d.%m} {local_dt:%H:%M} · {client_name}"
-    return f"{badge} {local_dt:%H:%M} · {client_name}"
+        return f"{badge} {local_dt:%d.%m} {local_dt:%H:%M} · {client_name_safe}"
+    return f"{badge} {local_dt:%H:%M} · {client_name_safe}"
 
 
 def _build_bookings_list_keyboard(
@@ -192,6 +200,23 @@ def _build_booking_card_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def _build_cancel_confirm_keyboard(*, booking_id: int, scope: Scope, page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=txt.btn_cancel_yes(),
+                    callback_data=cb_action("cancel_yes", booking_id, scope, page),
+                ),
+                InlineKeyboardButton(
+                    text=txt.btn_cancel_no(),
+                    callback_data=cb_action("cancel_no", booking_id, scope, page),
+                ),
+            ],
+        ],
+    )
+
+
 # ---------- helpers ----------
 
 async def _fetch_master(telegram_id: int):
@@ -253,24 +278,96 @@ async def _cancel_booking(*, booking_id: int, master_id: int) -> bool:
         return await repo.cancel_by_master(booking_id=booking_id, master_id=master_id)
 
 
+async def _send_or_edit(
+    callback: CallbackQuery,
+    *,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    if callback.message is not None:
+        await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
+        return
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
+
+
+async def _maybe_notify_client_cancelled(
+    *,
+    notifier: Notifier,
+    booking,
+    plan_is_pro: bool,
+) -> None:
+    client_tg = getattr(booking.client, "telegram_id", None)
+    if client_tg is None:
+        return
+
+    master_name_safe = html_escape(str(getattr(booking.master, "name", "")))
+    slot_client = to_zone(booking.start_at.astimezone(UTC), booking.client.timezone)
+    slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
+    facts = NotificationFacts(
+        event=NotificationEvent.BOOKING_CANCELLED_BY_MASTER,
+        recipient=RecipientKind.CLIENT,
+        chat_id=int(client_tg),
+        plan_is_pro=bool(plan_is_pro),
+        master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
+        client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
+        booking_start_at_utc=booking.start_at.astimezone(UTC),
+    )
+    await notifier.maybe_send(
+        NotificationRequest(
+            event=NotificationEvent.BOOKING_CANCELLED_BY_MASTER,
+            recipient=RecipientKind.CLIENT,
+            chat_id=int(client_tg),
+            context=BookingContext(
+                booking_id=booking.id,
+                master_name=master_name_safe,
+                client_name=html_escape(str(getattr(booking.client, "name", ""))),
+                slot_str=slot_str,
+                duration_min=booking.duration_min,
+            ),
+            facts=facts,
+        ),
+    )
+
+
 # ---------- rendering ----------
 
 async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1) -> None:
-    master = await _fetch_master(callback.from_user.id)
+    bind_log_context(flow="master_schedule", step="send_schedule")
+    try:
+        master = await _fetch_master(callback.from_user.id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.load_master_failed", exc=exc)
+        await callback.answer(txt.navigation_error(), show_alert=True)
+        return
     master_tz = get_timezone(str(master.timezone.value))
 
     start_local, end_local, cutoff_local = _compute_range(master_tz, scope)
 
     statuses = BookingStatus.active() if scope in Scope.long() else BookingStatus.without_completed()
-    async with session_local() as session:
-        repo = BookingRepository(session)
-        bookings = await repo.get_for_master_in_range(
+    try:
+        async with session_local() as session:
+            repo = BookingRepository(session)
+            bookings = await repo.get_for_master_in_range(
+                master_id=master.id,
+                start_at_utc=start_local.astimezone(UTC),
+                end_at_utc=end_local.astimezone(UTC),
+                statuses=statuses,
+                load_clients=True,
+            )
+    except Exception as exc:
+        await ev.aexception(
+            "master_schedule.load_bookings_failed",
+            exc=exc,
             master_id=master.id,
-            start_at_utc=start_local.astimezone(UTC),
-            end_at_utc=end_local.astimezone(UTC),
-            statuses=statuses,
-            load_clients=True,
+            scope=scope.value,
         )
+        await callback.answer(txt.navigation_error(), show_alert=True)
+        return
 
     if cutoff_local:
         bookings = [
@@ -288,18 +385,29 @@ async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1
         text = txt.choose_booking(title=title)
         reply_markup = _build_bookings_list_keyboard(bookings=bookings, tz=master_tz, scope=scope, page=page)
 
-    await callback.message.edit_text(text=text, reply_markup=reply_markup, parse_mode="HTML")
+    await _send_or_edit(callback, text=text, reply_markup=reply_markup)
 
 
 async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
-    master = await _fetch_master(callback.from_user.id)
+    bind_log_context(flow="master_schedule", step="booking_card")
+    try:
+        master = await _fetch_master(callback.from_user.id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.load_master_failed", exc=exc)
+        await callback.answer(txt.open_booking_error(), show_alert=True)
+        return
     master_tz = get_timezone(str(master.timezone.value))
 
-    async with session_local() as session:
-        repo = BookingRepository(session)
-        booking = await repo.get_for_review(booking_id)
-        entitlements = EntitlementsService(session)
-        plan = await entitlements.get_plan(master_id=master.id)
+    try:
+        async with session_local() as session:
+            repo = BookingRepository(session)
+            booking = await repo.get_for_review(booking_id)
+            entitlements = EntitlementsService(session)
+            plan = await entitlements.get_plan(master_id=master.id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.load_booking_failed", exc=exc, booking_id=booking_id)
+        await callback.answer(txt.open_booking_error(), show_alert=True)
+        return
 
     if booking.master.id != master.id:
         await callback.answer(txt.no_access(), show_alert=True)
@@ -307,10 +415,12 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
         return
 
     client = getattr(booking, "client", None)
-    client_name = getattr(client, "name", None) or txt.client_fallback(getattr(booking, "client_id", ""))
+    client_name = getattr(client, "name", None) or txt.client_fallback(client_id=getattr(booking, "client_id", ""))
+    client_name_safe = html_escape(str(client_name))
     phone = getattr(client, "phone", None)
 
-    phone_line = f'<a href="tel:{phone}">{phone}</a>' if phone else txt.phone_missing()
+    phone_safe = html_escape(str(phone)) if phone else None
+    phone_line = f'<a href="tel:{phone_safe}">{phone_safe}</a>' if phone_safe else txt.phone_missing()
 
     local_dt = booking.start_at.astimezone(master_tz)
     badge = status_badge(booking.status)
@@ -319,11 +429,12 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
         status_line=f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
         date_line=f"📅 {local_dt:%d.%m.%Y}",
         time_line=f"⏰ {local_dt:%H:%M}",
-        client_line=f"👤 {client_name}",
+        client_line=f"👤 {client_name_safe}",
         phone_line=f"📞 {phone_line}",
     )
 
-    await callback.message.edit_text(
+    await _send_or_edit(
+        callback,
         text=text,
         reply_markup=_build_booking_card_keyboard(
             booking_id=booking_id,
@@ -332,13 +443,132 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
             page=page,
             allow_reschedule=plan.is_pro,
         ),
-        parse_mode="HTML",
     )
+
+
+async def _send_cancel_confirm_card(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+    bind_log_context(flow="master_schedule", step="cancel_confirm")
+    try:
+        master = await _fetch_master(callback.from_user.id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.load_master_failed", exc=exc)
+        await callback.answer(txt.action_error(), show_alert=True)
+        return
+
+    master_tz = get_timezone(str(master.timezone.value))
+    try:
+        async with session_local() as session:
+            repo = BookingRepository(session)
+            booking = await repo.get_for_review(booking_id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.load_booking_failed", exc=exc, booking_id=booking_id)
+        await callback.answer(txt.action_error(), show_alert=True)
+        return
+
+    if booking.master.id != master.id:
+        await callback.answer(txt.no_access(), show_alert=True)
+        await _send_schedule(callback, scope=scope, page=page)
+        return
+
+    client = getattr(booking, "client", None)
+    client_name = getattr(client, "name", None) or txt.client_fallback(client_id=getattr(booking, "client_id", ""))
+    client_name_safe = html_escape(str(client_name))
+    phone = getattr(client, "phone", None)
+    phone_safe = html_escape(str(phone)) if phone else None
+    phone_line = f'<a href="tel:{phone_safe}">{phone_safe}</a>' if phone_safe else txt.phone_missing()
+
+    local_dt = booking.start_at.astimezone(master_tz)
+    badge = status_badge(booking.status)
+    text = txt.card(
+        status_line=f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
+        date_line=f"📅 {local_dt:%d.%m.%Y}",
+        time_line=f"⏰ {local_dt:%H:%M}",
+        client_line=f"👤 {client_name_safe}",
+        phone_line=f"📞 {phone_line}",
+    )
+    text = f"{text}\n\n{txt.cancel_confirm_prompt()}"
+
+    await _send_or_edit(
+        callback,
+        text=text,
+        reply_markup=_build_cancel_confirm_keyboard(booking_id=booking_id, scope=scope, page=page),
+    )
+
+
+async def _handle_action_cancel_prompt(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+    await callback.answer()
+    await _send_cancel_confirm_card(callback, booking_id=booking_id, scope=scope, page=page)
+
+
+async def _handle_action_cancel_no(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+    await callback.answer()
+    await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+
+
+async def _handle_action_cancel_yes(
+    callback: CallbackQuery,
+    *,
+    booking_id: int,
+    scope: Scope,
+    page: int,
+    notifier: Notifier,
+    admin_alerter: AdminAlerter | None,
+) -> None:
+    try:
+        master = await _fetch_master(callback.from_user.id)
+        ok = await _cancel_booking(booking_id=booking_id, master_id=master.id)
+    except Exception as exc:
+        await ev.aexception(
+            "master_schedule.cancel_failed",
+            exc=exc,
+            admin_alerter=admin_alerter,
+            booking_id=booking_id,
+        )
+        await callback.answer(txt.cancel_failed(), show_alert=True)
+        return
+
+    if not ok:
+        await callback.answer(txt.cancel_failed(), show_alert=True)
+        return
+
+    await callback.answer(txt.cancelled_ok(), show_alert=True)
+
+    # Notify client (Pro-only + toggles checked by policy).
+    try:
+        async with session_local() as session:
+            booking_repo = BookingRepository(session)
+            booking = await booking_repo.get_for_review(booking_id)
+            entitlements = EntitlementsService(session)
+            plan = await entitlements.get_plan(master_id=master.id)
+        await _maybe_notify_client_cancelled(notifier=notifier, booking=booking, plan_is_pro=plan.is_pro)
+    except Exception as exc:
+        await ev.aexception(
+            "master_schedule.cancel_notify_failed",
+            exc=exc,
+            booking_id=booking_id,
+            admin_alerter=admin_alerter,
+        )
+
+    await _send_schedule(callback, scope=scope, page=page)
+
+
+async def _handle_action_reschedule(
+    callback: CallbackQuery,
+    *,
+    booking_id: int,
+    scope: Scope,
+    page: int,
+    state: FSMContext,
+) -> None:
+    from src.handlers.master.reschedule import start_reschedule
+
+    await start_reschedule(callback, state, booking_id=booking_id, scope=scope, page=page)
 
 
 # ---------- entrypoint ----------
 
 async def master_schedule(message: Message) -> None:
+    bind_log_context(flow="master_schedule", step="start")
     await message.answer(
         text=txt.choose_period(),
         reply_markup=_build_period_keyboard(),
@@ -349,11 +579,13 @@ async def master_schedule(message: Message) -> None:
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:noop")
 async def noop(callback: CallbackQuery) -> None:
+    bind_log_context(flow="master_schedule", step="noop")
     await callback.answer()
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.in_(SCHEDULE_CB.values()))
 async def master_schedule_period_callbacks(callback: CallbackQuery) -> None:
+    bind_log_context(flow="master_schedule", step="choose_period")
     data = callback.data or ""
 
     if data == SCHEDULE_CB["back_menu"]:
@@ -361,25 +593,27 @@ async def master_schedule_period_callbacks(callback: CallbackQuery) -> None:
         try:
             await callback.message.delete()
         except Exception:
-            logger.debug("schedule.delete_menu_failed", exc_info=True)
+            ev.debug("schedule.delete_menu_failed")
         return
 
     if data == SCHEDULE_CB["back_periods"]:
         await callback.answer()
-        await callback.message.edit_text(
-            text=txt.choose_period(),
-            reply_markup=_build_period_keyboard(),
-        )
+        await _send_or_edit(callback, text=txt.choose_period(), reply_markup=_build_period_keyboard())
         return
 
     await callback.answer()
 
-    scope = Scope(data.split(":")[-1])
+    try:
+        scope = Scope(data.split(":")[-1])
+    except Exception:
+        await callback.answer(txt.navigation_error(), show_alert=True)
+        return
     await _send_schedule(callback, scope=scope, page=1)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:s:"))
 async def master_schedule_pagination(callback: CallbackQuery) -> None:
+    bind_log_context(flow="master_schedule", step="pagination")
     # m:s:<scope>:p:<page>
     parts = (callback.data or "").split(":")
     # ["m","s","week","p","2"]
@@ -388,7 +622,7 @@ async def master_schedule_pagination(callback: CallbackQuery) -> None:
         page = int(parts[4])
     except Exception:
         await callback.answer(txt.navigation_error(), show_alert=False)
-        logger.debug("schedule.pagination_parse_failed", extra={"data": callback.data}, exc_info=True)
+        ev.debug("schedule.pagination_parse_failed")
         return
 
     await callback.answer()
@@ -397,6 +631,7 @@ async def master_schedule_pagination(callback: CallbackQuery) -> None:
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:b:"))
 async def master_open_booking_card(callback: CallbackQuery) -> None:
+    bind_log_context(flow="master_schedule", step="open_booking")
     # m:b:<booking_id>:s:<scope>:p:<page>
     parts = (callback.data or "").split(":")
     try:
@@ -405,7 +640,7 @@ async def master_open_booking_card(callback: CallbackQuery) -> None:
         page = int(parts[6])
     except Exception:
         await callback.answer(txt.open_booking_error(), show_alert=False)
-        logger.debug("schedule.open_booking_parse_failed", extra={"data": callback.data}, exc_info=True)
+        ev.debug("schedule.open_booking_parse_failed")
         return
 
     await callback.answer()
@@ -413,7 +648,13 @@ async def master_open_booking_card(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:a:"))
-async def master_booking_actions(callback: CallbackQuery, state: FSMContext) -> None:
+async def master_booking_actions(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    admin_alerter: AdminAlerter | None = None,
+) -> None:
+    bind_log_context(flow="master_schedule", step="action")
     # m:a:<action>:<booking_id>:s:<scope>:p:<page>
     parts = (callback.data or "").split(":")
     try:
@@ -423,23 +664,30 @@ async def master_booking_actions(callback: CallbackQuery, state: FSMContext) -> 
         page = int(parts[7])
     except Exception:
         await callback.answer(txt.action_error(), show_alert=False)
-        logger.debug("schedule.action_parse_failed", extra={"data": callback.data}, exc_info=True)
+        ev.debug("schedule.action_parse_failed")
         return
 
-    if action == "cancel":
-        master = await _fetch_master(callback.from_user.id)
-        if not await _cancel_booking(booking_id=booking_id, master_id=master.id):
-            await callback.answer(txt.cancel_failed(), show_alert=True)
-            return
-
-        await callback.answer(txt.cancelled_ok(), show_alert=True)
-        await _send_schedule(callback, scope=scope, page=page)
+    handlers = {
+        "cancel": lambda: _handle_action_cancel_prompt(callback, booking_id=booking_id, scope=scope, page=page),
+        "cancel_no": lambda: _handle_action_cancel_no(callback, booking_id=booking_id, scope=scope, page=page),
+        "cancel_yes": lambda: _handle_action_cancel_yes(
+            callback,
+            booking_id=booking_id,
+            scope=scope,
+            page=page,
+            notifier=notifier,
+            admin_alerter=admin_alerter,
+        ),
+        "reschedule": lambda: _handle_action_reschedule(
+            callback,
+            booking_id=booking_id,
+            scope=scope,
+            page=page,
+            state=state,
+        ),
+    }
+    handler = handlers.get(action)
+    if handler is None:
+        await callback.answer(txt.unknown_action(), show_alert=False)
         return
-
-    if action == "reschedule":
-        from src.handlers.master.reschedule import start_reschedule
-
-        await start_reschedule(callback, state, booking_id=booking_id, scope=scope, page=page)
-        return
-
-    await callback.answer(txt.unknown_action(), show_alert=False)
+    await handler()
