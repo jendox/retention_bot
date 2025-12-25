@@ -4,8 +4,6 @@ from datetime import date, datetime
 
 from src.texts.base import Translator, noop_t as _noop_t
 
-# ----- Flow texts -----
-
 
 def no_masters(*, t: Translator = _noop_t) -> str:
     return t(

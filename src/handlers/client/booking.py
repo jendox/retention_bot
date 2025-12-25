@@ -67,6 +67,17 @@ class ClientBooking(StatesGroup):
     confirm = State()
 
 
+def _coerce_timezone(value: object) -> Timezone | None:
+    if isinstance(value, Timezone):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return Timezone(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for master in masters:
@@ -137,7 +148,7 @@ async def start_client_add_booking(
 
     await state.update_data(
         client_id=client.id,
-        client_timezone=client.timezone,
+        client_timezone=_coerce_timezone(client.timezone) or client.timezone,
         client_name=client.name,
     )
 
@@ -213,7 +224,10 @@ async def _load_calendar_context(state: FSMContext) -> tuple[int, Timezone] | No
     client_timezone = data.get("client_timezone")
     if master_id is None or client_timezone is None:
         return None
-    return int(master_id), client_timezone
+    tz = _coerce_timezone(client_timezone)
+    if tz is None:
+        return None
+    return int(master_id), tz
 
 
 async def _validate_booking_day(
@@ -323,7 +337,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 
     data = await state.get_data()
     slots_iso: list[str] = data.get("booking_slots_utc", [])
-    client_timezone: Timezone = data.get("client_timezone")
+    client_timezone = _coerce_timezone(data.get("client_timezone"))
 
     if client_timezone is None or not slots_iso:
         await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_slots_or_timezone")
@@ -345,6 +359,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
             callback.message,
             text=confirm_details(slot_dt_client=slot_dt_client),
             reply_markup=_build_confirm_keyboard(),
+            parse_mode="HTML",
             ev=ev,
             event="client_booking.edit_confirm_failed",
         )
@@ -495,7 +510,7 @@ async def _recover_after_slot_not_available(*, callback: CallbackQuery, state: F
 
     data = await state.get_data()
     master_id = data.get("master_id")
-    client_timezone: Timezone | None = data.get("client_timezone")
+    client_timezone = _coerce_timezone(data.get("client_timezone"))
     client_day_iso = data.get("client_day")
 
     if master_id is None or client_timezone is None or not isinstance(client_day_iso, str):

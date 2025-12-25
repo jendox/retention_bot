@@ -31,6 +31,21 @@ async def _fake_session_local():
 
 
 class ClientBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_load_calendar_context_accepts_string_timezone(self) -> None:
+        from src.handlers.client import booking as h
+
+        state = MemoryState()
+        await state.update_data(
+            master_id=1,
+            client_timezone="Europe/Minsk",
+        )
+
+        ctx = await h._load_calendar_context(state)
+        self.assertIsNotNone(ctx)
+        master_id, tz = ctx
+        self.assertEqual(master_id, 1)
+        self.assertEqual(str(tz.value), "Europe/Minsk")
+
     async def test_slot_not_available_recovers_to_slot_selection_when_slots_exist(self) -> None:
         from src.handlers.client import booking as h
         from src.schemas.enums import Timezone

@@ -23,7 +23,7 @@ async def safe_edit_text(
     *,
     text: str,
     reply_markup=None,
-    parse_mode: str | None = None,
+    parse_mode: str | None = "HTML",
     ev: EventLogger | None = None,
     event: str = "ui.edit_text_failed",
 ) -> bool:
@@ -87,6 +87,7 @@ async def safe_bot_edit_message_text(
     **kwargs,
 ) -> bool:
     try:
+        kwargs.setdefault("parse_mode", "HTML")
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
