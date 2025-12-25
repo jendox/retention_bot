@@ -116,7 +116,7 @@ def confirm(
         f"<b>Телефон:</b> {html.quote(phone)}\n"
         f"<b>Рабочие дни:</b> {html.quote(work_days)}\n"
         f"<b>Время работы:</b> {html.quote(work_time)}\n"
-        f"<b>Длительность записи:</b> {html.quote(slot_size_min)} мин.\n\n"
+        f"<b>Длительность записи:</b> {slot_size_min} мин.\n\n"
         "Всё верно?",
     )
 

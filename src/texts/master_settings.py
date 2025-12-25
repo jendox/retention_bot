@@ -20,7 +20,7 @@ def btn_work_time(*, t: Translator = _noop_t) -> str:
 
 
 def btn_slot_size(*, t: Translator = _noop_t) -> str:
-    return t("⏱ Длительность слота")
+    return t("⏱ Длительность записи ")
 
 
 def btn_notify(*, is_pro: bool, t: Translator = _noop_t) -> str:
@@ -77,7 +77,7 @@ def render_details(
         f"<b>Телефон:</b> {phone}\n"
         f"<b>Рабочие дни:</b> {work_days}\n"
         f"<b>Время:</b> {work_time}\n"
-        f"<b>Слот:</b> {slot_size}",
+        f"<b>Длительность записи:</b> {slot_size}",
     )
 
 
