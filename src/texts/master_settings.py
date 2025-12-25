@@ -23,8 +23,10 @@ def btn_slot_size(*, t: Translator = _noop_t) -> str:
     return t("⏱ Длительность записи ")
 
 
-def btn_notify(*, is_pro: bool, t: Translator = _noop_t) -> str:
-    return t("🔔 Уведомления клиенту") if is_pro else t("🔔 Уведомления клиенту (Pro)")
+def btn_notify(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
+    if not plan_is_pro:
+        return t("🔒 Уведомления клиенту: Pro")
+    return t("🔔 Уведомления клиенту: включены ✅") if notify_clients else t("🔕 Уведомления клиенту: выключены 🚫")
 
 
 def title(*, t: Translator = _noop_t) -> str:

@@ -1,6 +1,7 @@
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -34,7 +35,7 @@ class MasterSettingsStates(StatesGroup):
     edit_slot_size = State()
 
 
-def _kb_settings(*, is_pro: bool) -> InlineKeyboardMarkup:
+def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}phone")],
@@ -42,7 +43,12 @@ def _kb_settings(*, is_pro: bool) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days")],
             [InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time")],
             [InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size")],
-            [InlineKeyboardButton(text=txt.btn_notify(is_pro=is_pro), callback_data=f"{SETTINGS_CB_PREFIX}notify")],
+            [
+                InlineKeyboardButton(
+                    text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
+                    callback_data=f"{SETTINGS_CB_PREFIX}notify",
+                ),
+            ],
             [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
@@ -137,7 +143,10 @@ async def open_master_settings(message: Message, state: FSMContext) -> None:
 
     settings_msg = await message.answer(
         text=_render_details(master=master, plan=plan),
-        reply_markup=_kb_settings(is_pro=plan.is_pro),
+        reply_markup=_kb_settings(
+            notify_clients=bool(getattr(master, "notify_clients", True)),
+            plan_is_pro=plan.is_pro,
+        ),
     )
     await state.update_data(**{
         SETTINGS_MAIN_KEY: {
@@ -154,13 +163,26 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
     if message_id is None:
         return False
     master, plan = await _load_master_and_plan(telegram_id)
-    await bot.edit_message_text(
-        chat_id=chat_id,
-        message_id=message_id,
-        text=_render_details(master=master, plan=plan),
-        reply_markup=_kb_settings(is_pro=plan.is_pro),
-        parse_mode="HTML",
-    )
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=_render_details(master=master, plan=plan),
+            reply_markup=_kb_settings(
+                notify_clients=bool(getattr(master, "notify_clients", True)),
+                plan_is_pro=plan.is_pro,
+            ),
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest as exc:
+        # Telegram can reject no-op edits (same text + markup). That's fine for "refresh" UX.
+        if "message is not modified" in str(exc).lower():
+            logger.debug(
+                "master.settings.message_not_modified",
+                extra={"chat_id": chat_id, "message_id": message_id},
+            )
+        else:
+            raise
     return True
 
 
