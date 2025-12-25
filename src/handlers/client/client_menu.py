@@ -48,8 +48,8 @@ async def send_client_main_menu(
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOK)
-async def client_add_booking(message: Message, state: FSMContext) -> None:
-    await start_client_add_booking(message, state)
+async def client_add_booking(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    await start_client_add_booking(message, state, rate_limiter)
 
 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOKINGS)

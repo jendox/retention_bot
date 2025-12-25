@@ -80,6 +80,54 @@ class ObservabilitySettings(BaseModel):
     db_slow_query_ms: int = 500
     handler_slow_ms: int = 3_000
 
+    @staticmethod
+    def _parse_kv_string(
+        raw: str,
+        *,
+        item_sep: str,
+        value_cast,
+        key_cast=str,
+        value_transform=lambda v: v,
+    ):
+        items = {}
+        for chunk in raw.split(item_sep):
+            part = chunk.strip()
+            if not part or "=" not in part:
+                continue
+            key_raw, value_raw = part.split("=", 1)
+            key = key_raw.strip()
+            val = value_raw.strip()
+            if not key or not val:
+                continue
+            items[key_cast(key)] = value_cast(value_transform(val))
+        return items
+
+    @staticmethod
+    def _parse_kv_map(
+        value,
+        *,
+        item_sep: str,
+        value_cast,
+        key_cast=str,
+        value_transform=lambda v: v,
+    ):
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return {key_cast(k): value_cast(value_transform(v)) for k, v in value.items()}
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if not raw:
+            return {}
+        return ObservabilitySettings._parse_kv_string(
+            raw,
+            item_sep=item_sep,
+            value_cast=value_cast,
+            key_cast=key_cast,
+            value_transform=value_transform,
+        )
+
     @field_validator("alerts_events", mode="before")
     @classmethod
     def _parse_alerts_events(cls, value):
@@ -99,109 +147,28 @@ class ObservabilitySettings(BaseModel):
     @field_validator("alerts_level_by_event", mode="before")
     @classmethod
     def _parse_alert_levels(cls, value):
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return {str(k): str(v).upper() for k, v in value.items()}
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return {}
-            # Format: "event=ERROR,event2=WARNING"
-            items: dict[str, str] = {}
-            for part in raw.split(","):
-                part = part.strip()
-                if not part or "=" not in part:
-                    continue
-                k, v = part.split("=", 1)
-                k = k.strip()
-                v = v.strip().upper()
-                if not k or not v:
-                    continue
-                items[k] = v
-            return items
-        return value
+        return cls._parse_kv_map(
+            value,
+            item_sep=",",
+            value_cast=str,
+            value_transform=lambda v: str(v).upper(),
+        )
 
     @field_validator("alerts_text_by_event", mode="before")
     @classmethod
     def _parse_alert_texts(cls, value):
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return {str(k): str(v) for k, v in value.items()}
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return {}
-            # Format: "event=Some text;event2=Another text"
-            # Semicolon separator allows using commas inside texts.
-            items: dict[str, str] = {}
-            for part in raw.split(";"):
-                part = part.strip()
-                if not part or "=" not in part:
-                    continue
-                k, v = part.split("=", 1)
-                k = k.strip()
-                v = v.strip()
-                if not k or not v:
-                    continue
-                items[k] = v
-            return items
-        return value
+        # Semicolon separator allows using commas inside texts.
+        return cls._parse_kv_map(value, item_sep=";", value_cast=str)
 
     @field_validator("alerts_throttle_sec_by_event", mode="before")
     @classmethod
     def _parse_alert_throttles(cls, value):
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return {str(k): int(v) for k, v in value.items()}
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return {}
-            # Format: "event=600,event2=3600"
-            items: dict[str, int] = {}
-            for part in raw.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                if "=" not in part:
-                    continue
-                k, v = part.split("=", 1)
-                k = k.strip()
-                v = v.strip()
-                if not k or not v:
-                    continue
-                items[k] = int(v)
-            return items
-        return value
+        return cls._parse_kv_map(value, item_sep=",", value_cast=int)
 
     @field_validator("log_sample_rate_by_event", mode="before")
     @classmethod
     def _parse_sample_rates(cls, value):
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return {str(k): float(v) for k, v in value.items()}
-        if isinstance(value, str):
-            raw = value.strip()
-            if not raw:
-                return {}
-            # Format: "event=0.1,event2=1"
-            items: dict[str, float] = {}
-            for part in raw.split(","):
-                part = part.strip()
-                if not part or "=" not in part:
-                    continue
-                k, v = part.split("=", 1)
-                k = k.strip()
-                v = v.strip()
-                if not k or not v:
-                    continue
-                items[k] = float(v)
-            return items
-        return value
+        return cls._parse_kv_map(value, item_sep=",", value_cast=float)
 
 
 class AppSettings(BaseSettings):

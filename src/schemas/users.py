@@ -169,4 +169,4 @@ class Client(BaseClient):
 
 class ClientDetails(Client):
     masters: list[Master] = Field(default_factory=list)
-    bookings: list["Booking"] = Field(default_factory=list)
+    bookings: list[Booking] = Field(default_factory=list)

@@ -1,5 +1,7 @@
-import logging
+from __future__ import annotations
+
 from datetime import datetime, timedelta
+from html import escape as html_escape
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -10,10 +12,16 @@ from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
+from src.handlers.shared.flow import context_lost
+from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.ui import safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
+from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
+from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import Master
 from src.schemas.enums import Timezone
@@ -45,7 +53,7 @@ from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
 
 router = Router(name=__name__)
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 BOOKING_BUCKET = "client_booking"
 
@@ -102,7 +110,14 @@ def _build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMark
     )
 
 
-async def start_client_add_booking(message: Message, state: FSMContext) -> None:
+async def start_client_add_booking(
+    message: Message,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_booking", step="start")
+    if not await rate_limit_message(message, rate_limiter, name="client_booking:start", ttl_sec=2):
+        return
     await track_message(state, message, bucket=BOOKING_BUCKET)
     telegram_id = message.from_user.id
     async with session_local() as session:
@@ -144,6 +159,7 @@ async def start_client_add_booking(message: Message, state: FSMContext) -> None:
     F.data.startswith("book:master:"),
 )
 async def booking_select_master(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_booking", step="select_master")
     await callback.answer()
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
@@ -157,6 +173,7 @@ async def start_booking_for_master(
     state: FSMContext,
     master_id: int,
 ) -> None:
+    bind_log_context(flow="client_booking", step="start_for_master")
     await state.update_data(master_id=master_id)
 
     async with session_local() as session:
@@ -181,6 +198,41 @@ async def start_booking_for_master(
     await state.set_state(ClientBooking.selecting_date)
 
 
+def _get_client_day(picked_date: datetime, *, client_tz_info) -> datetime.date:
+    if picked_date.tzinfo is None:
+        return picked_date.date()
+    return picked_date.astimezone(client_tz_info).date()
+
+
+async def _load_calendar_context(state: FSMContext) -> tuple[int, Timezone] | None:
+    data = await state.get_data()
+    master_id = data.get("master_id")
+    client_timezone = data.get("client_timezone")
+    if master_id is None or client_timezone is None:
+        return None
+    return int(master_id), client_timezone
+
+
+async def _validate_booking_day(
+    session,
+    *,
+    master_id: int,
+    client_day: datetime.date,
+    client_tz_info,
+) -> tuple[bool, datetime.date, datetime.date]:
+    today_client = datetime.now(tz=client_tz_info).date()
+    min_date = today_client + timedelta(days=1)
+    entitlements = EntitlementsService(session)
+    horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
+    max_date = today_client + timedelta(days=horizon_days)
+    return (min_date <= client_day <= max_date), min_date, max_date
+
+
+async def _get_free_slots(session, *, master_id: int, client_day: datetime.date, client_tz: Timezone):
+    use_case = GetMasterFreeSlots(session)
+    return await use_case.execute(master_id=master_id, client_day=client_day, client_tz=client_tz)
+
+
 @router.callback_query(
     StateFilter(ClientBooking.selecting_date),
     SimpleCalendarCallback.filter(),
@@ -189,7 +241,11 @@ async def process_booking_calendar(
     callback: CallbackQuery,
     callback_data: SimpleCalendarCallback,
     state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
 ) -> None:
+    bind_log_context(flow="client_booking", step="pick_date")
+    if not await rate_limit_callback(callback, rate_limiter, name="client_booking:pick_date", ttl_sec=1):
+        return
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     calendar = SimpleCalendar()
@@ -197,24 +253,23 @@ async def process_booking_calendar(
     if not selected:
         return
 
-    data = await state.get_data()
-    master_id = data.get("master_id")
-    client_timezone: Timezone = data.get("client_timezone")
-    if master_id is None or client_timezone is None:
-        await callback.answer(state_broken_alert(), show_alert=True)
+    ctx = await _load_calendar_context(state)
+    if ctx is None:
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_master_or_timezone")
         return
+    master_id, client_timezone = ctx
 
     client_tz_info = get_timezone(str(client_timezone.value))
-    client_day = picked_date.date() if picked_date.tzinfo is None \
-        else picked_date.astimezone(client_tz_info).date()
+    client_day = _get_client_day(picked_date, client_tz_info=client_tz_info)
 
-    today_client = datetime.now(tz=client_tz_info).date()
-    min_date = today_client + timedelta(days=1)
     async with session_local() as session:
-        entitlements = EntitlementsService(session)
-        horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
-        max_date = today_client + timedelta(days=horizon_days)
-        if not (min_date <= client_day <= max_date):
+        allowed, min_date, max_date = await _validate_booking_day(
+            session,
+            master_id=master_id,
+            client_day=client_day,
+            client_tz_info=client_tz_info,
+        )
+        if not allowed:
             await callback.answer(
                 text=available_dates(min_date=min_date, max_date=max_date),
                 show_alert=True,
@@ -222,13 +277,15 @@ async def process_booking_calendar(
             return
 
         await callback.answer()
-        use_case = GetMasterFreeSlots(session)
-        result = await use_case.execute(
-            master_id=master_id, client_day=client_day, client_tz=client_timezone,
+        result = await _get_free_slots(
+            session,
+            master_id=master_id,
+            client_day=client_day,
+            client_tz=client_timezone,
         )
 
     if not result.slots_utc:
-        await callback.message.edit_text(no_available_slots())
+        await callback.answer(no_available_slots(), show_alert=True)
         return
 
     slots_iso = [dt.isoformat() for dt in result.slots_utc]
@@ -237,10 +294,14 @@ async def process_booking_calendar(
         client_day=client_day.isoformat(),
     )
 
-    await callback.message.edit_text(
-        text=choose_time(client_day=client_day),
-        reply_markup=_build_slots_keyboard(result.slots_for_client),
-    )
+    if callback.message is not None:
+        await safe_edit_text(
+            callback.message,
+            text=choose_time(client_day=client_day),
+            reply_markup=_build_slots_keyboard(result.slots_for_client),
+            ev=ev,
+            event="client_booking.edit_choose_time_failed",
+        )
     await state.set_state(ClientBooking.selecting_slot)
 
 
@@ -249,6 +310,7 @@ async def process_booking_calendar(
     F.data.startswith("book:slot:"),
 )
 async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_booking", step="pick_slot")
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     _, _, index = callback.data.split(":")
@@ -259,7 +321,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
     client_timezone: Timezone = data.get("client_timezone")
 
     if client_timezone is None or not slots_iso:
-        await callback.answer(state_broken_alert(), show_alert=True)
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_slots_or_timezone")
         return
 
     if index < 0 or index >= len(slots_iso):
@@ -273,10 +335,14 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 
     await state.update_data(selected_slot_index=index)
 
-    await callback.message.edit_text(
-        text=confirm_details(slot_dt_client=slot_dt_client),
-        reply_markup=_build_confirm_keyboard(),
-    )
+    if callback.message is not None:
+        await safe_edit_text(
+            callback.message,
+            text=confirm_details(slot_dt_client=slot_dt_client),
+            reply_markup=_build_confirm_keyboard(),
+            ev=ev,
+            event="client_booking.edit_confirm_failed",
+        )
     await state.set_state(ClientBooking.confirm)
 
 
@@ -285,6 +351,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
     F.data == "book:cancel",
 )
 async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_booking", step="cancel")
     await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
@@ -301,6 +368,7 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     F.data == "book:cancel_flow",
 )
 async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_booking", step="cancel_flow")
     await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
@@ -312,7 +380,19 @@ async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> Non
     StateFilter(ClientBooking.confirm),
     F.data == "book:confirm",
 )
-async def booking_confirm(callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
+async def booking_confirm(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_booking", step="confirm")
+    if not await rate_limit_callback(callback, rate_limiter, name="client_booking:confirm", ttl_sec=2):
+        return
+    await _booking_confirm_impl(callback=callback, state=state, notifier=notifier)
+
+
+async def _booking_confirm_impl(*, callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     data = await state.get_data()
@@ -323,7 +403,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext, notifier: 
     client_name = data.get("client_name", "")
 
     if master_id is None or index is None or client_id is None or not slots_iso:
-        await callback.answer(state_broken_alert(), show_alert=True)
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_confirm_data")
         return
 
     slot_dt_utc = datetime.fromisoformat(slots_iso[index])
@@ -351,7 +431,7 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext, notifier: 
         booking = result.booking
         master = result.master
         if booking is None or master is None:
-            await callback.answer(state_broken_alert(), show_alert=True)
+            await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_result_objects")
             return
     await callback.answer()
 
@@ -369,8 +449,8 @@ async def booking_confirm(callback: CallbackQuery, state: FSMContext, notifier: 
             chat_id=master.telegram_id,
             context=BookingContext(
                 booking_id=booking.id,
-                master_name=master.name,
-                client_name=client_name,
+                master_name=html_escape(master.name),
+                client_name=html_escape(str(client_name)),
                 slot_str=slot_master_str,
                 duration_min=master.slot_size_min,
             ),

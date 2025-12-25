@@ -52,6 +52,40 @@ async def track_callback_message(
         await track_message(state, callback.message, bucket=bucket)
 
 
+def _is_delete_race(exc: TelegramBadRequest) -> bool:
+    text = str(exc).lower()
+    return (
+        "message to delete not found" in text
+        or "message can't be deleted" in text
+        or "message cannot be deleted" in text
+    )
+
+
+async def _delete_message_best_effort(
+    bot: Bot,
+    *,
+    chat_id: int,
+    message_id: int,
+    ignore_errors: bool,
+) -> None:
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except (TelegramBadRequest, TelegramAPIError) as exc:
+        error_text = str(exc)
+        if isinstance(exc, TelegramBadRequest) and _is_delete_race(exc):
+            logger.debug(
+                "message_gc.delete_skipped",
+                extra={"chat_id": chat_id, "message_id": message_id, "error": error_text},
+            )
+        else:
+            logger.warning(
+                "message_gc.delete_failed",
+                extra={"chat_id": chat_id, "message_id": message_id, "error": error_text},
+            )
+        if not ignore_errors:
+            raise
+
+
 async def cleanup_messages(
     state: FSMContext,
     bot: Bot,
@@ -80,31 +114,7 @@ async def cleanup_messages(
         return
 
     for mid in message_ids:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=mid)
-        except (TelegramBadRequest, TelegramAPIError) as e:
-            # Best-effort cleanup: Telegram deletion is racy (message can be deleted already).
-            error_text = str(e)
-            if isinstance(e, TelegramBadRequest) and any(
-                marker in error_text.lower()
-                for marker in (
-                    "message to delete not found",
-                    "message can't be deleted",
-                    "message cannot be deleted",
-                    "message to delete not found",
-                )
-            ):
-                logger.debug(
-                    "message_gc.delete_skipped",
-                    extra={"chat_id": chat_id, "message_id": mid, "error": error_text},
-                )
-            else:
-                logger.warning(
-                    "message_gc.delete_failed",
-                    extra={"chat_id": chat_id, "message_id": mid, "error": error_text},
-                )
-            if not ignore_errors:
-                raise
+        await _delete_message_best_effort(bot, chat_id=chat_id, message_id=mid, ignore_errors=ignore_errors)
 
     if clear_bucket:
         buckets.pop(bucket, None)

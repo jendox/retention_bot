@@ -51,6 +51,16 @@ class CreateClientBookingResult:
 
 
 class CreateClientBooking:
+    """
+    Create a booking initiated by the client.
+
+    Properties:
+    - Ensures `start_at_utc` is timezone-aware and in the future.
+    - Validates that both master and client exist and are attached.
+    - Applies entitlement limits (Free bookings/month).
+    - Uses DB overlap constraint to prevent slot conflicts.
+    """
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._client_repo = ClientRepository(session)
@@ -58,97 +68,168 @@ class CreateClientBooking:
         self._booking_repo = BookingRepository(session)
         self._entitlements = EntitlementsService(session)
 
-    async def execute(self, request: CreateClientBookingRequest) -> CreateClientBookingResult:
+    class _Abort(Exception):
+        def __init__(self, result: CreateClientBookingResult) -> None:
+            super().__init__("aborted")
+            self.result = result
+
+    @staticmethod
+    def _error(
+        *,
+        error: CreateClientBookingError,
+        error_detail: str | None = None,
+        master: Master | None = None,
+        plan_is_pro: bool | None = None,
+        bookings_limit: int | None = None,
+        usage: Usage | None = None,
+    ) -> CreateClientBookingResult:
+        return CreateClientBookingResult(
+            ok=False,
+            master=master,
+            plan_is_pro=plan_is_pro,
+            bookings_limit=bookings_limit,
+            usage=usage,
+            error=error,
+            error_detail=error_detail,
+        )
+
+    def _unwrap(self, value):
+        if isinstance(value, CreateClientBookingResult):
+            raise self._Abort(value)
+        return value
+
+    def _abort_if(self, maybe_error: CreateClientBookingResult | None) -> None:
+        if maybe_error is not None:
+            raise self._Abort(maybe_error)
+
+    @staticmethod
+    def _validate_ids(request: CreateClientBookingRequest) -> CreateClientBookingResult | None:
         if request.client_id <= 0 or request.master_id <= 0:
-            return CreateClientBookingResult(
-                ok=False,
+            return CreateClientBooking._error(
                 error=CreateClientBookingError.INVALID_REQUEST,
                 error_detail="client_id/master_id must be positive",
             )
+        return None
 
-        start_at_utc = request.start_at_utc
-        if start_at_utc.tzinfo is None:
-            return CreateClientBookingResult(
-                ok=False,
+    @staticmethod
+    def _normalize_start_at(value: datetime) -> datetime | CreateClientBookingResult:
+        if value.tzinfo is None:
+            return CreateClientBooking._error(
                 error=CreateClientBookingError.INVALID_REQUEST,
                 error_detail="start_at_utc must be timezone-aware",
             )
-        start_at_utc = start_at_utc.astimezone(UTC)
-
-        now_utc = datetime.now(UTC)
-        if start_at_utc <= now_utc:
-            return CreateClientBookingResult(
-                ok=False,
+        value = value.astimezone(UTC)
+        if value <= datetime.now(UTC):
+            return CreateClientBooking._error(
                 error=CreateClientBookingError.INVALID_REQUEST,
                 error_detail="start_at_utc is in the past",
             )
+        return value
 
+    async def _load_master(self, master_id: int) -> Master | CreateClientBookingResult:
         try:
-            master = await self._master_repo.get_by_id(request.master_id)
+            return await self._master_repo.get_by_id(master_id)
         except MasterNotFound:
-            return CreateClientBookingResult(
-                ok=False,
+            return self._error(
                 error=CreateClientBookingError.MASTER_NOT_FOUND,
-                error_detail=f"master_id={request.master_id}",
+                error_detail=f"master_id={master_id}",
             )
 
+    async def _ensure_client_exists(self, client_id: int) -> CreateClientBookingResult | None:
         try:
-            await self._client_repo.get_by_id(request.client_id)
+            await self._client_repo.get_by_id(client_id)
+            return None
         except ClientNotFound:
-            return CreateClientBookingResult(
-                ok=False,
+            return self._error(
                 error=CreateClientBookingError.CLIENT_NOT_FOUND,
-                error_detail=f"client_id={request.client_id}",
+                error_detail=f"client_id={client_id}",
             )
 
-        attached = await self._master_repo.is_client_attached(
-            master_id=request.master_id,
-            client_id=request.client_id,
+    async def _ensure_attached(
+        self,
+        *,
+        master_id: int,
+        client_id: int,
+    ) -> CreateClientBookingResult | None:
+        attached = await self._master_repo.is_client_attached(master_id=master_id, client_id=client_id)
+        if attached:
+            return None
+        return self._error(
+            error=CreateClientBookingError.CLIENT_NOT_ATTACHED,
+            error_detail=f"client_id={client_id} not attached to master_id={master_id}",
         )
-        if not attached:
-            return CreateClientBookingResult(
-                ok=False,
-                error=CreateClientBookingError.CLIENT_NOT_ATTACHED,
-                error_detail=f"client_id={request.client_id} not attached to master_id={request.master_id}",
-            )
 
-        check = await self._entitlements.can_create_booking(master_id=request.master_id)
+    async def _check_quota(
+        self,
+        *,
+        master_id: int,
+        master: Master,
+    ) -> tuple[bool, int | None, Usage | None] | CreateClientBookingResult:
+        check = await self._entitlements.can_create_booking(master_id=master_id)
         if not check.allowed:
-            usage = await self._entitlements.get_usage(master_id=request.master_id)
-            return CreateClientBookingResult(
-                ok=False,
+            usage = await self._entitlements.get_usage(master_id=master_id)
+            return self._error(
+                error=CreateClientBookingError.QUOTA_EXCEEDED,
                 master=master,
                 plan_is_pro=False,
                 bookings_limit=check.limit,
                 usage=usage,
-                error=CreateClientBookingError.QUOTA_EXCEEDED,
             )
-
-        plan = await self._entitlements.get_plan(master_id=request.master_id)
-
-        booking_create = BookingCreate(
-            master_id=request.master_id,
-            client_id=request.client_id,
-            start_at=start_at_utc,
-            duration_min=master.slot_size_min,
-        )
-        try:
-            booking = await self._booking_repo.create(booking_create)
-        except IntegrityError:
-            return CreateClientBookingResult(
-                ok=False,
-                master=master,
-                plan_is_pro=plan.is_pro,
-                error=CreateClientBookingError.SLOT_NOT_AVAILABLE,
-            )
-
-        warn_near_limit = False
+        plan = await self._entitlements.get_plan(master_id=master_id)
         usage: Usage | None = None
+        warn_near_limit = False
         if check.limit is not None and not plan.is_pro:
             new_count = check.current + 1
             warn_near_limit = new_count >= int(check.limit * 0.8)  # noqa: PLR2004
             if warn_near_limit:
-                usage = await self._entitlements.get_usage(master_id=request.master_id)
+                usage = await self._entitlements.get_usage(master_id=master_id)
+        return bool(plan.is_pro), check.limit, usage
+
+    async def _create_booking(
+        self,
+        *,
+        master: Master,
+        master_id: int,
+        client_id: int,
+        start_at_utc: datetime,
+        plan_is_pro: bool,
+    ) -> Booking | CreateClientBookingResult:
+        booking_create = BookingCreate(
+            master_id=master_id,
+            client_id=client_id,
+            start_at=start_at_utc,
+            duration_min=master.slot_size_min,
+        )
+        try:
+            return await self._booking_repo.create(booking_create)
+        except IntegrityError:
+            return self._error(
+                error=CreateClientBookingError.SLOT_NOT_AVAILABLE,
+                master=master,
+                plan_is_pro=plan_is_pro,
+            )
+
+    async def execute(self, request: CreateClientBookingRequest) -> CreateClientBookingResult:
+        try:
+            self._abort_if(self._validate_ids(request))
+            start_at_utc = self._unwrap(self._normalize_start_at(request.start_at_utc))
+            master = self._unwrap(await self._load_master(request.master_id))
+            self._abort_if(await self._ensure_client_exists(request.client_id))
+            self._abort_if(await self._ensure_attached(master_id=request.master_id, client_id=request.client_id))
+            plan_is_pro, bookings_limit, usage = self._unwrap(
+                await self._check_quota(master_id=request.master_id, master=master),
+            )
+            booking = self._unwrap(
+                await self._create_booking(
+                    master=master,
+                    master_id=request.master_id,
+                    client_id=request.client_id,
+                    start_at_utc=start_at_utc,
+                    plan_is_pro=plan_is_pro,
+                ),
+            )
+        except self._Abort as abort:
+            return abort.result
 
         logger.info(
             "booking.created_by_client",
@@ -159,12 +240,13 @@ class CreateClientBooking:
             },
         )
 
+        warn_near_limit = usage is not None and bookings_limit is not None and not plan_is_pro
         return CreateClientBookingResult(
             ok=True,
             booking=booking,
             master=master,
-            plan_is_pro=plan.is_pro,
-            bookings_limit=check.limit,
+            plan_is_pro=plan_is_pro,
+            bookings_limit=bookings_limit,
             usage=usage,
             warn_master_bookings_near_limit=warn_near_limit,
         )

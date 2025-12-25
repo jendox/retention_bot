@@ -62,7 +62,7 @@ class EventLogger:
         ctx = get_log_context()
         trace_id = str(ctx.get("trace_id") or "")
         if trace_id:
-            h = hashlib.sha1(f"{event}:{trace_id}".encode("utf-8"), usedforsecurity=False).digest()
+            h = hashlib.sha1(f"{event}:{trace_id}".encode(), usedforsecurity=False).digest()
             bucket = int.from_bytes(h[:2], "big") / 65535.0
             return bucket < rate_f
         # No trace_id: do a stable hash on the event only (better than random for reproducibility).

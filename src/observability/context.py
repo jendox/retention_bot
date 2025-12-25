@@ -4,7 +4,7 @@ import secrets
 from contextvars import ContextVar, Token
 from typing import Any
 
-_log_context: ContextVar[dict[str, Any]] = ContextVar("log_context", default={})
+_log_context: ContextVar[dict[str, Any] | None] = ContextVar("log_context", default=None)
 
 
 def new_trace_id() -> str:
@@ -13,11 +13,11 @@ def new_trace_id() -> str:
 
 
 def get_log_context() -> dict[str, Any]:
-    return _log_context.get()
+    return dict(_log_context.get() or {})
 
 
 def set_log_context(context: dict[str, Any]) -> Token:
-    return _log_context.set(context)
+    return _log_context.set(dict(context))
 
 
 def clear_log_context() -> Token:
@@ -29,7 +29,7 @@ def reset_log_context(token: Token) -> None:
 
 
 def bind_log_context(**fields: Any) -> None:
-    current = dict(_log_context.get())
+    current = dict(_log_context.get() or {})
     for key, value in fields.items():
         if value is None:
             continue

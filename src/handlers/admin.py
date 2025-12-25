@@ -93,8 +93,8 @@ async def grant_pro(message: Message, command: CommandObject) -> None:
         txt.pro_activated(
             master_name=master.name,
             master_telegram_id=master_telegram_id,
-            until=_format_dt(paid_until)
-        )
+            until=_format_dt(paid_until),
+        ),
     )
 
 

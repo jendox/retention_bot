@@ -16,12 +16,22 @@ logger = logging.getLogger(__name__)
 
 
 class LogContextMiddleware(BaseMiddleware):
-    async def __call__(
+    async def _maybe_get_fsm_state(self, data: dict[str, Any]) -> str | None:
+        state = data.get("state")
+        if state is None:
+            return None
+        try:
+            return await state.get_state()
+        except Exception:
+            return None
+
+    async def _build_ctx(
         self,
+        *,
         handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
         data: dict[str, Any],
-    ) -> Any:
+    ) -> dict[str, Any]:
         event_ = getattr(event, "event", None)
         from_user = getattr(event_, "from_user", None)
         chat = getattr(event_, "chat", None)
@@ -35,22 +45,26 @@ class LogContextMiddleware(BaseMiddleware):
         }
         if from_user is not None:
             ctx["telegram_id"] = from_user.id
-            if getattr(from_user, "username", None):
-                ctx["telegram_username"] = from_user.username
+            username = getattr(from_user, "username", None)
+            if username:
+                ctx["telegram_username"] = username
         if chat is not None:
             ctx["chat_id"] = chat.id
         if message is not None:
             ctx["message_id"] = getattr(message, "message_id", None)
 
-        state = data.get("state")
-        if state is not None:
-            try:
-                fsm_state = await state.get_state()
-            except Exception:
-                fsm_state = None
-            if fsm_state:
-                ctx["fsm_state"] = fsm_state
+        fsm_state = await self._maybe_get_fsm_state(data)
+        if fsm_state:
+            ctx["fsm_state"] = fsm_state
+        return ctx
 
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        ctx = await self._build_ctx(handler=handler, event=event, data=data)
         token = set_log_context(ctx)
         try:
             return await handler(event, data)

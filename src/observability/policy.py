@@ -29,65 +29,88 @@ class AlertPolicy:
     def decide(self, *, event: str, level: str, fields: dict[str, Any]) -> AlertSpec | None:
         error_type = str(fields.get("error_type") or "")
         stage = str(fields.get("stage") or "")
-
-        if event == "security.invite_policy_misconfigured":
-            return AlertSpec(
-                level="WARNING",
-                throttle_key="security.invite_policy_misconfigured",
-                throttle_sec=60 * 60,
-                text="Invite-only master registration is enabled, but invite secret is not configured.",
-            )
-
-        if event == "db.query_failed":
-            # Avoid paging on expected constraint violations; prefer alerting on connectivity-like failures.
-            connectivity_markers = (
-                "Connection",
-                "Timeout",
-                "OperationalError",
-                "InterfaceError",
-                "TooManyConnections",
-                "CannotConnect",
-                "ConnectionDoesNotExist",
-            )
-            if any(marker in error_type for marker in connectivity_markers):
-                throttle_key = f"db.query_failed:{error_type or 'UnknownError'}"
-                return AlertSpec(
-                    level="ERROR",
-                    throttle_key=throttle_key,
-                    throttle_sec=10 * 60,
-                    text="Database query failed (connectivity).",
-                )
-            return None
-
-        if event == "app.error":
-            return AlertSpec(
-                level="ERROR",
-                throttle_key="app.error",
-                throttle_sec=10 * 60,
-                text="Bot process error (outside update handling).",
-            )
-
-        if event in {"master_reg.start_failed", "master_reg.complete_failed"}:
-            throttle_parts = [event]
-            if stage:
-                throttle_parts.append(stage)
-            if error_type:
-                throttle_parts.append(error_type)
-            throttle_key = ":".join(throttle_parts)
-            return AlertSpec(
-                level="ERROR",
-                throttle_key=throttle_key,
-                throttle_sec=10 * 60,
-                text="Master registration failed.",
-            )
-
-        if event == "bot.unhandled_exception" and level in {"ERROR", "CRITICAL"}:
-            throttle_key = f"bot.unhandled_exception:{error_type or 'UnknownError'}"
-            return AlertSpec(
-                level="ERROR",
-                throttle_key=throttle_key,
-                throttle_sec=10 * 60,
-                text="Unhandled exception in bot handler.",
-            )
-
+        for build in (
+            self._security,
+            self._db,
+            self._app,
+            self._master_reg,
+            self._bot_unhandled,
+        ):
+            spec = build(event=event, level=level, error_type=error_type, stage=stage)
+            if spec is not None:
+                return spec
         return None
+
+    @staticmethod
+    def _security(*, event: str, level: str, error_type: str, stage: str) -> AlertSpec | None:  # noqa: ARG004
+        if event != "security.invite_policy_misconfigured":
+            return None
+        return AlertSpec(
+            level="WARNING",
+            throttle_key="security.invite_policy_misconfigured",
+            throttle_sec=60 * 60,
+            text="Invite-only master registration is enabled, but invite secret is not configured.",
+        )
+
+    @staticmethod
+    def _db(*, event: str, level: str, error_type: str, stage: str) -> AlertSpec | None:  # noqa: ARG004
+        if event != "db.query_failed":
+            return None
+        connectivity_markers = (
+            "Connection",
+            "Timeout",
+            "OperationalError",
+            "InterfaceError",
+            "TooManyConnections",
+            "CannotConnect",
+            "ConnectionDoesNotExist",
+        )
+        if not any(marker in error_type for marker in connectivity_markers):
+            return None
+        throttle_key = f"db.query_failed:{error_type or 'UnknownError'}"
+        return AlertSpec(
+            level="ERROR",
+            throttle_key=throttle_key,
+            throttle_sec=10 * 60,
+            text="Database query failed (connectivity).",
+        )
+
+    @staticmethod
+    def _app(*, event: str, level: str, error_type: str, stage: str) -> AlertSpec | None:  # noqa: ARG004
+        if event != "app.error":
+            return None
+        return AlertSpec(
+            level="ERROR",
+            throttle_key="app.error",
+            throttle_sec=10 * 60,
+            text="Bot process error (outside update handling).",
+        )
+
+    @staticmethod
+    def _master_reg(*, event: str, level: str, error_type: str, stage: str) -> AlertSpec | None:  # noqa: ARG004
+        if event not in {"master_reg.start_failed", "master_reg.complete_failed"}:
+            return None
+        throttle_parts = [event]
+        if stage:
+            throttle_parts.append(stage)
+        if error_type:
+            throttle_parts.append(error_type)
+        throttle_key = ":".join(throttle_parts)
+        return AlertSpec(
+            level="ERROR",
+            throttle_key=throttle_key,
+            throttle_sec=10 * 60,
+            text="Master registration failed.",
+        )
+
+    @staticmethod
+    def _bot_unhandled(*, event: str, level: str, error_type: str, stage: str) -> AlertSpec | None:  # noqa: ARG004
+        if event != "bot.unhandled_exception" or level not in {"ERROR", "CRITICAL"}:
+            return None
+        throttle_key = f"bot.unhandled_exception:{error_type or 'UnknownError'}"
+        return AlertSpec(
+            level="ERROR",
+            throttle_key=throttle_key,
+            throttle_sec=10 * 60,
+            text="Unhandled exception in bot handler.",
+        )
