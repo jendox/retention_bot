@@ -9,7 +9,7 @@ from src.models import Booking as BookingEntity
 from src.repositories.base import BaseRepository
 from src.schemas import BookingForReview
 from src.schemas.booking import Booking, BookingCreate
-from src.schemas.enums import BookingStatus
+from src.schemas.enums import AttendanceOutcome, BookingStatus
 
 
 class BookingNotFound(Exception): ...
@@ -204,6 +204,38 @@ class BookingRepository(BaseRepository):
                 BookingEntity.status.in_(BookingStatus.active()),
             )
             .values(status=BookingStatus.CANCELLED)
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
+
+    async def set_attendance_if_ended_and_confirmed(
+        self,
+        *,
+        booking_id: int,
+        master_id: int,
+        outcome: AttendanceOutcome,
+        now_utc: datetime,
+    ) -> bool:
+        """
+        Mark attendance outcome for a booking.
+
+        Rules:
+        - Only booking owner (master_id) can mark.
+        - Only CONFIRMED bookings.
+        - Only after the session end time.
+        - Outcome can be set only once (UNKNOWN -> outcome).
+        """
+        end_at_expr = BookingEntity.start_at + func.make_interval(mins=BookingEntity.duration_min)
+        stmt = (
+            update(BookingEntity)
+            .where(
+                BookingEntity.id == booking_id,
+                BookingEntity.master_id == master_id,
+                BookingEntity.status == BookingStatus.CONFIRMED,
+                BookingEntity.attendance_outcome == AttendanceOutcome.UNKNOWN,
+                end_at_expr <= now_utc,
+            )
+            .values(attendance_outcome=outcome)
         )
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0

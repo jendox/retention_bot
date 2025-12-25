@@ -7,9 +7,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.core.sa import Base
 from src.models.client import Client
 from src.models.master import Master
-from src.schemas.enums import BookingStatus
+from src.schemas.enums import AttendanceOutcome, BookingStatus
 
 booking_status_enum = ENUM(BookingStatus, name="booking_status_enum", create_type=False)
+attendance_outcome_enum = ENUM(AttendanceOutcome, name="attendance_outcome_enum", create_type=False)
 
 
 class Booking(Base):
@@ -22,6 +23,11 @@ class Booking(Base):
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_min: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     status: Mapped[BookingStatus] = mapped_column(booking_status_enum, default=BookingStatus.PENDING, nullable=False)
+    attendance_outcome: Mapped[AttendanceOutcome] = mapped_column(
+        attendance_outcome_enum,
+        default=AttendanceOutcome.UNKNOWN,
+        nullable=False,
+    )
 
     master: Mapped[Master] = relationship("Master", back_populates="bookings")
     client: Mapped[Client] = relationship("Client", back_populates="bookings")

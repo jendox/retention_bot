@@ -106,3 +106,31 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         show_prompt.assert_awaited()
         cancel_booking.assert_not_awaited()
+
+    async def test_attendance_action_marks_and_refreshes_card(self) -> None:
+        from src.handlers.master import schedule as h
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            data="m:a:attended:7:s:yesterday:p:1",
+            message=SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock()),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+            answer=AsyncMock(),
+        )
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+
+        class _FakeUseCase:
+            def __init__(self, session) -> None:
+                pass
+
+            async def execute(self, request):
+                return SimpleNamespace(ok=True, error=None)
+
+        with (
+            patch.object(h, "session_local", _fake_session_local),
+            patch.object(h, "_send_booking_card", AsyncMock()) as send_card,
+            patch("src.use_cases.mark_booking_attendance.MarkBookingAttendance", _FakeUseCase),
+        ):
+            await h.master_booking_actions(callback=callback, state=SimpleNamespace(), notifier=notifier)
+
+        send_card.assert_awaited()

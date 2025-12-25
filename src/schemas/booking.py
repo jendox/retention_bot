@@ -3,7 +3,7 @@ from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.schemas.enums import BookingStatus
+from src.schemas.enums import AttendanceOutcome, BookingStatus
 from src.schemas.users import Client, Master
 
 
@@ -13,6 +13,7 @@ class BaseBooking(BaseModel):
     start_at: datetime
     duration_min: int
     status: BookingStatus = Field(default=BookingStatus.PENDING)
+    attendance_outcome: AttendanceOutcome = Field(default=AttendanceOutcome.UNKNOWN)
 
 
 class BookingCreate(BaseBooking):

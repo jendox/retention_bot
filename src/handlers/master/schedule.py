@@ -1,4 +1,5 @@
 from calendar import monthrange
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from html import escape as html_escape
@@ -22,7 +23,7 @@ from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
-from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, status_badge
+from src.schemas.enums import BOOKING_STATUS_MAP, AttendanceOutcome, BookingStatus, status_badge
 from src.texts import master_schedule as txt
 from src.texts.buttons import btn_back, btn_cancel_booking
 from src.use_cases.entitlements import EntitlementsService
@@ -37,6 +38,8 @@ class Scope(StrEnum):
     TOMORROW = "tomorrow"
     WEEK = "week"
     MONTH = "month"
+    YESTERDAY = "yesterday"
+    HISTORY_WEEK = "history_week"
 
     @classmethod
     def short(cls) -> set["Scope"]:
@@ -46,6 +49,10 @@ class Scope(StrEnum):
     def long(cls) -> set["Scope"]:
         return {cls.WEEK, cls.MONTH}
 
+    @classmethod
+    def history(cls) -> set["Scope"]:
+        return {cls.YESTERDAY, cls.HISTORY_WEEK}
+
 
 PER_PAGE = 10
 
@@ -54,6 +61,8 @@ SCHEDULE_CB: dict[str, str] = {
     Scope.TOMORROW.value: f"m:schedule:{Scope.TOMORROW.value}",
     Scope.WEEK.value: f"m:schedule:{Scope.WEEK.value}",
     Scope.MONTH.value: f"m:schedule:{Scope.MONTH.value}",
+    Scope.YESTERDAY.value: f"m:schedule:{Scope.YESTERDAY.value}",
+    Scope.HISTORY_WEEK.value: f"m:schedule:{Scope.HISTORY_WEEK.value}",
     "back_menu": "m:schedule:back",
     "back_periods": "m:schedule:periods",
 }
@@ -63,6 +72,8 @@ TITLE_MAP: dict[Scope, str] = {
     Scope.TOMORROW: txt.title_tomorrow(),
     Scope.WEEK: txt.title_week(),
     Scope.MONTH: txt.title_month(),
+    Scope.YESTERDAY: txt.title_yesterday(),
+    Scope.HISTORY_WEEK: txt.title_history_week(),
 }
 
 
@@ -103,6 +114,14 @@ def _build_period_keyboard() -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     text=txt.btn_month(), callback_data=SCHEDULE_CB[str(Scope.MONTH.value)],
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=txt.btn_yesterday(), callback_data=SCHEDULE_CB[str(Scope.YESTERDAY.value)],
+                ),
+                InlineKeyboardButton(
+                    text=txt.btn_history_week(), callback_data=SCHEDULE_CB[str(Scope.HISTORY_WEEK.value)],
                 ),
             ],
             [
@@ -171,20 +190,19 @@ def _build_bookings_list_keyboard(
 def _build_booking_card_keyboard(
     *,
     booking_id: int,
-    status: BookingStatus,
     scope: Scope,
     page: int,
-    allow_reschedule: bool,
+    meta: "_BookingCardKeyboardMeta",
 ) -> InlineKeyboardMarkup:
     inline_keyboard: list[list[InlineKeyboardButton]] = []
-    if status in BookingStatus.active():
+    if meta.status in BookingStatus.active():
         actions: list[InlineKeyboardButton] = [
             InlineKeyboardButton(
                 text=btn_cancel_booking(),
                 callback_data=cb_action("cancel", booking_id, scope, page),
             ),
         ]
-        if allow_reschedule:
+        if meta.allow_reschedule:
             actions.append(
                 InlineKeyboardButton(
                     text=txt.btn_reschedule(),
@@ -192,6 +210,19 @@ def _build_booking_card_keyboard(
                 ),
             )
         inline_keyboard.append(actions)
+    if meta.show_attendance_actions and meta.attendance_outcome == AttendanceOutcome.UNKNOWN:
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=txt.btn_mark_attended(),
+                    callback_data=cb_action("attended", booking_id, scope, page),
+                ),
+                InlineKeyboardButton(
+                    text=txt.btn_mark_no_show(),
+                    callback_data=cb_action("no_show", booking_id, scope, page),
+                ),
+            ],
+        )
     inline_keyboard.append(
         [
             InlineKeyboardButton(
@@ -259,6 +290,21 @@ def _compute_range(master_tz: ZoneInfo, scope: Scope) -> tuple[datetime, datetim
         cutoff_local = None  # show whole tomorrow
         return start_local, end_local, cutoff_local
 
+    if scope == Scope.YESTERDAY:
+        today = now_local.date()
+        yesterday = today - timedelta(days=1)
+        start_local = datetime.combine(yesterday, time(0, 0), tzinfo=master_tz)
+        end_local = datetime.combine(today, time(0, 0), tzinfo=master_tz)
+        cutoff_local = None
+        return start_local, end_local, cutoff_local
+
+    if scope == Scope.HISTORY_WEEK:
+        today = now_local.date()
+        start_local = datetime.combine(today - timedelta(days=7), time(0, 0), tzinfo=master_tz)
+        end_local = datetime.combine(today, time(0, 0), tzinfo=master_tz)
+        cutoff_local = None
+        return start_local, end_local, cutoff_local
+
     if scope == Scope.WEEK:
         start_local = now_local
         end_local = datetime.combine(
@@ -273,6 +319,66 @@ def _compute_range(master_tz: ZoneInfo, scope: Scope) -> tuple[datetime, datetim
     end_local = datetime.combine(month_end_date, time(0, 0), tzinfo=master_tz) + timedelta(days=1)
     cutoff_local = now_local
     return start_local, end_local, cutoff_local
+
+
+def _can_mark_attendance(*, status: BookingStatus, start_at: datetime, duration_min: int) -> bool:
+    if status != BookingStatus.CONFIRMED:
+        return False
+    end_at_utc = start_at.astimezone(UTC) + timedelta(minutes=int(duration_min))
+    return end_at_utc <= datetime.now(UTC)
+
+
+@dataclass(frozen=True)
+class _BookingCardKeyboardMeta:
+    status: BookingStatus
+    attendance_outcome: AttendanceOutcome
+    show_attendance_actions: bool
+    allow_reschedule: bool
+
+
+@dataclass(frozen=True)
+class _BookingCardRender:
+    text: str
+    status: BookingStatus
+    attendance_outcome: AttendanceOutcome
+    show_attendance_actions: bool
+
+
+def _render_booking_card(booking, *, master_tz: ZoneInfo) -> _BookingCardRender:
+    client = getattr(booking, "client", None)
+    client_name = getattr(client, "name", None) or txt.client_fallback(client_id=getattr(booking, "client_id", ""))
+    client_name_safe = html_escape(str(client_name))
+
+    phone = getattr(client, "phone", None)
+    phone_safe = html_escape(str(phone)) if phone else None
+    phone_line = f'<a href="tel:{phone_safe}">{phone_safe}</a>' if phone_safe else txt.phone_missing()
+
+    local_dt = booking.start_at.astimezone(master_tz)
+    badge = status_badge(booking.status)
+    attendance = getattr(booking, "attendance_outcome", AttendanceOutcome.UNKNOWN)
+    show_attendance_actions = _can_mark_attendance(
+        status=booking.status,
+        start_at=booking.start_at,
+        duration_min=booking.duration_min,
+    )
+
+    text = txt.card(
+        lines=[
+            f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
+            f"📅 {local_dt:%d.%m.%Y}",
+            f"⏰ {local_dt:%H:%M}",
+            "",
+            f"👤 {client_name_safe}",
+            f"📞 {phone_line}",
+            txt.attendance_line(outcome=attendance),
+        ],
+    )
+    return _BookingCardRender(
+        text=text,
+        status=booking.status,
+        attendance_outcome=attendance,
+        show_attendance_actions=show_attendance_actions,
+    )
 
 
 async def _cancel_booking(*, booking_id: int, master_id: int) -> bool:
@@ -358,7 +464,10 @@ async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1
 
     start_local, end_local, cutoff_local = _compute_range(master_tz, scope)
 
-    statuses = BookingStatus.active() if scope in Scope.long() else BookingStatus.without_completed()
+    if scope in Scope.history():
+        statuses = BookingStatus.without_completed()
+    else:
+        statuses = BookingStatus.active() if scope in Scope.long() else BookingStatus.without_completed()
     try:
         async with session_local() as session:
             repo = BookingRepository(session)
@@ -424,34 +533,21 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
         await _send_schedule(callback, scope=scope, page=page)
         return
 
-    client = getattr(booking, "client", None)
-    client_name = getattr(client, "name", None) or txt.client_fallback(client_id=getattr(booking, "client_id", ""))
-    client_name_safe = html_escape(str(client_name))
-    phone = getattr(client, "phone", None)
-
-    phone_safe = html_escape(str(phone)) if phone else None
-    phone_line = f'<a href="tel:{phone_safe}">{phone_safe}</a>' if phone_safe else txt.phone_missing()
-
-    local_dt = booking.start_at.astimezone(master_tz)
-    badge = status_badge(booking.status)
-
-    text = txt.card(
-        status_line=f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
-        date_line=f"📅 {local_dt:%d.%m.%Y}",
-        time_line=f"⏰ {local_dt:%H:%M}",
-        client_line=f"👤 {client_name_safe}",
-        phone_line=f"📞 {phone_line}",
-    )
+    render = _render_booking_card(booking, master_tz=master_tz)
 
     await _send_or_edit(
         callback,
-        text=text,
+        text=render.text,
         reply_markup=_build_booking_card_keyboard(
             booking_id=booking_id,
-            status=booking.status,
             scope=scope,
             page=page,
-            allow_reschedule=plan.is_pro,
+            meta=_BookingCardKeyboardMeta(
+                status=render.status,
+                attendance_outcome=render.attendance_outcome,
+                show_attendance_actions=render.show_attendance_actions,
+                allow_reschedule=plan.is_pro,
+            ),
         ),
     )
 
@@ -489,12 +585,17 @@ async def _send_cancel_confirm_card(callback: CallbackQuery, *, booking_id: int,
 
     local_dt = booking.start_at.astimezone(master_tz)
     badge = status_badge(booking.status)
+    attendance = getattr(booking, "attendance_outcome", AttendanceOutcome.UNKNOWN)
     text = txt.card(
-        status_line=f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
-        date_line=f"📅 {local_dt:%d.%m.%Y}",
-        time_line=f"⏰ {local_dt:%H:%M}",
-        client_line=f"👤 {client_name_safe}",
-        phone_line=f"📞 {phone_line}",
+        lines=[
+            f"{badge} {BOOKING_STATUS_MAP[booking.status]}",
+            f"📅 {local_dt:%d.%m.%Y}",
+            f"⏰ {local_dt:%H:%M}",
+            "",
+            f"👤 {client_name_safe}",
+            f"📞 {phone_line}",
+            txt.attendance_line(outcome=attendance),
+        ],
     )
     text = f"{text}\n\n{txt.cancel_confirm_prompt()}"
 
@@ -574,6 +675,53 @@ async def _handle_action_reschedule(
     from src.handlers.master.reschedule import start_reschedule
 
     await start_reschedule(callback, state, rate_limiter, booking_id=booking_id, scope=scope, page=page)
+
+
+async def _handle_action_attendance(
+    callback: CallbackQuery,
+    *,
+    booking_id: int,
+    scope: Scope,
+    page: int,
+    outcome: AttendanceOutcome,
+    admin_alerter: AdminAlerter | None,
+) -> None:
+    from src.use_cases.mark_booking_attendance import MarkBookingAttendance, MarkBookingAttendanceRequest
+
+    try:
+        async with session_local() as session:
+            use_case = MarkBookingAttendance(session)
+            result = await use_case.execute(
+                MarkBookingAttendanceRequest(
+                    master_telegram_id=callback.from_user.id,
+                    booking_id=booking_id,
+                    outcome=outcome,
+                ),
+            )
+    except Exception as exc:
+        await ev.aexception(
+            "master_schedule.attendance_failed",
+            exc=exc,
+            booking_id=booking_id,
+            outcome=str(outcome),
+            admin_alerter=admin_alerter,
+        )
+        await callback.answer(txt.attendance_failed(), show_alert=True)
+        return
+
+    if result.ok:
+        ev.info("master_schedule.attendance_marked", booking_id=booking_id, outcome=str(outcome))
+        await callback.answer(txt.attendance_marked(), show_alert=False)
+        await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+        return
+
+    if result.error and result.error.value == "already_marked":
+        await callback.answer(txt.attendance_already_marked(), show_alert=False)
+        await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+        return
+
+    await callback.answer(txt.attendance_not_eligible(), show_alert=True)
+    await _send_schedule(callback, scope=scope, page=page)
 
 
 # ---------- entrypoint ----------
@@ -723,6 +871,22 @@ async def master_booking_actions(
             page=page,
             state=state,
             rate_limiter=rate_limiter,
+        ),
+        "attended": lambda: _handle_action_attendance(
+            callback,
+            booking_id=booking_id,
+            scope=scope,
+            page=page,
+            outcome=AttendanceOutcome.ATTENDED,
+            admin_alerter=admin_alerter,
+        ),
+        "no_show": lambda: _handle_action_attendance(
+            callback,
+            booking_id=booking_id,
+            scope=scope,
+            page=page,
+            outcome=AttendanceOutcome.NO_SHOW,
+            admin_alerter=admin_alerter,
         ),
     }
     handler = handlers.get(action)

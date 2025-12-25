@@ -38,11 +38,11 @@ class Timezone(StrEnum):
 
 
 class BookingStatus(StrEnum):
-    PENDING = "pending"
-    CONFIRMED = "confirmed"
-    DECLINED = "declined"
-    CANCELLED = "cancelled"
-    COMPLETED = "completed"
+    # DB enum labels are uppercase (see migrations).
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
+    DECLINED = "DECLINED"
+    CANCELLED = "CANCELLED"
 
     @classmethod
     def active(cls) -> set["BookingStatus"]:
@@ -50,7 +50,14 @@ class BookingStatus(StrEnum):
 
     @classmethod
     def without_completed(cls) -> set["BookingStatus"]:
+        # Kept for backward compatibility; "completed" is represented by attendance outcome.
         return {cls.PENDING, cls.CONFIRMED, cls.DECLINED, cls.CANCELLED}
+
+
+class AttendanceOutcome(StrEnum):
+    UNKNOWN = "UNKNOWN"
+    ATTENDED = "ATTENDED"
+    NO_SHOW = "NO_SHOW"
 
 
 BOOKING_STATUS_MAP: dict[BookingStatus, str] = {
@@ -58,7 +65,6 @@ BOOKING_STATUS_MAP: dict[BookingStatus, str] = {
     BookingStatus.CONFIRMED: "Подтверждена",
     BookingStatus.DECLINED: "Отклонена",
     BookingStatus.CANCELLED: "Отменена",
-    BookingStatus.COMPLETED: "Завершена",
 }
 
 
@@ -68,11 +74,10 @@ def status_badge(status: BookingStatus) -> str:
         BookingStatus.CONFIRMED: "✅",
         BookingStatus.DECLINED: "❌",
         BookingStatus.CANCELLED: "🚫",
-        BookingStatus.COMPLETED: "🟢",
     }
     return badges.get(status, "")
 
 
 class InviteType(StrEnum):
-    MASTER = "master"
-    CLIENT = "client"
+    MASTER = "MASTER"
+    CLIENT = "CLIENT"

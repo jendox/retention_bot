@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from textwrap import dedent
-
+from src.schemas.enums import AttendanceOutcome
 from src.texts.base import Translator, noop_t as _noop_t
 
 
@@ -19,6 +18,14 @@ def title_week(*, t: Translator = _noop_t) -> str:
 
 def title_month(*, t: Translator = _noop_t) -> str:
     return t("Расписание на месяц")
+
+
+def title_yesterday(*, t: Translator = _noop_t) -> str:
+    return t("Расписание за вчера")
+
+
+def title_history_week(*, t: Translator = _noop_t) -> str:
+    return t("Расписание за последние 7 дней")
 
 
 def title_default(*, t: Translator = _noop_t) -> str:
@@ -39,6 +46,14 @@ def btn_week(*, t: Translator = _noop_t) -> str:
 
 def btn_month(*, t: Translator = _noop_t) -> str:
     return t("🗓 Месяц")
+
+
+def btn_yesterday(*, t: Translator = _noop_t) -> str:
+    return t("📅 Вчера")
+
+
+def btn_history_week(*, t: Translator = _noop_t) -> str:
+    return t("🕘 7 дней (история)")
 
 
 def btn_reschedule(*, t: Translator = _noop_t) -> str:
@@ -77,27 +92,9 @@ def no_access(*, t: Translator = _noop_t) -> str:
     return t("Нет доступа к этой записи.")
 
 
-def card(
-    *,
-    status_line: str,
-    date_line: str,
-    time_line: str,
-    client_line: str,
-    phone_line: str,
-    t: Translator = _noop_t,
-) -> str:
-    return t(
-        dedent(f"""
-        Запись
-
-        {status_line}
-        {date_line}
-        {time_line}
-
-        {client_line}
-        {phone_line}
-        """).strip(),
-    )
+def card(*, lines: list[str], t: Translator = _noop_t) -> str:
+    details = "\n".join(lines)
+    return t(f"<b>Запись</b>\n\n{details}")
 
 
 def navigation_error(*, t: Translator = _noop_t) -> str:
@@ -134,3 +131,39 @@ def btn_cancel_no(*, t: Translator = _noop_t) -> str:
 
 def unknown_action(*, t: Translator = _noop_t) -> str:
     return t("Неизвестное действие.")
+
+
+def attendance_label(*, outcome: AttendanceOutcome, t: Translator = _noop_t) -> str:
+    if outcome == AttendanceOutcome.ATTENDED:
+        return t("✅ Пришёл")
+    if outcome == AttendanceOutcome.NO_SHOW:
+        return t("❌ Не пришёл")
+    return t("— не отмечено")
+
+
+def attendance_line(*, outcome: AttendanceOutcome, t: Translator = _noop_t) -> str:
+    return t(f"📌 Посещение: {attendance_label(outcome=outcome, t=t)}")
+
+
+def btn_mark_attended(*, t: Translator = _noop_t) -> str:
+    return t("✅ Пришёл")
+
+
+def btn_mark_no_show(*, t: Translator = _noop_t) -> str:
+    return t("❌ Не пришёл")
+
+
+def attendance_marked(*, t: Translator = _noop_t) -> str:
+    return t("Отмечено.")
+
+
+def attendance_already_marked(*, t: Translator = _noop_t) -> str:
+    return t("Посещение уже отмечено.")
+
+
+def attendance_not_eligible(*, t: Translator = _noop_t) -> str:
+    return t("Можно отмечать посещение только для прошедших подтверждённых записей.")
+
+
+def attendance_failed(*, t: Translator = _noop_t) -> str:
+    return t("Не удалось отметить посещение. Попробуй ещё раз.")
