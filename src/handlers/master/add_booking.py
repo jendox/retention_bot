@@ -22,12 +22,14 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.schemas import MasterWithClients
 from src.schemas.enums import Timezone
-from src.texts import common as common_txt, master_add_booking as txt
-from src.texts.buttons import btn_cancel, btn_cancel_booking, btn_confirm
+from src.settings import get_settings
+from src.texts import common as common_txt, master_add_booking as txt, paywall as paywall_txt
+from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_confirm, btn_go_pro
 from src.use_cases.create_master_booking import (
     CreateMasterBooking,
     CreateMasterBookingError,
@@ -36,15 +38,17 @@ from src.use_cases.create_master_booking import (
 )
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message
+from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, untrack_message_id
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
 
 ADD_BOOKING_BUCKET = "master_add_booking"
+NO_CLIENTS_ADD_CLIENT_CB = "m:add_booking:no_clients:add_client"
 
 
 class AddBookingStates(StatesGroup):
+    no_clients = State()
     search_client = State()
     selecting_date = State()
     selecting_slot = State()
@@ -265,28 +269,35 @@ async def _handle_quota_exceeded(
     *,
     result: CreateMasterBookingResult,
 ) -> None:
-    warned = False
-    if result.usage is not None and result.bookings_limit is not None:
-        warned = await notifier.maybe_send(
-            NotificationRequest(
-                event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
-                recipient=RecipientKind.MASTER,
-                chat_id=callback.from_user.id,
-                context=LimitsContext(
-                    usage=result.usage,
-                    bookings_limit=int(result.bookings_limit),
-                ),
-                facts=NotificationFacts(
-                    event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
-                    recipient=RecipientKind.MASTER,
-                    chat_id=callback.from_user.id,
-                    plan_is_pro=bool(result.plan_is_pro),
-                ),
-            ),
-        )
-    if not warned:
+    limit = int(result.bookings_limit) if result.bookings_limit is not None else None
+
+    if callback.message is not None:
+        message_id = getattr(callback.message, "message_id", None)
+        if message_id is not None:
+            await untrack_message_id(state, bucket=ADD_BOOKING_BUCKET, message_id=message_id)
+    await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
+
+    if callback.message is None or limit is None:
         await callback.answer(text=txt.quota_reached(), show_alert=True)
-    await _reset_add_booking(state, callback.bot)
+        await state.clear()
+        return
+
+    contact = get_settings().billing.contact
+    await callback.answer()
+    await safe_edit_text(
+        callback.message,
+        text=paywall_txt.bookings_limit_reached(limit=limit),
+        reply_markup=build_paywall_keyboard(
+            contact=contact,
+            upgrade_text=btn_go_pro(),
+            back_text=btn_back(),
+            back_callback_data="paywall:close",
+        ),
+        parse_mode="HTML",
+        ev=ev,
+        event="master_add_booking.paywall_edit_failed",
+    )
+    await state.clear()
 
 
 async def _handle_success(
@@ -413,6 +424,33 @@ async def start_add_booking(message: Message, state: FSMContext) -> None:
     ev.info("master_add_booking.start")
     await _reset_add_booking(state, message.bot)
     await track_message(state, message, bucket=ADD_BOOKING_BUCKET)
+
+    telegram_id = message.from_user.id
+    try:
+        master = await _load_master_with_clients(telegram_id)
+    except Exception as exc:
+        await ev.aexception("master_add_booking.start_failed", stage="load_master", exc=exc)
+        await message.answer(ASYNC_CTX_ERROR)
+        await _reset_add_booking(state, message.bot)
+        return
+
+    if not getattr(master, "clients", None):
+        ev.info("master_add_booking.start_result", outcome="no_clients")
+        await answer_tracked(
+            message,
+            state,
+            text=txt.no_clients(),
+            bucket=ADD_BOOKING_BUCKET,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="➕ Добавить клиента", callback_data=NO_CLIENTS_ADD_CLIENT_CB)],
+                    [InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")],
+                ],
+            ),
+        )
+        await state.set_state(AddBookingStates.no_clients)
+        return
+
     await answer_tracked(
         message,
         state,
@@ -423,6 +461,29 @@ async def start_add_booking(message: Message, state: FSMContext) -> None:
         ),
     )
     await state.set_state(AddBookingStates.search_client)
+
+
+@router.callback_query(StateFilter(AddBookingStates.no_clients), F.data == NO_CLIENTS_ADD_CLIENT_CB)
+async def no_clients_add_client(
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    rate_limiter: RateLimiter | None = None,
+    admin_alerter: AdminAlerter | None = None,
+) -> None:
+    bind_log_context(flow="master_add_booking", step="no_clients_add_client")
+    await callback.answer()
+
+    if callback.message is not None:
+        message_id = getattr(callback.message, "message_id", None)
+        if message_id is not None:
+            await untrack_message_id(state, bucket=ADD_BOOKING_BUCKET, message_id=message_id)
+    await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
+    await state.clear()
+
+    from src.handlers.master.add_client import start_add_client
+
+    await start_add_client(callback, state, notifier, rate_limiter, admin_alerter=admin_alerter)
 
 
 @router.message(StateFilter(AddBookingStates.search_client))
@@ -743,6 +804,7 @@ async def confirm_booking(
 
 @router.callback_query(
     StateFilter(
+        AddBookingStates.no_clients,
         AddBookingStates.search_client,
         AddBookingStates.selecting_date,
         AddBookingStates.selecting_slot,

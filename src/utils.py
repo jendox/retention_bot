@@ -121,6 +121,33 @@ async def cleanup_messages(
         await state.update_data(**{BUCKET_KEY: buckets})
 
 
+async def untrack_message_id(
+    state: FSMContext,
+    *,
+    bucket: BucketName,
+    message_id: int,
+) -> None:
+    """
+    Remove a single message_id from a GC bucket without deleting the message.
+
+    Useful when you want to keep a "main" message (single-screen) but still cleanup
+    the rest of tracked messages.
+    """
+    data = await state.get_data()
+    buckets: dict = data.get(BUCKET_KEY, {})
+    bucket_data = buckets.get(bucket)
+    if not bucket_data:
+        return
+
+    message_ids: list[int] = list(bucket_data.get("message_ids", []))
+    if not message_ids:
+        return
+
+    bucket_data["message_ids"] = [mid for mid in message_ids if int(mid) != int(message_id)]
+    buckets[bucket] = bucket_data
+    await state.update_data(**{BUCKET_KEY: buckets})
+
+
 async def clear_all_buckets(state: FSMContext) -> None:
     """
     Полностью убирает всю технику для GC из FSM.

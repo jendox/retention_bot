@@ -25,3 +25,7 @@ def btn_decline(*, t: Translator = _noop_t) -> str:
 
 def btn_cancel_booking(*, t: Translator = _noop_t) -> str:
     return t("❌ Отменить запись")
+
+
+def btn_go_pro(*, t: Translator = _noop_t) -> str:
+    return t("✅ Перейти на Pro")

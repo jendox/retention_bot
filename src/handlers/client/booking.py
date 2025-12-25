@@ -22,11 +22,13 @@ from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_upgrade_only_keyboard
 from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import Master
 from src.schemas.enums import Timezone
-from src.texts.buttons import btn_cancel, btn_confirm, btn_decline
+from src.settings import get_settings
+from src.texts.buttons import btn_cancel, btn_confirm, btn_decline, btn_go_pro
 from src.texts.client_booking import (
     available_dates,
     booking_cancelled,
@@ -48,6 +50,7 @@ from src.use_cases.create_client_booking import (
     CreateClientBooking,
     CreateClientBookingError,
     CreateClientBookingRequest,
+    CreateClientBookingResult,
 )
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
@@ -412,10 +415,16 @@ async def booking_confirm(
     bind_log_context(flow="client_booking", step="confirm")
     if not await rate_limit_callback(callback, rate_limiter, name="client_booking:confirm", ttl_sec=2):
         return
-    await _booking_confirm_impl(callback=callback, state=state, notifier=notifier)
+    await _booking_confirm_impl(callback=callback, state=state, notifier=notifier, rate_limiter=rate_limiter)
 
 
-async def _booking_confirm_impl(*, callback: CallbackQuery, state: FSMContext, notifier: Notifier) -> None:
+async def _booking_confirm_impl(
+    *,
+    callback: CallbackQuery,
+    state: FSMContext,
+    notifier: Notifier,
+    rate_limiter: RateLimiter | None,
+) -> None:
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
 
     data = await state.get_data()
@@ -444,6 +453,11 @@ async def _booking_confirm_impl(*, callback: CallbackQuery, state: FSMContext, n
         if not result.ok:
             if result.error == CreateClientBookingError.QUOTA_EXCEEDED:
                 await callback.answer(text=booking_limit_reached(), show_alert=True)
+                await _maybe_notify_master_bookings_limit_paywall(
+                    notifier=notifier,
+                    rate_limiter=rate_limiter,
+                    result=result,
+                )
                 return
             if result.error == CreateClientBookingError.SLOT_NOT_AVAILABLE:
                 await _recover_after_slot_not_available(callback=callback, state=state)
@@ -503,6 +517,49 @@ async def _booking_confirm_impl(*, callback: CallbackQuery, state: FSMContext, n
                 ),
             ),
         )
+
+
+async def _maybe_notify_master_bookings_limit_paywall(
+    *,
+    notifier: Notifier,
+    rate_limiter: RateLimiter | None,
+    result: CreateClientBookingResult,
+) -> None:
+    master = getattr(result, "master", None)
+    usage = getattr(result, "usage", None)
+    bookings_limit = getattr(result, "bookings_limit", None)
+    if master is None or usage is None or bookings_limit is None or rate_limiter is None:
+        return
+
+    allowed = await rate_limiter.hit(
+        name="paywall:bookings_limit",
+        ttl_sec=60 * 30,
+        master_id=master.id,
+    )
+    if not allowed:
+        return
+
+    await notifier.maybe_send(
+        NotificationRequest(
+            event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
+            recipient=RecipientKind.MASTER,
+            chat_id=master.telegram_id,
+            context=LimitsContext(
+                usage=usage,
+                bookings_limit=int(bookings_limit),
+            ),
+            facts=NotificationFacts(
+                event=NotificationEvent.LIMIT_BOOKINGS_REACHED,
+                recipient=RecipientKind.MASTER,
+                chat_id=master.telegram_id,
+                plan_is_pro=False,
+            ),
+            reply_markup=build_upgrade_only_keyboard(
+                contact=get_settings().billing.contact,
+                upgrade_text=btn_go_pro(),
+            ),
+        ),
+    )
 
 
 async def _recover_after_slot_not_available(*, callback: CallbackQuery, state: FSMContext) -> None:

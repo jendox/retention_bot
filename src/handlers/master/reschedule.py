@@ -23,12 +23,14 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
 from src.repositories import BookingNotFound, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BookingStatus, Timezone
-from src.texts import master_reschedule as txt
-from src.texts.buttons import btn_cancel, btn_cancel_booking, btn_confirm
+from src.settings import get_settings
+from src.texts import master_reschedule as txt, paywall as paywall_txt
+from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_confirm, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.use_cases.reschedule_master_booking import (
@@ -300,7 +302,30 @@ async def _confirm_error_reset(callback: CallbackQuery, state: FSMContext, *, te
 
 
 async def _confirm_error_pro_required(callback: CallbackQuery, state: FSMContext) -> None:
-    await _confirm_error_reset(callback, state, text=txt.pro_only())
+    data = await state.get_data()
+    meta = _confirm_state(data)
+    if callback.message is None or meta is None:
+        await _confirm_error_reset(callback, state, text=txt.pro_only())
+        return
+
+    booking_id, _new_start_at, _client_tg, scope, page = meta
+    back_cb = f"m:b:{booking_id}:s:{scope}:p:{page}" if scope and page is not None else "paywall:close"
+
+    await callback.answer()
+    await safe_edit_text(
+        callback.message,
+        text=paywall_txt.reschedule_pro_only(),
+        reply_markup=build_paywall_keyboard(
+            contact=get_settings().billing.contact,
+            upgrade_text=btn_go_pro(),
+            back_text=btn_back(),
+            back_callback_data=back_cb,
+        ),
+        parse_mode="HTML",
+        ev=ev,
+        event="master_reschedule.paywall_edit_failed",
+    )
+    await _reset_reschedule(state, callback.bot)
 
 
 async def _confirm_error_forbidden(callback: CallbackQuery, state: FSMContext) -> None:
@@ -503,6 +528,36 @@ async def start_reschedule(
             await ev.aexception("master_reschedule.start_failed", stage="load", exc=deny_exc)
         else:
             ev.info("master_reschedule.start_denied", **(deny_meta or {}))
+        if (deny_meta or {}).get("reason") == "pro_required":
+            back_cb = f"m:b:{booking_id}:s:{getattr(scope, 'value', str(scope))}:p:{page}"
+            await callback.answer()
+            if callback.message is not None:
+                await safe_edit_text(
+                    callback.message,
+                    text=paywall_txt.reschedule_pro_only(),
+                    reply_markup=build_paywall_keyboard(
+                        contact=get_settings().billing.contact,
+                        upgrade_text=btn_go_pro(),
+                        back_text=btn_back(),
+                        back_callback_data=back_cb,
+                    ),
+                    parse_mode="HTML",
+                    ev=ev,
+                    event="master_reschedule.paywall_edit_failed",
+                )
+            else:
+                await callback.bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=paywall_txt.reschedule_pro_only(),
+                    reply_markup=build_paywall_keyboard(
+                        contact=get_settings().billing.contact,
+                        upgrade_text=btn_go_pro(),
+                        back_text=btn_back(),
+                        back_callback_data=back_cb,
+                    ),
+                    parse_mode="HTML",
+                )
+            return
         await callback.answer(deny_text, show_alert=True)
         return
 

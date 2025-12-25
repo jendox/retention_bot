@@ -20,12 +20,14 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_upgrade_button
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, AttendanceOutcome, BookingStatus, status_badge
-from src.texts import master_schedule as txt
-from src.texts.buttons import btn_back, btn_cancel_booking
+from src.settings import get_settings
+from src.texts import master_schedule as txt, paywall as paywall_txt
+from src.texts.buttons import btn_back, btn_cancel_booking, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
@@ -195,6 +197,10 @@ def _build_booking_card_keyboard(
     meta: "_BookingCardKeyboardMeta",
 ) -> InlineKeyboardMarkup:
     inline_keyboard: list[list[InlineKeyboardButton]] = []
+    if meta.show_no_show_paywall and not meta.plan_is_pro:
+        inline_keyboard.append(
+            [build_upgrade_button(contact=get_settings().billing.contact, text=btn_go_pro())],
+        )
     if meta.status in BookingStatus.active():
         actions: list[InlineKeyboardButton] = [
             InlineKeyboardButton(
@@ -202,13 +208,12 @@ def _build_booking_card_keyboard(
                 callback_data=cb_action("cancel", booking_id, scope, page),
             ),
         ]
-        if meta.allow_reschedule:
-            actions.append(
-                InlineKeyboardButton(
-                    text=txt.btn_reschedule(),
-                    callback_data=cb_action("reschedule", booking_id, scope, page),
-                ),
-            )
+        actions.append(
+            InlineKeyboardButton(
+                text=txt.btn_reschedule(),
+                callback_data=cb_action("reschedule", booking_id, scope, page),
+            ),
+        )
         inline_keyboard.append(actions)
     if meta.show_attendance_actions and meta.attendance_outcome == AttendanceOutcome.UNKNOWN:
         inline_keyboard.append(
@@ -333,7 +338,8 @@ class _BookingCardKeyboardMeta:
     status: BookingStatus
     attendance_outcome: AttendanceOutcome
     show_attendance_actions: bool
-    allow_reschedule: bool
+    plan_is_pro: bool
+    show_no_show_paywall: bool
 
 
 @dataclass(frozen=True)
@@ -534,10 +540,14 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
         return
 
     render = _render_booking_card(booking, master_tz=master_tz)
+    text = render.text
+    show_no_show_paywall = (not plan.is_pro) and (render.attendance_outcome == AttendanceOutcome.NO_SHOW)
+    if show_no_show_paywall:
+        text = f"{text}\n\n{paywall_txt.no_show_value()}"
 
     await _send_or_edit(
         callback,
-        text=render.text,
+        text=text,
         reply_markup=_build_booking_card_keyboard(
             booking_id=booking_id,
             scope=scope,
@@ -546,7 +556,8 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
                 status=render.status,
                 attendance_outcome=render.attendance_outcome,
                 show_attendance_actions=render.show_attendance_actions,
-                allow_reschedule=plan.is_pro,
+                plan_is_pro=bool(plan.is_pro),
+                show_no_show_paywall=bool(show_no_show_paywall),
             ),
         ),
     )
@@ -673,6 +684,34 @@ async def _handle_action_reschedule(
     rate_limiter: RateLimiter | None,
 ) -> None:
     from src.handlers.master.reschedule import start_reschedule
+
+    try:
+        async with session_local() as session:
+            master = await MasterRepository(session).get_by_telegram_id(callback.from_user.id)
+            plan = await EntitlementsService(session).get_plan(master_id=master.id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.reschedule_plan_check_failed", exc=exc, booking_id=booking_id)
+        await callback.answer(txt.action_error(), show_alert=True)
+        return
+
+    if not plan.is_pro:
+        await callback.answer()
+        if callback.message is not None:
+            back_to_card = f"m:b:{booking_id}:s:{scope.value}:p:{page}"
+            await safe_edit_text(
+                callback.message,
+                text=paywall_txt.reschedule_pro_only(),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [build_upgrade_button(contact=get_settings().billing.contact, text=btn_go_pro())],
+                        [InlineKeyboardButton(text=btn_back(), callback_data=back_to_card)],
+                    ],
+                ),
+                parse_mode="HTML",
+                ev=ev,
+                event="master_schedule.paywall_reschedule_edit_failed",
+            )
+        return
 
     await start_reschedule(callback, state, rate_limiter, booking_id=booking_id, scope=scope, page=page)
 

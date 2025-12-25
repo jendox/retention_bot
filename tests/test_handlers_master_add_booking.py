@@ -43,6 +43,30 @@ async def _fake_session_local():
 
 
 class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_no_clients_shows_add_client_prompt(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(),
+        )
+
+        answer_tracked = AsyncMock()
+        with (
+            patch.object(h, "_reset_add_booking", AsyncMock()),
+            patch.object(h, "track_message", AsyncMock()),
+            patch.object(h, "_load_master_with_clients", AsyncMock(return_value=SimpleNamespace(clients=[]))),
+            patch.object(h, "answer_tracked", answer_tracked),
+        ):
+            await h.start_add_booking(message=message, state=state)
+
+        self.assertEqual(state._state, h.AddBookingStates.no_clients)
+        answer_tracked.assert_awaited()
+        reply_markup = answer_tracked.await_args.kwargs["reply_markup"]
+        self.assertEqual(reply_markup.inline_keyboard[0][0].callback_data, h.NO_CLIENTS_ADD_CLIENT_CB)
+        self.assertEqual(reply_markup.inline_keyboard[1][0].callback_data, "m:add_booking:cancel")
+
     async def test_pick_date_no_slots_keeps_calendar_and_answers(self) -> None:
         from src.handlers.master import add_booking as h
 
@@ -167,7 +191,12 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
             bot=SimpleNamespace(send_message=AsyncMock()),
-            message=SimpleNamespace(edit_reply_markup=AsyncMock(), edit_text=AsyncMock(), answer=AsyncMock()),
+            message=SimpleNamespace(
+                message_id=123,
+                edit_reply_markup=AsyncMock(),
+                edit_text=AsyncMock(),
+                answer=AsyncMock(),
+            ),
             answer=AsyncMock(),
         )
 
@@ -185,21 +214,22 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         cleanup = AsyncMock()
-        maybe_send = AsyncMock(return_value=False)
+        safe_edit = AsyncMock()
         with (
             patch.object(h, "track_callback_message", AsyncMock()),
             patch.object(h, "active_session", _fake_active_session),
             patch.object(h, "CreateMasterBooking", _UC),
             patch.object(h, "cleanup_messages", cleanup),
+            patch.object(h, "safe_edit_text", safe_edit),
         ):
             await h.confirm_booking(
                 callback=callback,
                 state=state,
-                notifier=SimpleNamespace(maybe_send=maybe_send),
+                notifier=SimpleNamespace(maybe_send=AsyncMock(return_value=False)),
             )
 
         cleanup.assert_awaited()
-        maybe_send.assert_awaited()
+        safe_edit.assert_awaited()
         self.assertEqual(await state.get_data(), {})
 
     async def test_confirm_slot_taken_returns_to_slot_selection(self) -> None:

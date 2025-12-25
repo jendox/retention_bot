@@ -8,7 +8,7 @@ from src.core.sa import active_session
 from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback
-from src.handlers.shared.ui import safe_edit_reply_markup
+from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
@@ -16,9 +16,11 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
-from src.texts import common as common_txt, master_add_client as txt
-from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
+from src.settings import get_settings
+from src.texts import common as common_txt, master_add_client as txt, paywall as paywall_txt
+from src.texts.buttons import btn_back, btn_cancel, btn_confirm, btn_go_pro, btn_restart
 from src.use_cases.create_client_offline import (
     CreateClientOffline,
     CreateClientOfflineCreateResult,
@@ -26,7 +28,14 @@ from src.use_cases.create_client_offline import (
 )
 from src.use_cases.entitlements import Usage
 from src.user_context import ActiveRole
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
+from src.utils import (
+    answer_tracked,
+    cleanup_messages,
+    track_callback_message,
+    track_message,
+    untrack_message_id,
+    validate_phone,
+)
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
@@ -165,16 +174,33 @@ async def _handle_confirm_result(
             clients_count=result.usage.clients_count if getattr(result, "usage", None) else None,
             clients_limit=result.clients_limit,
         )
-        if not await _send_warning_message(
-            chat_id=telegram_id,
-            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
-            usage=result.usage,
-            plan_is_pro=result.plan_is_pro,
-            clients_limit=result.clients_limit,
-            notifier=notifier,
-        ):
+        contact = get_settings().billing.contact
+        if callback.message is not None:
+            await untrack_message_id(state, bucket=ADD_CLIENT_BUCKET, message_id=callback.message.message_id)
+        await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+        if callback.message is not None and result.clients_limit is not None:
+            await safe_edit_reply_markup(
+                callback.message,
+                reply_markup=None,
+                ev=ev,
+                event="master_add_client.disable_failed",
+            )
+            await safe_edit_text(
+                callback.message,
+                text=paywall_txt.clients_limit_reached(limit=int(result.clients_limit)),
+                reply_markup=build_paywall_keyboard(
+                    contact=contact,
+                    upgrade_text=btn_go_pro(),
+                    back_text=btn_back(),
+                    back_callback_data="paywall:back:clients_menu",
+                ),
+                parse_mode="HTML",
+                ev=ev,
+                event="master_add_client.paywall_edit_failed",
+            )
+        else:
             await callback.answer(txt.quota_reached(), show_alert=True)
-        await _reset_add_client(state, callback.bot)
+        await state.clear()
         return
 
     ev.warning(
@@ -234,17 +260,28 @@ async def start_add_client(
             clients_count=result.usage.clients_count,
             clients_limit=result.clients_limit,
         )
-        if not await _send_warning_message(
-            chat_id=telegram_id,
-            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
-            usage=result.usage,
-            plan_is_pro=result.plan_is_pro,
-            clients_limit=result.clients_limit,
-            notifier=notifier,
-        ):
+        contact = get_settings().billing.contact
+        if callback.message is not None:
+            await untrack_message_id(state, bucket=ADD_CLIENT_BUCKET, message_id=callback.message.message_id)
+        await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
+        if callback.message is not None and result.clients_limit is not None:
+            await callback.answer()
+            await safe_edit_text(
+                callback.message,
+                text=paywall_txt.clients_limit_reached(limit=int(result.clients_limit)),
+                reply_markup=build_paywall_keyboard(
+                    contact=contact,
+                    upgrade_text=btn_go_pro(),
+                    back_text=btn_back(),
+                    back_callback_data="paywall:back:clients_menu",
+                ),
+                parse_mode="HTML",
+                ev=ev,
+                event="master_add_client.paywall_edit_failed",
+            )
+        else:
             await callback.answer(txt.quota_reached(), show_alert=True)
-
-        await _reset_add_client(state, callback.bot)
+        await state.clear()
         return
 
     await answer_tracked(

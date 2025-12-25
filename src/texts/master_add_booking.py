@@ -14,6 +14,10 @@ def ask_query(*, t: Translator = _noop_t) -> str:
     return t("Введи имя или телефон клиента, чтобы создать запись:")
 
 
+def no_clients(*, t: Translator = _noop_t) -> str:
+    return t("Пока нет ни одного клиента. Сначала добавь клиента, чтобы создать запись.")
+
+
 def query_required(*, t: Translator = _noop_t) -> str:
     return t("Нужно ввести имя или телефон клиента.")
 
