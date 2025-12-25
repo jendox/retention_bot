@@ -27,6 +27,7 @@ class GetMasterFreeSlots:
         master_id,
         client_day: date,
         client_tz: Timezone,
+        exclude_booking_id: int | None = None,
     ) -> FreeSlotsResult:
         master = await self._master_repo.get_for_schedule_by_id(master_id)
         master_day = master_day_from_client_day(
@@ -42,6 +43,8 @@ class GetMasterFreeSlots:
             end_at_utc=utc_range.end,
             statuses=BookingStatus.active(),
         )
+        if exclude_booking_id is not None:
+            bookings = [b for b in bookings if b.id != exclude_booking_id]
         free_slots_master_tz = get_free_slots_for_date(
             master=master,
             target_date=master_day,

@@ -65,6 +65,10 @@ def updated(*, t: Translator = _noop_t) -> str:
     return t("Запись перенесена ✅")
 
 
+def same_slot(*, t: Translator = _noop_t) -> str:
+    return t("Это уже текущее время записи.")
+
+
 def cancelled(*, t: Translator = _noop_t) -> str:
     return t("Перенос отменён.")
 
