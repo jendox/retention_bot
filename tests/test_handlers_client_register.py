@@ -282,7 +282,7 @@ class RegisterHandlerTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(reg, "track_callback_message", AsyncMock()),
             patch.object(reg, "answer_tracked", AsyncMock()),
-            patch.object(reg, "cleanup_messages", cleanup),
+            patch("src.handlers.shared.flow.cleanup_messages", cleanup),
         ):
             await reg.client_reg_confirm(
                 callback=callback,
