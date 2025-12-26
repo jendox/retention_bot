@@ -352,7 +352,18 @@ async def _handle_success(
 
             reply_markup = InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking.id}:cancel")],
+                    [
+                        InlineKeyboardButton(
+                            text="💬 Написать мастеру",
+                            url=f"tg://user?id={int(master.telegram_id)}",
+                        ),
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text=btn_cancel_booking(),
+                            callback_data=f"c:booking:{booking.id}:cancel",
+                        ),
+                    ],
                 ],
             )
 

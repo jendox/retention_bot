@@ -455,6 +455,12 @@ async def _notify_client_about_reschedule(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text="💬 Написать мастеру",
+                    url=f"tg://user?id={int(booking.master.telegram_id)}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=btn_cancel_booking(),
                     callback_data=f"c:booking:{booking.id}:cancel",
                 ),
