@@ -278,6 +278,7 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
 
     client_tz_info = get_timezone(str(client_timezone.value))
     client_day = _get_client_day(picked_date, client_tz_info=client_tz_info)
+    calendar_month_year = (int(client_day.year), int(client_day.month))
 
     async with session_local() as session:
         allowed, min_date, max_date, pro_max_date = await _validate_booking_day(
@@ -291,6 +292,16 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
                 text=available_dates(min_date=min_date, max_date=max_date, pro_max_date=pro_max_date),
                 show_alert=True,
             )
+            if callback.message is not None:
+                calendar = SimpleCalendar()
+                reply_markup = await calendar.start_calendar(year=calendar_month_year[0], month=calendar_month_year[1])
+                await safe_edit_text(
+                    callback.message,
+                    text=choose_date(),
+                    reply_markup=reply_markup,
+                    ev=ev,
+                    event="client_booking.edit_calendar_restore_out_of_range_failed",
+                )
             return
 
         await callback.answer()
@@ -302,7 +313,17 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
         )
 
     if not result.slots_utc:
-        await callback.answer(no_available_slots(), show_alert=True)
+        await callback.answer(no_available_slots(), show_alert=False)
+        if callback.message is not None:
+            calendar = SimpleCalendar()
+            reply_markup = await calendar.start_calendar(year=calendar_month_year[0], month=calendar_month_year[1])
+            await safe_edit_text(
+                callback.message,
+                text=no_available_slots(),
+                reply_markup=reply_markup,
+                ev=ev,
+                event="client_booking.edit_calendar_restore_no_slots_failed",
+            )
         return
 
     slots_iso = [dt.isoformat() for dt in result.slots_utc]
