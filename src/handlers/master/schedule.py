@@ -296,13 +296,13 @@ def _compute_range(master_tz: ZoneInfo, scope: Scope) -> tuple[datetime, datetim
     now_local = datetime.now(master_tz)
 
     if scope == Scope.TODAY:
-        start_local = now_local
+        start_local = datetime.combine(now_local.date(), time(0, 0), tzinfo=master_tz)
         end_local = datetime.combine(
             now_local.date() + timedelta(days=1),
             time(0, 0),
             tzinfo=master_tz,
         )
-        cutoff_local: datetime | None = now_local
+        cutoff_local = None  # show whole day to allow attendance marking for past bookings
         return start_local, end_local, cutoff_local
 
     if scope == Scope.TOMORROW:

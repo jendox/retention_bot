@@ -23,8 +23,9 @@ from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, status_badge
 from src.texts import client_list_bookings as txt
-from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_confirm
+from src.texts.buttons import btn_back, btn_cancel_booking
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
+from src.texts.master_schedule import btn_cancel_no, btn_cancel_yes
 from src.user_context import ActiveRole
 
 router = Router(name=__name__)
@@ -199,7 +200,6 @@ def _build_details_keyboard(*, booking_id: int, can_cancel: bool) -> InlineKeybo
     if can_cancel:
         rows.append([InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:bookings:cancel:{booking_id}")])
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data="c:bookings:back")])
-    rows.append([InlineKeyboardButton(text=txt.btn_close(), callback_data="c:bookings:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -209,10 +209,9 @@ def _build_cancel_confirm_keyboard(*, booking_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=btn_confirm(), callback_data=f"c:bookings:cancel_yes:{booking_id}"),
-                InlineKeyboardButton(text=btn_cancel(), callback_data=f"c:bookings:open:{booking_id}"),
+                InlineKeyboardButton(text=btn_cancel_yes(), callback_data=f"c:bookings:cancel_yes:{booking_id}"),
+                InlineKeyboardButton(text=btn_cancel_no(), callback_data=f"c:bookings:open:{booking_id}"),
             ],
-            [InlineKeyboardButton(text=txt.btn_close(), callback_data="c:bookings:close")],
         ],
     )
 

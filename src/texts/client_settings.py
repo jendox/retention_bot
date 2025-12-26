@@ -7,15 +7,27 @@ def btn_timezone(*, t: Translator = _noop_t) -> str:
     return t("🌍 Таймзона")
 
 
+def btn_phone(*, t: Translator = _noop_t) -> str:
+    return t("📞 Изменить телефон")
+
+
 def btn_notifications(*, enabled: bool, t: Translator = _noop_t) -> str:
     return t("🔔 Уведомления: включены ✅") if enabled else t("🔕 Уведомления: выключены 🚫")
 
 
-def render_settings(*, name: str, tz_value: str, notifications_enabled: bool, t: Translator = _noop_t) -> str:
+def render_settings(
+    *,
+    name: str,
+    phone: str,
+    tz_value: str,
+    notifications_enabled: bool,
+    t: Translator = _noop_t,
+) -> str:
     notify_line = t("включены ✅") if notifications_enabled else t("выключены 🚫")
     return t(
         "Настройки клиента ⚙️\n\n"
         f"<b>Профиль:</b> {name}\n"
+        f"<b>Телефон:</b> {phone}\n"
         f"<b>Таймзона:</b> {tz_value}\n"
         f"<b>Уведомления:</b> {notify_line}\n\n"
         "Что настроим?",
@@ -44,3 +56,15 @@ def timezone_updated(*, t: Translator = _noop_t) -> str:
 
 def saved(*, t: Translator = _noop_t) -> str:
     return t("✅ Сохранено.")
+
+
+def ask_new_phone(*, t: Translator = _noop_t) -> str:
+    return t("Введи новый телефон (в формате <code>375291234567</code>):")
+
+
+def phone_not_recognized(*, t: Translator = _noop_t) -> str:
+    return t("Не смог разобрать номер 🤔\n\nВведи номер в формате <code>375291234567</code>:")
+
+
+def phone_updated(*, t: Translator = _noop_t) -> str:
+    return t("✅ Телефон обновлён.")

@@ -99,3 +99,4 @@ async def client_settings(message: Message, state: FSMContext, rate_limiter: Rat
         return
     await state.clear()
     await open_client_settings(message, state, rate_limiter)
+    await safe_delete(message, ev=ev, event="client_menu.delete_settings_message_failed")

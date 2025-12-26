@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
@@ -15,15 +17,21 @@ from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import Timezone
-from src.texts import client_settings as txt
+from src.texts import client_settings as txt, common as common_txt
 from src.texts.buttons import btn_back
 from src.user_context import ActiveRole
+from src.utils import cleanup_messages, format_phone_display, track_message, validate_phone
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
 
 SETTINGS_CB_PREFIX = "c:settings:"
 SETTINGS_MAIN_KEY = "client_settings_main"
+SETTINGS_BUCKET = "client_settings"
+
+
+class ClientSettingsStates(StatesGroup):
+    edit_phone = State()
 
 
 def _kb_settings(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
@@ -31,6 +39,7 @@ def _kb_settings(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
+            [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}edit_phone")],
             [InlineKeyboardButton(text=notify_text, callback_data=f"{SETTINGS_CB_PREFIX}toggle_notify")],
             [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
@@ -55,8 +64,13 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _render(*, name: str, tz: Timezone, notifications_enabled: bool) -> str:
-    return txt.render_settings(name=name, tz_value=str(tz.value), notifications_enabled=notifications_enabled)
+def _render(*, name: str, phone: str, tz: Timezone, notifications_enabled: bool) -> str:
+    return txt.render_settings(
+        name=name,
+        phone=phone,
+        tz_value=str(tz.value),
+        notifications_enabled=notifications_enabled,
+    )
 
 
 def _get_main_ref(data: dict, *, telegram_id: int) -> tuple[int, int] | None:
@@ -105,6 +119,7 @@ async def _render_and_edit_main(
         message_id=message_id,
         text=_render(
             name=client.name,
+            phone=format_phone_display(str(getattr(client, "phone", ""))),
             tz=client.timezone,
             notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
         ),
@@ -146,6 +161,7 @@ async def open_client_settings(
     settings_msg = await message.answer(
         text=_render(
             name=client.name,
+            phone=format_phone_display(str(getattr(client, "phone", ""))),
             tz=client.timezone,
             notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
         ),
@@ -153,6 +169,8 @@ async def open_client_settings(
         parse_mode="HTML",
     )
     await _set_main_ref(state, chat_id=settings_msg.chat.id, message_id=settings_msg.message_id)
+    await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+    await state.set_state(None)
 
 
 async def _show_timezone_menu(callback: CallbackQuery) -> bool:
@@ -186,7 +204,9 @@ async def _handle_back(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     if callback.message is not None:
         await safe_delete(callback.message, ev=ev, event="client_settings.delete_failed")
+    await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
     await _clear_main_ref(state)
+    await state.set_state(None)
 
 
 async def _ensure_main_ref_from_message(callback: CallbackQuery, state: FSMContext, *, telegram_id: int) -> None:
@@ -262,6 +282,31 @@ async def _handle_back_menu(callback: CallbackQuery, *, state: FSMContext, teleg
         telegram_id=telegram_id,
         reason="missing_main_ref_on_back_menu",
     )
+    await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+    await state.set_state(None)
+
+
+def _kb_phone_prompt() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")]],
+    )
+
+
+async def _handle_edit_phone(callback: CallbackQuery, *, state: FSMContext) -> None:
+    await callback.answer()
+    await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+    ok = await safe_edit_text(
+        callback.message,
+        text=txt.ask_new_phone(),
+        reply_markup=_kb_phone_prompt(),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_settings.edit_phone_prompt_failed",
+    )
+    if not ok:
+        await context_lost(callback, state, bucket=SETTINGS_MAIN_KEY, reason="missing_message_on_edit_phone")
+        return
+    await state.set_state(ClientSettingsStates.edit_phone)
 
 
 async def _load_client_or_alert(callback: CallbackQuery, state: FSMContext, *, telegram_id: int):
@@ -274,16 +319,23 @@ async def _load_client_or_alert(callback: CallbackQuery, state: FSMContext, *, t
 
 
 def _parse_action(data: str) -> tuple[str, str | None]:
-    if data == f"{SETTINGS_CB_PREFIX}back":
-        return "back", None
-    if data == f"{SETTINGS_CB_PREFIX}tz":
-        return "tz", None
-    if data.startswith(f"{SETTINGS_CB_PREFIX}set_tz:"):
-        return "set_tz", data.split(":", 2)[2]
-    if data == f"{SETTINGS_CB_PREFIX}toggle_notify":
-        return "toggle_notify", None
-    if data == f"{SETTINGS_CB_PREFIX}back_menu":
-        return "back_menu", None
+    if not data.startswith(SETTINGS_CB_PREFIX):
+        return "unknown", None
+
+    suffix = data.removeprefix(SETTINGS_CB_PREFIX)
+    mapping = {
+        "back": "back",
+        "tz": "tz",
+        "edit_phone": "edit_phone",
+        "toggle_notify": "toggle_notify",
+        "back_menu": "back_menu",
+    }
+    if suffix in mapping:
+        return mapping[suffix], None
+
+    if suffix.startswith("set_tz:"):
+        return "set_tz", suffix.split(":", 1)[1]
+
     return "unknown", None
 
 
@@ -368,7 +420,59 @@ async def _dispatch_without_client(
     if action == "tz":
         await _handle_choose_timezone(callback, state)
         return
+    if action == "edit_phone":
+        await _handle_edit_phone(callback, state=state)
+        return
     if action == "back_menu":
         await _handle_back_menu(callback, state=state, telegram_id=telegram_id)
         return
     await callback.answer()
+
+
+@router.message(UserRole(ActiveRole.CLIENT), StateFilter(ClientSettingsStates.edit_phone))
+async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_settings", step="edit_phone_save")
+    if not await rate_limit_message(message, rate_limiter, name="client_settings:edit_phone", ttl_sec=1):
+        return
+
+    await track_message(state, message, bucket=SETTINGS_BUCKET)
+    raw = (message.text or "").strip()
+    phone = validate_phone(raw)
+    if phone is None:
+        await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+        data = await state.get_data()
+        ref = _get_main_ref(data, telegram_id=message.from_user.id)
+        if ref is None:
+            await message.answer(common_txt.context_lost())
+            await state.clear()
+            return
+        chat_id, message_id = ref
+        await safe_bot_edit_message_text(
+            message.bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=txt.phone_not_recognized(),
+            reply_markup=_kb_phone_prompt(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_settings.edit_phone_invalid_failed",
+        )
+        return
+
+    telegram_id = message.from_user.id
+    try:
+        client = await _load_client(telegram_id)
+    except ClientNotFound:
+        await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+        await message.answer(txt.client_only())
+        await _clear_main_ref(state)
+        await state.set_state(None)
+        return
+
+    async with active_session() as session:
+        repo = ClientRepository(session)
+        await repo.update_by_id(client.id, ClientUpdate(phone=phone))
+
+    await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+    await _render_and_edit_main(state=state, bot=message.bot, telegram_id=telegram_id)
+    await state.set_state(None)

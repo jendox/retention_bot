@@ -23,7 +23,7 @@ def details_title(*, t: Translator = _noop_t) -> str:
 
 
 def cancel_confirm(*, t: Translator = _noop_t) -> str:
-    return t("Точно отменить запись?")
+    return t("⚠️ Точно отменить запись?")
 
 
 def btn_prev(*, t: Translator = _noop_t) -> str:

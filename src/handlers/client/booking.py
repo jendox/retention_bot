@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
+from aiogram_calendar.schemas import SimpleCalAct
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
@@ -259,27 +260,16 @@ async def _get_free_slots(session, *, master_id: int, client_day: date, client_t
     return await use_case.execute(master_id=master_id, client_day=client_day, client_tz=client_tz)
 
 
-@router.callback_query(
-    UserRole(ActiveRole.CLIENT),
-    StateFilter(ClientBooking.selecting_date),
-    SimpleCalendarCallback.filter(),
-)
-async def process_booking_calendar(
-    callback: CallbackQuery,
-    callback_data: SimpleCalendarCallback,
-    state: FSMContext,
-    rate_limiter: RateLimiter | None = None,
-) -> None:
-    bind_log_context(flow="client_booking", step="pick_date")
-    if not await rate_limit_callback(callback, rate_limiter, name="client_booking:pick_date", ttl_sec=1):
-        return
-    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
+async def _handle_calendar_cancel(callback: CallbackQuery, state: FSMContext, *, act: SimpleCalAct) -> bool:
+    if act != SimpleCalAct.cancel:
+        return False
+    await callback.answer(booking_not_saved())
+    await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
+    await state.clear()
+    return True
 
-    calendar = SimpleCalendar()
-    selected, picked_date = await calendar.process_selection(callback, callback_data)
-    if not selected:
-        return
 
+async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContext, *, picked_date: datetime) -> None:
     ctx = await _load_calendar_context(state)
     if ctx is None:
         await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_master_or_timezone")
@@ -330,6 +320,33 @@ async def process_booking_calendar(
             event="client_booking.edit_choose_time_failed",
         )
     await state.set_state(ClientBooking.selecting_slot)
+
+
+@router.callback_query(
+    UserRole(ActiveRole.CLIENT),
+    StateFilter(ClientBooking.selecting_date),
+    SimpleCalendarCallback.filter(),
+)
+async def process_booking_calendar(
+    callback: CallbackQuery,
+    callback_data: SimpleCalendarCallback,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="client_booking", step="pick_date")
+    if not await rate_limit_callback(callback, rate_limiter, name="client_booking:pick_date", ttl_sec=1):
+        return
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
+
+    if await _handle_calendar_cancel(callback, state, act=callback_data.act):
+        return
+
+    calendar = SimpleCalendar()
+    selected, picked_date = await calendar.process_selection(callback, callback_data)
+    if not selected:
+        return
+
+    await _handle_booking_day_selected(callback, state, picked_date=picked_date)
 
 
 @router.callback_query(
