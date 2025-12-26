@@ -38,7 +38,7 @@ def missing_data(*, t: Translator = _noop_t) -> str:
 
 
 def done_offline(*, t: Translator = _noop_t) -> str:
-    return t("✅ Готово! Клиент добавлен (🔴 оффлайн)")
+    return t("✅ Готово! Клиент добавлен (📵 оффлайн)")
 
 
 def ask_phone_conflict_retry(*, t: Translator = _noop_t) -> str:

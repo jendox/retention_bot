@@ -74,7 +74,7 @@ def slot_taken(*, t: Translator = _noop_t) -> str:
 
 
 def created(*, client_has_tg: bool, t: Translator = _noop_t) -> str:
-    return t("✅ Запись создана") + (t(" (🔴 оффлайн)") if not client_has_tg else "")
+    return t("✅ Запись создана") + (t(" (📵 оффлайн)") if not client_has_tg else "")
 
 
 def cancel_alert(*, t: Translator = _noop_t) -> str:

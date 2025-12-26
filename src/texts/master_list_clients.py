@@ -19,7 +19,7 @@ def title(*, page: int, total_pages: int, t: Translator = _noop_t) -> str:
 
 
 def phone_sep(*, t: Translator = _noop_t) -> str:
-    return t(" — ")
+    return t(" · ")
 
 
 def btn_prev(*, t: Translator = _noop_t) -> str:
@@ -32,6 +32,10 @@ def btn_next(*, t: Translator = _noop_t) -> str:
 
 def btn_close(*, t: Translator = _noop_t) -> str:
     return t("✖️ Закрыть")
+
+
+def offline_legend(*, t: Translator = _noop_t) -> str:
+    return t("📵 — клиент без Telegram (офлайн).")
 
 
 def no_clients_now(*, t: Translator = _noop_t) -> str:

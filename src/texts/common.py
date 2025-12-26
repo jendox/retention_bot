@@ -12,7 +12,7 @@ def label_default_client(*, t: Translator = _noop_t) -> str:
 
 
 def label_offline_badge(*, t: Translator = _noop_t) -> str:
-    return t(" · 🔴 оффлайн")
+    return t(" 📵")
 
 
 def cancelled(*, t: Translator = _noop_t) -> str:

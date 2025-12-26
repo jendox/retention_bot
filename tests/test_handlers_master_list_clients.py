@@ -13,7 +13,7 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
         text = h._build_clients_page_text([client], page=1, total_pages=1, start_index=0)
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", text)
         self.assertNotIn("<b>", text)
-        self.assertIn("🔴", text)
+        self.assertIn("📵", text)
 
     async def test_pagination_parses_page_and_uses_global_index(self) -> None:
         from src.handlers.master import list_clients as h
