@@ -584,7 +584,7 @@ def _kb_client_card(*, client_id: int, page: int, chunk: int, telegram_id: int |
             [
                 InlineKeyboardButton(
                     text="✏️ Редактировать клиента",
-                    callback_data=f"m:edit_client:open:{int(client_id)}",
+                    callback_data=f"m:edit_client:open:{int(client_id)}:p:{int(page)}:c:{int(chunk)}",
                 ),
             ],
             [

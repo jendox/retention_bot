@@ -86,3 +86,7 @@ def phone_conflict(*, t: Translator = _noop_t) -> str:
 
 def phone_updated(*, t: Translator = _noop_t) -> str:
     return t("✅ Телефон обновлён.")
+
+
+def phone_edit_not_allowed_for_telegram_client(*, t: Translator = _noop_t) -> str:
+    return t("ℹ️ Телефон можно менять только у офлайн-клиента (без Telegram).")
