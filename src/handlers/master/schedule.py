@@ -27,7 +27,7 @@ from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, AttendanceOutcome, BookingStatus, status_badge
 from src.settings import get_settings
 from src.texts import master_schedule as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel_booking, btn_confirm, btn_decline, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel_booking, btn_close, btn_confirm, btn_decline, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
@@ -141,7 +141,7 @@ def _build_period_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=btn_back(),
+                    text=btn_close(),
                     callback_data=SCHEDULE_CB["back_menu"],
                 ),
             ],
@@ -200,6 +200,7 @@ def _build_bookings_list_keyboard(
         rows.append(nav_row)
 
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data=SCHEDULE_CB["back_periods"])])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data=SCHEDULE_CB["back_menu"])])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -260,6 +261,14 @@ def _build_booking_card_keyboard(
             InlineKeyboardButton(
                 text=txt.btn_back_to_schedule(),
                 callback_data=cb_schedule(scope, page),
+            ),
+        ],
+    )
+    inline_keyboard.append(
+        [
+            InlineKeyboardButton(
+                text=btn_close(),
+                callback_data=SCHEDULE_CB["back_menu"],
             ),
         ],
     )

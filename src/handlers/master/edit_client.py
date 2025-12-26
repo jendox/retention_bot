@@ -22,7 +22,7 @@ from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, M
 from src.schemas import ClientUpdate
 from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, edit_client as txt
-from src.texts.buttons import btn_back, btn_cancel
+from src.texts.buttons import btn_back, btn_cancel, btn_close
 from src.texts.master_client_card import ClientHints, ClientSummary, card as render_client_view
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, format_phone_display, track_message, validate_phone
@@ -47,7 +47,10 @@ class EditClientStates(StatesGroup):
 
 def _kb_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")]],
+        inline_keyboard=[
+            [InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+        ],
     )
 
 
@@ -63,6 +66,7 @@ def _kb_results(clients: list[dict]) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:edit_client:pick:{raw['id']}")])
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data="m:edit_client:back")])
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -74,6 +78,7 @@ def _kb_actions(*, can_edit_phone: bool = True) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text=txt.btn_edit_phone(), callback_data="m:edit_client:edit_phone")])
     rows.append([InlineKeyboardButton(text=txt.btn_back_to_search(), callback_data="m:edit_client:back")])
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -84,6 +89,7 @@ def _kb_edit_menu(*, client_id: int, can_edit_phone: bool, back_cb: str) -> Inli
     if can_edit_phone:
         rows.append([InlineKeyboardButton(text=txt.btn_edit_phone(), callback_data="m:edit_client:edit_phone")])
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data=str(back_cb))])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -147,6 +153,7 @@ def _kb_client_view(*, client_id: int, telegram_id: int | None) -> InlineKeyboar
             ],
             [InlineKeyboardButton(text=txt.btn_back_to_search(), callback_data="m:edit_client:back")],
             [InlineKeyboardButton(text=btn_cancel(), callback_data="m:edit_client:cancel")],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -159,6 +166,12 @@ def _kb_edit_input(*, client_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=btn_back(),
                     callback_data=f"m:edit_client:edit_menu:{int(client_id)}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=btn_close(),
+                    callback_data="m:close",
                 ),
             ],
         ],
@@ -720,6 +733,7 @@ async def client_history(callback: CallbackQuery) -> None:
             inline_keyboard=[
                 [InlineKeyboardButton(text="◀️ Назад", callback_data=f"m:edit_client:view:{int(client_id)}")],
                 [InlineKeyboardButton(text=txt.btn_back_to_search(), callback_data="m:edit_client:back")],
+                [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
             ],
         ),
         parse_mode="HTML",

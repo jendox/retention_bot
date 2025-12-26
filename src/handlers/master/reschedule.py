@@ -30,7 +30,7 @@ from src.repositories.booking import BookingRepository
 from src.schemas.enums import BookingStatus, Timezone
 from src.settings import get_settings
 from src.texts import master_reschedule as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_confirm, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_close, btn_confirm, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.use_cases.reschedule_master_booking import (
@@ -74,6 +74,7 @@ def _build_slots_keyboard(slots_local: list[datetime]) -> InlineKeyboardMarkup:
     for index, slot in enumerate(slots_local):
         rows.append([InlineKeyboardButton(text=slot.strftime("%H:%M"), callback_data=_cb_slot(index))])
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL)])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -84,6 +85,7 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=btn_confirm(), callback_data=CB_CONFIRM),
                 InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL),
             ],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
 

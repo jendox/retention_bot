@@ -17,7 +17,7 @@ from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
 from src.texts import common as common_txt, master_settings as txt
-from src.texts.buttons import btn_back, btn_cancel
+from src.texts.buttons import btn_back, btn_cancel, btn_close
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
@@ -54,7 +54,7 @@ def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMa
                     callback_data=f"{SETTINGS_CB_PREFIX}notify",
                 ),
             ],
-            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
+            [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
 
@@ -74,6 +74,7 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     for tz in common:
         rows.append([InlineKeyboardButton(text=str(tz.value), callback_data=f"{SETTINGS_CB_PREFIX}set_tz:{tz.value}")])
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -250,9 +251,10 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
             text=txt.ask_new_phone(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[
-                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
-                ]],
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
+                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                ],
             ),
         )
         return
@@ -266,9 +268,10 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
             text=txt.ask_work_days(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[
-                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
-                ]],
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
+                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                ],
             ),
         )
         return
@@ -282,9 +285,10 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
             text=txt.ask_work_time(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[
-                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
-                ]],
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
+                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                ],
             ),
         )
         return
@@ -298,9 +302,10 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
             text=txt.ask_slot_size(),
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[
-                    InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit"),
-                ]],
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
+                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                ],
             ),
         )
         return

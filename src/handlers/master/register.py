@@ -31,7 +31,7 @@ from src.rate_limiter import RateLimiter
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import common as common_txt, master_registration as txt
-from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
+from src.texts.buttons import btn_cancel, btn_close, btn_confirm, btn_restart
 from src.use_cases.master_registration import (
     CompleteMasterRegistration,
     CompleteMasterRegistrationRequest,
@@ -234,6 +234,9 @@ def _build_confirm_registration_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text=btn_cancel(), callback_data=MASTER_REGISTRATION_CB["cancel"]),
             ],
+            [
+                InlineKeyboardButton(text=btn_close(), callback_data="m:close"),
+            ],
         ],
     )
 
@@ -242,6 +245,7 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=btn_cancel(), callback_data=MASTER_REGISTRATION_CB["cancel"])],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
 

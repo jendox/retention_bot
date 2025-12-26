@@ -20,7 +20,7 @@ from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
 from src.settings import get_settings
 from src.texts import common as common_txt, master_add_client as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_confirm, btn_go_pro, btn_restart
+from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_go_pro, btn_restart
 from src.use_cases.create_client_offline import (
     CreateClientOffline,
     CreateClientOfflineCreateResult,
@@ -68,6 +68,9 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_ADD_CB["cancel"]),
             ],
+            [
+                InlineKeyboardButton(text=btn_close(), callback_data="m:close"),
+            ],
         ],
     )
 
@@ -77,6 +80,9 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_ADD_CB["cancel"]),
+            ],
+            [
+                InlineKeyboardButton(text=btn_close(), callback_data="m:close"),
             ],
         ],
     )

@@ -22,7 +22,7 @@ from src.repositories import BookingRepository, MasterNotFound, MasterRepository
 from src.schemas import WorkdayOverrideCreate
 from src.schemas.enums import BookingStatus
 from src.texts import common as common_txt, master_overrides as txt
-from src.texts.buttons import btn_back
+from src.texts.buttons import btn_back, btn_close
 from src.texts.master_schedule import choose_period
 from src.user_context import ActiveRole
 from src.utils import cleanup_messages, track_message
@@ -50,6 +50,12 @@ def _kb_back_to_schedule() -> InlineKeyboardMarkup:
                     callback_data="m:overrides:back_schedule",
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    text=btn_close(),
+                    callback_data="m:close",
+                ),
+            ],
         ],
     )
 
@@ -60,7 +66,10 @@ def _kb_day_actions(*, has_override: bool) -> InlineKeyboardMarkup:
 
 def _kb_back_to_day_actions() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data="m:overrides:back_day")]],
+        inline_keyboard=[
+            [InlineKeyboardButton(text=btn_back(), callback_data="m:overrides:back_day")],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+        ],
     )
 
 
@@ -196,6 +205,7 @@ def _kb_day_actions_for_master(*, master, day: date) -> InlineKeyboardMarkup:
 
     rows.append([InlineKeyboardButton(text=txt.btn_set_hours(), callback_data="m:overrides:set_hours")])
     rows.append([InlineKeyboardButton(text=txt.btn_back_to_schedule(), callback_data="m:overrides:back_schedule")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

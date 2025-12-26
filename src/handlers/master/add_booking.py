@@ -86,6 +86,7 @@ def _build_clients_keyboard(clients: list) -> InlineKeyboardMarkup:
             label += txt.label_offline()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{client.id}")])
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -94,6 +95,7 @@ def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     for index, slot in enumerate(slots):
         rows.append([InlineKeyboardButton(text=slot.strftime("%H:%M"), callback_data=f"m:add_booking:slot:{index}")])
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -104,6 +106,7 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=btn_confirm(), callback_data="m:add_booking:confirm"),
                 InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel"),
             ],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
 

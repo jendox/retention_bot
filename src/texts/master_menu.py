@@ -12,7 +12,7 @@ CLIENTS_BTN_LIST = "📋 Список"
 CLIENTS_BTN_ADD = "➕ Добавить"
 CLIENTS_BTN_SEARCH = "🔍 Найти"
 CLIENTS_BTN_INVITE = "📨 Пригласить"
-CLIENTS_BTN_BACK = "◀️ Назад"
+CLIENTS_BTN_BACK = "✖️ Закрыть"
 
 MAIN_MENU_TEXT = dedent("""
     Главное меню мастера 💇‍♀️

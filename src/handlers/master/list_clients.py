@@ -19,7 +19,7 @@ from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterWithClients
 from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, master_list_clients as txt
-from src.texts.buttons import btn_back
+from src.texts.buttons import btn_back, btn_close
 from src.texts.master_client_card import ClientHints, ClientSummary, card as render_client_card
 from src.utils import format_phone_display
 
@@ -203,6 +203,7 @@ def _build_list_menu_keyboard(*, page: int, total_pages: int) -> InlineKeyboardM
                 InlineKeyboardButton(text=txt.btn_add(), callback_data="m:clients:add"),
             ],
             [InlineKeyboardButton(text=btn_back(), callback_data=f"{CLIENTS_CB_PREFIX}l:menu")],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
 
@@ -256,6 +257,7 @@ def _build_select_menu_keyboard(
     if toggle_row:
         rows.append(toggle_row)
     rows.append([InlineKeyboardButton(text=txt.btn_back_to_list(), callback_data=f"{CLIENTS_CB_PREFIX}s:back:{page}")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return rows
 
 
@@ -416,6 +418,7 @@ def _build_empty_clients_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=btn_back(), callback_data=f"{CLIENTS_CB_PREFIX}l:menu")],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
 
@@ -593,6 +596,7 @@ def _kb_client_card(*, client_id: int, page: int, chunk: int, telegram_id: int |
                     callback_data=f"{CLIENTS_CB_PREFIX}s:p:{int(page)}:c:{int(chunk)}",
                 ),
             ],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
