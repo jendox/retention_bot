@@ -56,6 +56,10 @@ def btn_history_week(*, t: Translator = _noop_t) -> str:
     return t("🕘 7 дней (история)")
 
 
+def btn_override_day(*, t: Translator = _noop_t) -> str:
+    return t("🛠 Изменить день")
+
+
 def btn_reschedule(*, t: Translator = _noop_t) -> str:
     return t("🔄 Перенести")
 

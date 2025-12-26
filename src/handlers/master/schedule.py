@@ -135,6 +135,12 @@ def _build_period_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text=txt.btn_override_day(),
+                    callback_data="m:overrides:start",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=btn_back(),
                     callback_data=SCHEDULE_CB["back_menu"],
                 ),

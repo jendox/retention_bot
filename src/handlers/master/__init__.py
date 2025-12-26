@@ -9,11 +9,13 @@ from .register import router as register_router
 from .reschedule import router as reschedule_router
 from .schedule import router as schedule_router
 from .settings import router as settings_router
+from .workday_overrides import router as workday_overrides_router
 
 routers = [
     register_router,
     master_menu_router,
     schedule_router,
+    workday_overrides_router,
     reschedule_router,
     booking_review_router,
     edit_client_router,

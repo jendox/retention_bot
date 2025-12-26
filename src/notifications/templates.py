@@ -75,7 +75,7 @@ BOOKING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Booki
         f"<b>Мастер:</b> {context.master_name}\n"
         f"<b>Дата и время:</b> {context.slot_str}\n"
         f"<b>Длительность:</b> {context.duration_min} мин.\n"
-        "Если нужно изменить время — напиши мастеру или отмени запись."
+        "Если время не подходит — напиши мастеру или отмени запись."
     ),
     (NotificationEvent.BOOKING_CANCELLED_BY_MASTER, RecipientKind.CLIENT): lambda context: (
         "❌ Запись отменена мастером.\n\n"
