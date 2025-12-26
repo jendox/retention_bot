@@ -108,7 +108,7 @@ def notify_pro_only(*, t: Translator = _noop_t) -> str:
 
 
 def notify_toggled(*, enabled: bool, t: Translator = _noop_t) -> str:
-    return t("Уведомления клиенту включены ✅") if enabled else t("Уведомления клиенту отключены 🚫")
+    return t("Уведомления клиенту включены ✅") if enabled else t("Уведомления клиенту выключены 🚫")
 
 
 def ask_new_phone(*, t: Translator = _noop_t) -> str:

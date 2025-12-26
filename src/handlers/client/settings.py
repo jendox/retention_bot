@@ -223,7 +223,7 @@ async def _handle_set_timezone(
         repo = ClientRepository(session)
         await repo.update_by_id(client_id, ClientUpdate(timezone=tz))
 
-    await callback.answer(txt.timezone_updated(), show_alert=True)
+    await callback.answer(txt.timezone_updated())
     await _edit_main_or_context_lost(
         callback,
         state=state,
@@ -245,7 +245,7 @@ async def _handle_toggle_notify(
         repo = ClientRepository(session)
         await repo.update_by_id(client_id, ClientUpdate(notifications_enabled=new_value))
 
-    await callback.answer(txt.saved(), show_alert=True)
+    await callback.answer(txt.saved())
     await _edit_main_or_context_lost(
         callback,
         state=state,

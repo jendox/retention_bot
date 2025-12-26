@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from html import escape as html_escape
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import session_local
 from src.handlers.shared.guards import rate_limit_message
@@ -14,10 +14,27 @@ from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.texts import client_list_masters as txt
+from src.texts.buttons import btn_close
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
+
+MASTERS_CB_PREFIX = "c:masters:"
+
+
+def _kb_close() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=btn_close(), callback_data=f"{MASTERS_CB_PREFIX}close")]],
+    )
+
+
+@router.callback_query(F.data == f"{MASTERS_CB_PREFIX}close")
+async def masters_close(callback: CallbackQuery) -> None:
+    bind_log_context(flow="client_list_masters", step="close")
+    await callback.answer()
+    if callback.message is not None:
+        await safe_delete(callback.message, ev=ev, event="client_list_masters.delete_failed")
 
 
 async def start_client_list_masters(
@@ -41,6 +58,7 @@ async def start_client_list_masters(
     if not masters:
         await message.answer(
             text=txt.empty(),
+            reply_markup=_kb_close(),
         )
         return
 
@@ -48,5 +66,5 @@ async def start_client_list_masters(
     for master in masters:
         lines.append(f"• <b>{html_escape(str(master.name))}</b>")
 
-    await message.answer(text="\n".join(lines), parse_mode="HTML")
+    await message.answer(text="\n".join(lines), reply_markup=_kb_close(), parse_mode="HTML")
     await safe_delete(message, ev=ev, event="client_list_masters.delete_menu_message_failed")
