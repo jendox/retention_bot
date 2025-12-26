@@ -26,7 +26,17 @@ from src.utils import format_phone_display
 ev = EventLogger(__name__)
 router = Router(name=__name__)
 
-PAGE_SIZE = 10
+# Pagination model:
+# - Logical page is always based on 10 items (for consistency).
+# - Text list shows full page (10 items).
+# - Select-mode shows first 6 items of the same logical page
+#   to keep UI compact and avoid scrolling.
+# - Navigation arrows always move by logical page (±10).
+TEXT_LIST_PAGE_SIZE = 10
+BUTTON_SELECT_PAGE_SIZE = 6
+BUTTON_SELECT_CHUNK_2_SIZE = 4
+BUTTON_SELECT_CHUNK_1 = 1
+BUTTON_SELECT_CHUNK_2 = 2
 CLIENTS_PAGE_PREFIX = "master_clients_page:"
 
 CLIENTS_CB_PREFIX = "m:cl:"
@@ -63,32 +73,60 @@ def _parse_int_suffix(prefix: str, data: str | None) -> int | None:
 
 def _parse_open_action(data: str | None) -> tuple[int, int] | None:
     parts = (data or "").split(":")
-    # m:cl:s:open:<client_id>:p:<page>
-    if len(parts) != 7:  # noqa: PLR2004
+    # m:cl:s:open:<client_id>:p:<page>:c:<chunk>
+    if len(parts) != 9:  # noqa: PLR2004
         return None
-    if parts[:4] != ["m", "cl", "s", "open"] or parts[5] != "p":  # noqa: PLR2004
+    if parts[:4] != ["m", "cl", "s", "open"] or parts[5] != "p" or parts[7] != "c":  # noqa: PLR2004
         return None
     try:
         client_id = int(parts[4])
         page = int(parts[6])
+        chunk = int(parts[8])
     except ValueError:
         return None
-    return client_id, page
+    if chunk not in {BUTTON_SELECT_CHUNK_1, BUTTON_SELECT_CHUNK_2}:
+        return None
+    return client_id, page, chunk
+
+
+def _parse_select_page(data: str | None) -> tuple[int, int] | None:
+    parts = (data or "").split(":")
+    # m:cl:s:p:<page>:c:<chunk>
+    if len(parts) != 7:  # noqa: PLR2004
+        return None
+    if parts[:4] != ["m", "cl", "s", "p"] or parts[5] != "c":  # noqa: PLR2004
+        return None
+    try:
+        page = int(parts[4])
+        chunk = int(parts[6])
+    except ValueError:
+        return None
+    if chunk not in {BUTTON_SELECT_CHUNK_1, BUTTON_SELECT_CHUNK_2}:
+        return None
+    return page, chunk
 
 
 def _parse_card_action(action: str, data: str | None) -> tuple[int, int] | None:
     parts = (data or "").split(":")
-    # m:cl:c:<action>:<client_id>:p:<page>
-    if len(parts) != 7:  # noqa: PLR2004
+    # m:cl:c:<action>:<client_id>:p:<page>:c:<chunk>
+    if len(parts) != 9:  # noqa: PLR2004
         return None
-    if parts[:3] != ["m", "cl", "c"] or parts[3] != action or parts[5] != "p":  # noqa: PLR2004
+    if (
+        parts[:3] != ["m", "cl", "c"]
+        or parts[3] != action
+        or parts[5] != "p"
+        or parts[7] != "c"
+    ):  # noqa: PLR2004
         return None
     try:
         client_id = int(parts[4])
         page = int(parts[6])
+        chunk = int(parts[8])
     except ValueError:
         return None
-    return client_id, page
+    if chunk not in {BUTTON_SELECT_CHUNK_1, BUTTON_SELECT_CHUNK_2}:
+        return None
+    return client_id, page, chunk
 
 
 @dataclass(frozen=True)
@@ -138,11 +176,17 @@ def _nav_button(*, direction: str, mode: str, page: int, total_pages: int) -> In
     if direction == "prev":
         if page <= 1:
             return _placeholder_button()
-        return InlineKeyboardButton(text="⬅️", callback_data=f"{CLIENTS_CB_PREFIX}{mode}:p:{page - 1}")
+        cb = f"{CLIENTS_CB_PREFIX}{mode}:p:{page - 1}"
+        if mode == "s":
+            cb = f"{cb}:c:1"
+        return InlineKeyboardButton(text="⬅️", callback_data=cb)
     if direction == "next":
         if page >= total_pages:
             return _placeholder_button()
-        return InlineKeyboardButton(text="➡️", callback_data=f"{CLIENTS_CB_PREFIX}{mode}:p:{page + 1}")
+        cb = f"{CLIENTS_CB_PREFIX}{mode}:p:{page + 1}"
+        if mode == "s":
+            cb = f"{cb}:c:1"
+        return InlineKeyboardButton(text="➡️", callback_data=cb)
     raise ValueError("Unsupported direction.")
 
 
@@ -163,26 +207,73 @@ def _build_list_menu_keyboard(*, page: int, total_pages: int) -> InlineKeyboardM
     )
 
 
-def _build_select_menu_keyboard(*, page: int, total_pages: int) -> list[list[InlineKeyboardButton]]:
+def _chunk_range(*, total_items: int, page: int, chunk: int) -> tuple[int, int]:
+    base = (page - 1) * TEXT_LIST_PAGE_SIZE
+    if chunk == BUTTON_SELECT_CHUNK_1:
+        start = base
+        end = base + BUTTON_SELECT_PAGE_SIZE
+    else:
+        start = base + BUTTON_SELECT_PAGE_SIZE
+        end = base + TEXT_LIST_PAGE_SIZE
+    start_num = start + 1
+    end_num = min(end, total_items)
+    return start_num, end_num
+
+
+def _build_select_menu_keyboard(
+    *,
+    page: int,
+    chunk: int,
+    total_pages: int,
+    total_items: int,
+) -> list[list[InlineKeyboardButton]]:
     row = [
         _nav_button(direction="prev", mode="s", page=page, total_pages=total_pages),
         InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search"),
         _nav_button(direction="next", mode="s", page=page, total_pages=total_pages),
     ]
-    return [
-        row,
-        [InlineKeyboardButton(text=txt.btn_back_to_list(), callback_data=f"{CLIENTS_CB_PREFIX}s:back:{page}")],
-    ]
+    toggle_row: list[InlineKeyboardButton] = []
+    base = (page - 1) * TEXT_LIST_PAGE_SIZE
+    has_chunk2 = total_items > (base + BUTTON_SELECT_PAGE_SIZE)
+    if chunk == BUTTON_SELECT_CHUNK_1 and has_chunk2:
+        start_num, end_num = _chunk_range(total_items=total_items, page=page, chunk=BUTTON_SELECT_CHUNK_2)
+        toggle_row.append(
+            InlineKeyboardButton(
+                text=f"Ещё ({start_num}–{end_num})",
+                callback_data=f"{CLIENTS_CB_PREFIX}s:p:{page}:c:{BUTTON_SELECT_CHUNK_2}",
+            ),
+        )
+    elif chunk == BUTTON_SELECT_CHUNK_2:
+        start_num, end_num = _chunk_range(total_items=total_items, page=page, chunk=BUTTON_SELECT_CHUNK_1)
+        toggle_row.append(
+            InlineKeyboardButton(
+                text=f"Назад ({start_num}–{end_num})",
+                callback_data=f"{CLIENTS_CB_PREFIX}s:p:{page}:c:{BUTTON_SELECT_CHUNK_1}",
+            ),
+        )
+
+    rows: list[list[InlineKeyboardButton]] = [row]
+    if toggle_row:
+        rows.append(toggle_row)
+    rows.append([InlineKeyboardButton(text=txt.btn_back_to_list(), callback_data=f"{CLIENTS_CB_PREFIX}s:back:{page}")])
+    return rows
 
 
 def _build_select_keyboard(
     all_clients: Sequence,
     *,
     page: int,
+    chunk: int,
     total_pages: int,
 ) -> InlineKeyboardMarkup:
-    start = (page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
+    # NOTE: select-mode uses a smaller page size but keeps the same logical offset.
+    base = (page - 1) * TEXT_LIST_PAGE_SIZE
+    if chunk == BUTTON_SELECT_CHUNK_1:
+        start = base
+        end = base + BUTTON_SELECT_PAGE_SIZE
+    else:
+        start = base + BUTTON_SELECT_PAGE_SIZE
+        end = base + TEXT_LIST_PAGE_SIZE
     clients_page = all_clients[start:end]
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -191,11 +282,18 @@ def _build_select_keyboard(
             [
                 InlineKeyboardButton(
                     text=_render_client_label(client),
-                    callback_data=f"{CLIENTS_CB_PREFIX}s:open:{int(client.id)}:p:{page}",
+                    callback_data=f"{CLIENTS_CB_PREFIX}s:open:{int(client.id)}:p:{page}:c:{chunk}",
                 ),
             ],
         )
-    rows.extend(_build_select_menu_keyboard(page=page, total_pages=total_pages))
+    rows.extend(
+        _build_select_menu_keyboard(
+            page=page,
+            chunk=chunk,
+            total_pages=total_pages,
+            total_items=len(all_clients),
+        ),
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -204,7 +302,7 @@ def _build_page_payload(
     *,
     page: int,
 ) -> tuple[str, InlineKeyboardMarkup, int] | None:
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
     if page < 1 or page > total_pages:
         ev.debug(
             "master_list_clients.callback_invalid",
@@ -214,8 +312,8 @@ def _build_page_payload(
         )
         return None
 
-    start = (page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
+    start = (page - 1) * TEXT_LIST_PAGE_SIZE
+    end = start + TEXT_LIST_PAGE_SIZE
     clients_page = all_clients[start:end]
 
     text = _build_clients_page_text(clients_page, page, total_pages, start_index=start)
@@ -342,10 +440,10 @@ async def start_clients_entry(callback: CallbackQuery) -> None:
         return
 
     page = 1
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
 
-    start = (page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
+    start = (page - 1) * TEXT_LIST_PAGE_SIZE
+    end = start + TEXT_LIST_PAGE_SIZE
     clients_page = all_clients[start:end]
 
     text = _build_clients_page_text(clients_page, page, total_pages, start_index=start)
@@ -434,11 +532,11 @@ async def _edit_list_page(message, *, all_clients: Sequence, page: int) -> None:
     )
 
 
-async def _edit_select_page(message, *, all_clients: Sequence, page: int, total_pages: int) -> None:
+async def _edit_select_page(message, *, all_clients: Sequence, page: int, chunk: int, total_pages: int) -> None:
     await safe_edit_text(
         message,
         text=f"{txt.choose_title(page=page, total_pages=total_pages)}\n\n{txt.offline_legend()}",
-        reply_markup=_build_select_keyboard(all_clients, page=page, total_pages=total_pages),
+        reply_markup=_build_select_keyboard(all_clients, page=page, chunk=chunk, total_pages=total_pages),
         ev=ev,
         event="master_list_clients.select_edit_failed",
     )
@@ -463,11 +561,11 @@ async def _fetch_client_stats(*, master_id: int, client_id: int) -> ClientStats:
         )
 
 
-def _card_action_cb(action: str, *, client_id: int, page: int) -> str:
-    return f"{CLIENTS_CARD_PREFIX}{action}:{int(client_id)}:p:{int(page)}"
+def _card_action_cb(action: str, *, client_id: int, page: int, chunk: int) -> str:
+    return f"{CLIENTS_CARD_PREFIX}{action}:{int(client_id)}:p:{int(page)}:c:{int(chunk)}"
 
 
-def _kb_client_card(*, client_id: int, page: int, telegram_id: int | None) -> InlineKeyboardMarkup:
+def _kb_client_card(*, client_id: int, page: int, chunk: int, telegram_id: int | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if telegram_id is not None:
         rows.append([InlineKeyboardButton(text="💬 Написать в Telegram", url=f"tg://user?id={int(telegram_id)}")])
@@ -476,11 +574,11 @@ def _kb_client_card(*, client_id: int, page: int, telegram_id: int | None) -> In
             [
                 InlineKeyboardButton(
                     text="➕ Записать клиента",
-                    callback_data=_card_action_cb("book", client_id=client_id, page=page),
+                    callback_data=_card_action_cb("book", client_id=client_id, page=page, chunk=chunk),
                 ),
                 InlineKeyboardButton(
                     text="📅 История записей",
-                    callback_data=_card_action_cb("history", client_id=client_id, page=page),
+                    callback_data=_card_action_cb("history", client_id=client_id, page=page, chunk=chunk),
                 ),
             ],
             [
@@ -492,7 +590,7 @@ def _kb_client_card(*, client_id: int, page: int, telegram_id: int | None) -> In
             [
                 InlineKeyboardButton(
                     text=txt.btn_back_to_choose(),
-                    callback_data=f"{CLIENTS_CB_PREFIX}s:p:{int(page)}",
+                    callback_data=f"{CLIENTS_CB_PREFIX}s:p:{int(page)}:c:{int(chunk)}",
                 ),
             ],
         ],
@@ -500,7 +598,7 @@ def _kb_client_card(*, client_id: int, page: int, telegram_id: int | None) -> In
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _edit_client_card(message, *, master: MasterWithClients, client_id: int, page: int) -> bool:
+async def _edit_client_card(message, *, master: MasterWithClients, client_id: int, page: int, chunk: int) -> bool:
     client = next((c for c in master.clients if int(c.id) == int(client_id)), None)
     if client is None:
         return False
@@ -527,7 +625,12 @@ async def _edit_client_card(message, *, master: MasterWithClients, client_id: in
     await safe_edit_text(
         message,
         text=text,
-        reply_markup=_kb_client_card(client_id=int(client_id), page=int(page), telegram_id=client.telegram_id),
+        reply_markup=_kb_client_card(
+            client_id=int(client_id),
+            page=int(page),
+            chunk=int(chunk),
+            telegram_id=client.telegram_id,
+        ),
         ev=ev,
         event="master_list_clients.card_edit_failed",
     )
@@ -574,7 +677,7 @@ async def master_clients_list_page(callback: CallbackQuery) -> None:
         )
         return
 
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
     await _edit_list_page(callback.message, all_clients=all_clients, page=max(1, min(page, total_pages)))
 
 
@@ -610,11 +713,12 @@ async def master_clients_select_mode(callback: CallbackQuery) -> None:
         )
         return
 
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
     await _edit_select_page(
         callback.message,
         all_clients=all_clients,
         page=max(1, min(page, total_pages)),
+        chunk=1,
         total_pages=total_pages,
     )
 
@@ -625,9 +729,10 @@ async def master_clients_select_page(callback: CallbackQuery) -> None:
     await callback.answer()
     if callback.message is None:
         return
-    page = _parse_int_suffix(f"{CLIENTS_CB_PREFIX}s:p:", callback.data)
-    if page is None:
+    parsed = _parse_select_page(callback.data)
+    if parsed is None:
         return
+    page, chunk = parsed
 
     telegram_id = callback.from_user.id
     master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
@@ -651,11 +756,12 @@ async def master_clients_select_page(callback: CallbackQuery) -> None:
         )
         return
 
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
     await _edit_select_page(
         callback.message,
         all_clients=all_clients,
         page=max(1, min(page, total_pages)),
+        chunk=int(chunk),
         total_pages=total_pages,
     )
 
@@ -692,7 +798,7 @@ async def master_clients_select_back(callback: CallbackQuery) -> None:
         )
         return
 
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
     await _edit_list_page(callback.message, all_clients=all_clients, page=max(1, min(page, total_pages)))
 
 
@@ -705,7 +811,7 @@ async def master_clients_open_card(callback: CallbackQuery) -> None:
     parsed = _parse_open_action(callback.data)
     if parsed is None:
         return
-    client_id, page = parsed
+    client_id, page, chunk = parsed
 
     telegram_id = callback.from_user.id
     master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
@@ -729,13 +835,14 @@ async def master_clients_open_card(callback: CallbackQuery) -> None:
         )
         return
 
-    total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(all_clients) / TEXT_LIST_PAGE_SIZE))
     current_page = max(1, min(page, total_pages))
     ok = await _edit_client_card(
         callback.message,
         master=master,
         client_id=client_id,
         page=current_page,
+        chunk=int(chunk),
     )
     if not ok:
         await callback.answer(common_txt.generic_error(), show_alert=True)
@@ -750,16 +857,22 @@ async def master_clients_card_show(callback: CallbackQuery) -> None:
     parsed = _parse_card_action("card", callback.data)
     if parsed is None:
         return
-    client_id, page = parsed
+    client_id, page, chunk = parsed
 
     telegram_id = callback.from_user.id
     master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
     if master is None or not master.clients:
         return
 
-    total_pages = max(1, ceil(len(master.clients) / PAGE_SIZE))
+    total_pages = max(1, ceil(len(master.clients) / TEXT_LIST_PAGE_SIZE))
     current_page = max(1, min(page, total_pages))
-    ok = await _edit_client_card(callback.message, master=master, client_id=client_id, page=current_page)
+    ok = await _edit_client_card(
+        callback.message,
+        master=master,
+        client_id=client_id,
+        page=current_page,
+        chunk=int(chunk),
+    )
     if not ok:
         await callback.answer(common_txt.generic_error(), show_alert=True)
 
@@ -781,7 +894,7 @@ async def master_clients_card_history(callback: CallbackQuery) -> None:
     parsed = _parse_card_action("history", callback.data)
     if parsed is None:
         return
-    client_id, page = parsed
+    client_id, page, chunk = parsed
 
     telegram_id = callback.from_user.id
     master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
@@ -819,7 +932,12 @@ async def master_clients_card_history(callback: CallbackQuery) -> None:
                 [
                     InlineKeyboardButton(
                         text="◀️ Назад",
-                        callback_data=_card_action_cb("card", client_id=int(client_id), page=int(page)),
+                        callback_data=_card_action_cb(
+                            "card",
+                            client_id=int(client_id),
+                            page=int(page),
+                            chunk=int(chunk),
+                        ),
                     ),
                 ],
             ],
@@ -838,7 +956,7 @@ async def master_clients_card_book(callback: CallbackQuery, state: FSMContext) -
     parsed = _parse_card_action("book", callback.data)
     if parsed is None:
         return
-    client_id, page = parsed
+    client_id, _page, _chunk = parsed
 
     telegram_id = callback.from_user.id
     master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
