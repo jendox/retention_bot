@@ -88,7 +88,7 @@ def _build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(text=master.name, callback_data=f"book:master:{master.id}"),
-            ]
+            ],
         )
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -102,7 +102,7 @@ def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
         rows.append(
             [
                 InlineKeyboardButton(text=label, callback_data=f"book:slot:{index}"),
-            ]
+            ],
         )
 
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])

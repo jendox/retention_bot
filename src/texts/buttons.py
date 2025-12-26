@@ -28,4 +28,8 @@ def btn_cancel_booking(*, t: Translator = _noop_t) -> str:
 
 
 def btn_go_pro(*, t: Translator = _noop_t) -> str:
-    return t("✅ Перейти на Pro")
+    return t("🔓 Подключить Pro")
+
+
+def btn_close(*, t: Translator = _noop_t) -> str:
+    return t("✖️ Закрыть")

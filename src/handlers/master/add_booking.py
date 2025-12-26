@@ -29,7 +29,7 @@ from src.schemas import MasterWithClients
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import common as common_txt, master_add_booking as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_confirm, btn_go_pro
+from src.texts.buttons import btn_cancel, btn_cancel_booking, btn_close, btn_confirm, btn_go_pro
 from src.use_cases.create_master_booking import (
     CreateMasterBooking,
     CreateMasterBookingError,
@@ -290,7 +290,7 @@ async def _handle_quota_exceeded(
         reply_markup=build_paywall_keyboard(
             contact=contact,
             upgrade_text=btn_go_pro(),
-            back_text=btn_back(),
+            back_text=btn_close(),
             back_callback_data="paywall:close",
         ),
         parse_mode="HTML",

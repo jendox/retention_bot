@@ -33,7 +33,7 @@ def no_show_value(*, t: Translator = _noop_t) -> str:
 
 def contact_message(*, contact: str, t: Translator = _noop_t) -> str:
     return t(
-        "✅ Подключить Pro\n\n"
+        "🔓 Подключить Pro\n\n"
         "Напиши сюда — поможем подключить подписку:\n"
         f"{contact}",
     )
