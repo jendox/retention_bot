@@ -27,13 +27,13 @@ def reschedule_pro_only(*, t: Translator = _noop_t) -> str:
 def no_show_value(*, t: Translator = _noop_t) -> str:
     return t(
         "Похоже, клиент не пришёл 😕\n"
-        "Pro включает напоминания (за 24ч и за 2ч), которые помогают снижать no-show.",
+        "Pro помогает снижать no-show: напоминания клиенту за 24ч и за 2ч.",
     )
 
 
 def contact_message(*, contact: str, t: Translator = _noop_t) -> str:
     return t(
-        "✅ Перейти на Pro\n\n"
-        "Напиши сюда — поможем подключить Pro:\n"
+        "✅ Подключить Pro\n\n"
+        "Напиши сюда — поможем подключить подписку:\n"
         f"{contact}",
     )
