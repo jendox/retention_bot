@@ -147,16 +147,17 @@ def _nav_button(*, direction: str, mode: str, page: int, total_pages: int) -> In
 
 
 def _build_list_menu_keyboard(*, page: int, total_pages: int) -> InlineKeyboardMarkup:
-    row = [
-        _nav_button(direction="prev", mode="l", page=page, total_pages=total_pages),
-        InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search"),
-        InlineKeyboardButton(text=txt.btn_select(), callback_data=f"{CLIENTS_CB_PREFIX}l:select:{page}"),
-        InlineKeyboardButton(text=txt.btn_add(), callback_data="m:clients:add"),
-        _nav_button(direction="next", mode="l", page=page, total_pages=total_pages),
-    ]
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            row,
+            [
+                _nav_button(direction="prev", mode="l", page=page, total_pages=total_pages),
+                _nav_button(direction="next", mode="l", page=page, total_pages=total_pages),
+            ],
+            [
+                InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search"),
+                InlineKeyboardButton(text=txt.btn_select(), callback_data=f"{CLIENTS_CB_PREFIX}l:select:{page}"),
+                InlineKeyboardButton(text=txt.btn_add(), callback_data="m:clients:add"),
+            ],
             [InlineKeyboardButton(text=btn_back(), callback_data=f"{CLIENTS_CB_PREFIX}l:menu")],
         ],
     )
