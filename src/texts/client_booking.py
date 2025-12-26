@@ -7,8 +7,7 @@ from src.texts.base import Translator, noop_t as _noop_t
 
 def no_masters(*, t: Translator = _noop_t) -> str:
     return t(
-        "У тебя пока нет подключенных мастеров 👀\n"
-        "Попроси мастера прислать ссылку для записи в BeautyDesk.",
+        "У тебя пока нет подключенных мастеров 👀\nПопроси мастера прислать ссылку для записи в BeautyDesk.",
     )
 
 
@@ -21,19 +20,24 @@ def choose_date(*, t: Translator = _noop_t) -> str:
 
 
 def choose_time(*, client_day: date, t: Translator = _noop_t) -> str:
-    return t(f"Свободные слоты на {client_day.strftime('%d.%m.%Y')} ⏰\n"
-             "Выбери удобное время:")
+    return t(f"Свободные слоты на {client_day.strftime('%d.%m.%Y')} ⏰\nВыбери удобное время:")
 
 
 def state_broken_alert(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Что-то пошло не так, попробуй ещё раз.")
 
 
-def available_dates(*, min_date: date, max_date: date, t: Translator = _noop_t) -> str:
-    return t(
-        f"Можно выбрать дату с {min_date.strftime('%d.%m.%Y')} "
-        f"по {max_date.strftime('%d.%m.%Y')}",
-    )
+def available_dates(
+    *,
+    min_date: date,
+    max_date: date,
+    pro_max_date: date | None = None,
+    t: Translator = _noop_t,
+) -> str:
+    base = f"Можно выбрать дату с {min_date.strftime('%d.%m.%Y')} по {max_date.strftime('%d.%m.%Y')}"
+    if pro_max_date is not None and pro_max_date > max_date:
+        base += f"\n\nВ Pro горизонт записи — до {pro_max_date.strftime('%d.%m.%Y')}."
+    return t(base)
 
 
 def no_available_slots(*, t: Translator = _noop_t) -> str:
@@ -69,8 +73,7 @@ def booking_limit_reached(*, t: Translator = _noop_t) -> str:
 
 def slot_not_available(*, t: Translator = _noop_t) -> str:
     return t(
-        "⚠️ Упс — этот слот только что заняли 😕\n"
-        "Пожалуйста, выбери другое время.",
+        "⚠️ Упс — этот слот только что заняли 😕\nПожалуйста, выбери другое время.",
     )
 
 

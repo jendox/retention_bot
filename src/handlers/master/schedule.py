@@ -99,36 +99,44 @@ def cb_action(action: str, booking_id: int, scope: Scope, page: int) -> str:
 
 # ---------- keyboards ----------
 
+
 def _build_period_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=txt.btn_today(), callback_data=SCHEDULE_CB[str(Scope.TODAY.value)],
+                    text=txt.btn_today(),
+                    callback_data=SCHEDULE_CB[str(Scope.TODAY.value)],
                 ),
                 InlineKeyboardButton(
-                    text=txt.btn_tomorrow(), callback_data=SCHEDULE_CB[str(Scope.TOMORROW.value)],
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=txt.btn_week(), callback_data=SCHEDULE_CB[str(Scope.WEEK.value)],
-                ),
-                InlineKeyboardButton(
-                    text=txt.btn_month(), callback_data=SCHEDULE_CB[str(Scope.MONTH.value)],
+                    text=txt.btn_tomorrow(),
+                    callback_data=SCHEDULE_CB[str(Scope.TOMORROW.value)],
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text=txt.btn_yesterday(), callback_data=SCHEDULE_CB[str(Scope.YESTERDAY.value)],
+                    text=txt.btn_week(),
+                    callback_data=SCHEDULE_CB[str(Scope.WEEK.value)],
                 ),
                 InlineKeyboardButton(
-                    text=txt.btn_history_week(), callback_data=SCHEDULE_CB[str(Scope.HISTORY_WEEK.value)],
+                    text=txt.btn_month(),
+                    callback_data=SCHEDULE_CB[str(Scope.MONTH.value)],
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text=btn_back(), callback_data=SCHEDULE_CB["back_menu"],
+                    text=txt.btn_yesterday(),
+                    callback_data=SCHEDULE_CB[str(Scope.YESTERDAY.value)],
+                ),
+                InlineKeyboardButton(
+                    text=txt.btn_history_week(),
+                    callback_data=SCHEDULE_CB[str(Scope.HISTORY_WEEK.value)],
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=btn_back(),
+                    callback_data=SCHEDULE_CB["back_menu"],
                 ),
             ],
         ],
@@ -201,7 +209,7 @@ def _build_booking_card_keyboard(
         inline_keyboard.append(
             [build_upgrade_button(contact=get_settings().billing.contact, text=btn_go_pro())],
         )
-    if meta.status in BookingStatus.active():
+    if meta.show_manage_actions:
         actions: list[InlineKeyboardButton] = [
             InlineKeyboardButton(
                 text=btn_cancel_booking(),
@@ -258,6 +266,7 @@ def _build_cancel_confirm_keyboard(*, booking_id: int, scope: Scope, page: int) 
 
 # ---------- helpers ----------
 
+
 async def _fetch_master(telegram_id: int):
     async with session_local() as session:
         repo = MasterRepository(session)
@@ -283,7 +292,9 @@ def _compute_range(master_tz: ZoneInfo, scope: Scope) -> tuple[datetime, datetim
     if scope == Scope.TODAY:
         start_local = now_local
         end_local = datetime.combine(
-            now_local.date() + timedelta(days=1), time(0, 0), tzinfo=master_tz,
+            now_local.date() + timedelta(days=1),
+            time(0, 0),
+            tzinfo=master_tz,
         )
         cutoff_local: datetime | None = now_local
         return start_local, end_local, cutoff_local
@@ -313,7 +324,9 @@ def _compute_range(master_tz: ZoneInfo, scope: Scope) -> tuple[datetime, datetim
     if scope == Scope.WEEK:
         start_local = now_local
         end_local = datetime.combine(
-            now_local.date() + timedelta(days=8), time(0, 0), tzinfo=master_tz,
+            now_local.date() + timedelta(days=8),
+            time(0, 0),
+            tzinfo=master_tz,
         )
         cutoff_local = now_local
         return start_local, end_local, cutoff_local
@@ -340,6 +353,7 @@ class _BookingCardKeyboardMeta:
     show_attendance_actions: bool
     plan_is_pro: bool
     show_no_show_paywall: bool
+    show_manage_actions: bool
 
 
 @dataclass(frozen=True)
@@ -458,6 +472,7 @@ async def _maybe_notify_client_cancelled(
 
 # ---------- rendering ----------
 
+
 async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1) -> None:
     bind_log_context(flow="master_schedule", step="send_schedule")
     try:
@@ -495,9 +510,7 @@ async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1
         return
 
     if cutoff_local:
-        bookings = [
-            booking for booking in bookings if booking.start_at.astimezone(master_tz) >= cutoff_local
-        ]
+        bookings = [booking for booking in bookings if booking.start_at.astimezone(master_tz) >= cutoff_local]
 
     title = TITLE_MAP.get(scope, txt.title_default())
 
@@ -545,6 +558,11 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
     if show_no_show_paywall:
         text = f"{text}\n\n{paywall_txt.no_show_value()}"
 
+    show_manage_actions = (
+        scope not in Scope.history()
+        and booking.status in BookingStatus.active()
+        and booking.start_at.astimezone(UTC) > datetime.now(UTC)
+    )
     await _send_or_edit(
         callback,
         text=text,
@@ -558,6 +576,7 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
                 show_attendance_actions=render.show_attendance_actions,
                 plan_is_pro=bool(plan.is_pro),
                 show_no_show_paywall=bool(show_no_show_paywall),
+                show_manage_actions=bool(show_manage_actions),
             ),
         ),
     )
@@ -728,7 +747,7 @@ async def _handle_action_attendance(
     from src.use_cases.mark_booking_attendance import MarkBookingAttendance, MarkBookingAttendanceRequest
 
     try:
-        async with session_local() as session:
+        async with active_session() as session:
             use_case = MarkBookingAttendance(session)
             result = await use_case.execute(
                 MarkBookingAttendanceRequest(
@@ -765,6 +784,7 @@ async def _handle_action_attendance(
 
 # ---------- entrypoint ----------
 
+
 async def master_schedule(message: Message) -> None:
     bind_log_context(flow="master_schedule", step="start")
     await message.answer(
@@ -774,6 +794,7 @@ async def master_schedule(message: Message) -> None:
 
 
 # ---------- callbacks ----------
+
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == "m:noop")
 async def noop(callback: CallbackQuery) -> None:

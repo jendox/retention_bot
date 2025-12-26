@@ -23,6 +23,7 @@ from src.notifications.policy import NotificationFacts
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.paywall import build_upgrade_only_keyboard
+from src.plans import PRO_BOOKING_HORIZON_DAYS
 from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import Master
@@ -84,9 +85,11 @@ def _coerce_timezone(value: object) -> Timezone | None:
 def _build_masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for master in masters:
-        rows.append([
-            InlineKeyboardButton(text=master.name, callback_data=f"book:master:{master.id}"),
-        ])
+        rows.append(
+            [
+                InlineKeyboardButton(text=master.name, callback_data=f"book:master:{master.id}"),
+            ]
+        )
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -96,9 +99,11 @@ def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
 
     for index, slot_dt in enumerate(slots):
         label = slot_dt.strftime("%H:%M")
-        rows.append([
-            InlineKeyboardButton(text=label, callback_data=f"book:slot:{index}"),
-        ])
+        rows.append(
+            [
+                InlineKeyboardButton(text=label, callback_data=f"book:slot:{index}"),
+            ]
+        )
 
     rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -239,13 +244,14 @@ async def _validate_booking_day(
     master_id: int,
     client_day: date,
     client_tz_info,
-) -> tuple[bool, date, date]:
+) -> tuple[bool, date, date, date]:
     today_client = datetime.now(tz=client_tz_info).date()
     min_date = today_client + timedelta(days=1)
     entitlements = EntitlementsService(session)
     horizon_days = await entitlements.max_booking_horizon_days(master_id=master_id)
     max_date = today_client + timedelta(days=horizon_days)
-    return (min_date <= client_day <= max_date), min_date, max_date
+    pro_max_date = today_client + timedelta(days=PRO_BOOKING_HORIZON_DAYS)
+    return (min_date <= client_day <= max_date), min_date, max_date, pro_max_date
 
 
 async def _get_free_slots(session, *, master_id: int, client_day: date, client_tz: Timezone):
@@ -284,7 +290,7 @@ async def process_booking_calendar(
     client_day = _get_client_day(picked_date, client_tz_info=client_tz_info)
 
     async with session_local() as session:
-        allowed, min_date, max_date = await _validate_booking_day(
+        allowed, min_date, max_date, pro_max_date = await _validate_booking_day(
             session,
             master_id=master_id,
             client_day=client_day,
@@ -292,7 +298,7 @@ async def process_booking_calendar(
         )
         if not allowed:
             await callback.answer(
-                text=available_dates(min_date=min_date, max_date=max_date),
+                text=available_dates(min_date=min_date, max_date=max_date, pro_max_date=pro_max_date),
                 show_alert=True,
             )
             return

@@ -2,7 +2,7 @@ from calendar import monthrange
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, overload
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import selectinload
 
 from src.models import Booking as BookingEntity
@@ -45,8 +45,7 @@ class BookingRepository(BaseRepository):
         end_at_utc: datetime,
         statuses: set[BookingStatus] | None = None,
         load_clients: Literal[True],
-    ) -> list[BookingForReview]:
-        ...
+    ) -> list[BookingForReview]: ...
 
     @overload
     async def get_for_master_in_range(
@@ -57,8 +56,7 @@ class BookingRepository(BaseRepository):
         end_at_utc: datetime,
         statuses: set[BookingStatus] | None = None,
         load_clients: Literal[False] = False,
-    ) -> list[Booking]:
-        ...
+    ) -> list[Booking]: ...
 
     async def get_for_master_in_range(
         self,
@@ -168,11 +166,7 @@ class BookingRepository(BaseRepository):
         return BookingForReview.model_validate(entity)
 
     async def set_status(self, booking_id: int, status: BookingStatus) -> bool:
-        stmt = (
-            update(BookingEntity)
-            .where(BookingEntity.id == booking_id)
-            .values(status=status)
-        )
+        stmt = update(BookingEntity).where(BookingEntity.id == booking_id).values(status=status)
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
 
@@ -225,7 +219,7 @@ class BookingRepository(BaseRepository):
         - Only after the session end time.
         - Outcome can be set only once (UNKNOWN -> outcome).
         """
-        end_at_expr = BookingEntity.start_at + func.make_interval(mins=BookingEntity.duration_min)
+        end_at_expr = BookingEntity.start_at + (BookingEntity.duration_min * text("INTERVAL '1 minute'"))
         stmt = (
             update(BookingEntity)
             .where(
@@ -309,10 +303,14 @@ class BookingRepository(BaseRepository):
         start_at_utc: datetime,
         end_at_utc: datetime,
     ) -> int:
-        stmt = select(func.count()).select_from(BookingEntity).where(
-            BookingEntity.master_id == master_id,
-            BookingEntity.created_at >= start_at_utc,
-            BookingEntity.created_at < end_at_utc,
+        stmt = (
+            select(func.count())
+            .select_from(BookingEntity)
+            .where(
+                BookingEntity.master_id == master_id,
+                BookingEntity.created_at >= start_at_utc,
+                BookingEntity.created_at < end_at_utc,
+            )
         )
         count = await self._session.scalar(stmt)
         return int(count or 0)

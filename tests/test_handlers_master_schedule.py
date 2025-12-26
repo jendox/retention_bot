@@ -14,6 +14,11 @@ async def _fake_session_local():
     yield object()
 
 
+@asynccontextmanager
+async def _fake_active_session(*args, **kwargs):
+    yield object()
+
+
 class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
     def test_button_text_escapes_client_name(self) -> None:
         from src.handlers.master import schedule as h
@@ -127,7 +132,7 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
                 return SimpleNamespace(ok=True, error=None)
 
         with (
-            patch.object(h, "session_local", _fake_session_local),
+            patch.object(h, "active_session", _fake_active_session),
             patch.object(h, "_send_booking_card", AsyncMock()) as send_card,
             patch("src.use_cases.mark_booking_attendance.MarkBookingAttendance", _FakeUseCase),
         ):
