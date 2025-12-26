@@ -22,13 +22,13 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
-            data=f"{h.CLIENTS_PAGE_PREFIX}2",
+            data=f"{h.CLIENTS_CB_PREFIX}l:p:2",
             answer=AsyncMock(),
             message=SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock(), edit_reply_markup=AsyncMock()),
         )
 
         with patch.object(h, "_fetch_master_clients", AsyncMock(return_value=clients)):
-            await h.master_clients_pagination(callback)
+            await h.master_clients_list_page(callback)
 
         callback.message.edit_text.assert_awaited()
         sent_text = callback.message.edit_text.await_args.kwargs["text"]
