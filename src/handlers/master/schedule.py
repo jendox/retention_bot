@@ -27,7 +27,7 @@ from src.repositories.booking import BookingRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, AttendanceOutcome, BookingStatus, status_badge
 from src.settings import get_settings
 from src.texts import master_schedule as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel_booking, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel_booking, btn_confirm, btn_decline, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 
@@ -215,6 +215,19 @@ def _build_booking_card_keyboard(
         inline_keyboard.append(
             [build_upgrade_button(contact=get_settings().billing.contact, text=btn_go_pro())],
         )
+    if meta.show_review_actions:
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=btn_confirm(),
+                    callback_data=f"m:booking:{int(booking_id)}:confirm",
+                ),
+                InlineKeyboardButton(
+                    text=btn_decline(),
+                    callback_data=f"m:booking:{int(booking_id)}:decline",
+                ),
+            ],
+        )
     if meta.show_manage_actions:
         actions: list[InlineKeyboardButton] = [
             InlineKeyboardButton(
@@ -360,6 +373,7 @@ class _BookingCardKeyboardMeta:
     plan_is_pro: bool
     show_no_show_paywall: bool
     show_manage_actions: bool
+    show_review_actions: bool
 
 
 @dataclass(frozen=True)
@@ -566,7 +580,12 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
 
     show_manage_actions = (
         scope not in Scope.history()
-        and booking.status in BookingStatus.active()
+        and booking.status == BookingStatus.CONFIRMED
+        and booking.start_at.astimezone(UTC) > datetime.now(UTC)
+    )
+    show_review_actions = (
+        scope not in Scope.history()
+        and booking.status == BookingStatus.PENDING
         and booking.start_at.astimezone(UTC) > datetime.now(UTC)
     )
     await _send_or_edit(
@@ -583,6 +602,7 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
                 plan_is_pro=bool(plan.is_pro),
                 show_no_show_paywall=bool(show_no_show_paywall),
                 show_manage_actions=bool(show_manage_actions),
+                show_review_actions=bool(show_review_actions),
             ),
         ),
     )

@@ -18,6 +18,10 @@ def title_page(*, page: int, total_pages: int, t: Translator = _noop_t) -> str:
     return t(f"Твои активные записи 🗓 (страница {page}/{total_pages})")
 
 
+def choose_title(*, page: int, total_pages: int, t: Translator = _noop_t) -> str:
+    return t(f"Выбери запись (страница {page}/{total_pages}):")
+
+
 def details_title(*, t: Translator = _noop_t) -> str:
     return t("Детали записи 🗓")
 
@@ -36,6 +40,26 @@ def btn_next(*, t: Translator = _noop_t) -> str:
 
 def btn_close(*, t: Translator = _noop_t) -> str:
     return t("✖️ Закрыть")
+
+
+def btn_select_mode(*, t: Translator = _noop_t) -> str:
+    return t("📌 Выбрать")
+
+
+def btn_back_to_list(*, t: Translator = _noop_t) -> str:
+    return t("◀️ Назад к списку")
+
+
+def btn_more(*, t: Translator = _noop_t) -> str:
+    return t("Показать ещё")
+
+
+def btn_less(*, t: Translator = _noop_t) -> str:
+    return t("Скрыть")
+
+
+def btn_write_master(*, t: Translator = _noop_t) -> str:
+    return t("💬 Написать мастеру")
 
 
 def invalid_command(*, t: Translator = _noop_t) -> str:

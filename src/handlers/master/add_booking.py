@@ -361,7 +361,7 @@ async def _handle_success(
                     [
                         InlineKeyboardButton(
                             text=btn_cancel_booking(),
-                            callback_data=f"c:booking:{booking.id}:cancel",
+                            callback_data=f"c:bookings:cancel_ntf:{booking.id}",
                         ),
                     ],
                 ],

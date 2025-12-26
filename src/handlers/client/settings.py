@@ -18,7 +18,7 @@ from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import Timezone
 from src.texts import client_settings as txt, common as common_txt
-from src.texts.buttons import btn_back
+from src.texts.buttons import btn_back, btn_close
 from src.user_context import ActiveRole
 from src.utils import cleanup_messages, format_phone_display, track_message, validate_phone
 
@@ -41,7 +41,7 @@ def _kb_settings(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
             [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}edit_phone")],
             [InlineKeyboardButton(text=notify_text, callback_data=f"{SETTINGS_CB_PREFIX}toggle_notify")],
-            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
+            [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
 

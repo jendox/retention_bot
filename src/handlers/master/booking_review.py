@@ -32,7 +32,7 @@ ev = EventLogger(__name__)
 def _build_client_cancel_keyboard(booking_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:booking:{booking_id}:cancel")],
+            [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:bookings:cancel_ntf:{booking_id}")],
         ],
     )
 
