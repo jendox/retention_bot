@@ -70,7 +70,7 @@ def build_master_clients_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=txt.CLIENTS_BTN_ADD, callback_data=CLIENTS_MENU_CB["add"]),
             ],
             [
-                InlineKeyboardButton(text=txt.CLIENTS_BTN_SEARCH_EDIT, callback_data=CLIENTS_MENU_CB["search"]),
+                InlineKeyboardButton(text=txt.CLIENTS_BTN_SEARCH, callback_data=CLIENTS_MENU_CB["search"]),
                 InlineKeyboardButton(text=txt.CLIENTS_BTN_INVITE, callback_data=CLIENTS_MENU_CB["invite"]),
             ],
             [

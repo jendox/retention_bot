@@ -209,6 +209,20 @@ def validate_phone(value: str, region: str = "BY") -> str | None:
         return None
 
 
+def format_phone_display(value: str, region: str = "BY") -> str:
+    """
+    Convert an E.164 phone (or a parseable raw string) to a human-readable form.
+    Falls back to the input on parse/format errors.
+    """
+    try:
+        number = phonenumbers.parse(value, region)
+        if not phonenumbers.is_valid_number(number):
+            return value
+        return phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+    except (NumberParseException, ValueError):
+        return value
+
+
 def styled_text(text: str, color: str = None, bold: bool = False, italic: bool = False) -> str:
     """Форматирование текста с разными стилями"""
     styles = []

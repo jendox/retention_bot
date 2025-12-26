@@ -1,17 +1,27 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from html import escape as html_escape
 from math import ceil
 
 from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from sqlalchemy import func, select
 
-from src.core.sa import active_session
+from src.core.sa import active_session, session_local
+from src.datetime_utils import to_zone
 from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup, safe_edit_text
+from src.models import Booking as BookingEntity
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.repositories import MasterNotFound, MasterRepository
+from src.schemas import MasterWithClients
+from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, master_list_clients as txt
 from src.texts.buttons import btn_back
+from src.texts.master_client_card import ClientHints, ClientSummary, card as render_client_card
+from src.utils import format_phone_display
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
@@ -20,6 +30,7 @@ PAGE_SIZE = 10
 CLIENTS_PAGE_PREFIX = "master_clients_page:"
 
 CLIENTS_CB_PREFIX = "m:cl:"
+CLIENTS_CARD_PREFIX = f"{CLIENTS_CB_PREFIX}c:"
 
 
 def _parse_clients_page(callback_data: str | None) -> int | str | None:
@@ -65,15 +76,40 @@ def _parse_open_action(data: str | None) -> tuple[int, int] | None:
     return client_id, page
 
 
-async def _fetch_master_clients(telegram_id: int) -> Sequence:
+def _parse_card_action(action: str, data: str | None) -> tuple[int, int] | None:
+    parts = (data or "").split(":")
+    # m:cl:c:<action>:<client_id>:p:<page>
+    if len(parts) != 7:  # noqa: PLR2004
+        return None
+    if parts[:3] != ["m", "cl", "c"] or parts[3] != action or parts[5] != "p":  # noqa: PLR2004
+        return None
+    try:
+        client_id = int(parts[4])
+        page = int(parts[6])
+    except ValueError:
+        return None
+    return client_id, page
+
+
+@dataclass(frozen=True)
+class ClientStats:
+    last_visit_at_utc: datetime | None
+    visits_count: int
+    no_show_count: int
+
+
+async def _fetch_master_with_clients(telegram_id: int) -> MasterWithClients:
     async with active_session(begin=False) as session:
-        repo = MasterRepository(session)
-        try:
-            master = await repo.get_with_clients_by_telegram_id(telegram_id)
-        except MasterNotFound:
-            ev.warning("master_list_clients.master_not_found", telegram_id=telegram_id)
-            return []
-        return master.clients
+        return await MasterRepository(session).get_with_clients_by_telegram_id(telegram_id)
+
+
+async def _fetch_master_clients(telegram_id: int) -> Sequence:
+    try:
+        master = await _fetch_master_with_clients(telegram_id)
+    except MasterNotFound:
+        ev.warning("master_list_clients.master_not_found", telegram_id=telegram_id)
+        return []
+    return master.clients
 
 
 def _render_client_line(client, *, index: int) -> str:
@@ -197,9 +233,12 @@ async def _close_clients_list(message) -> None:
         )
 
 
-async def _fetch_clients_or_alert(callback: CallbackQuery, *, telegram_id: int) -> Sequence | None:
+async def _fetch_master_or_alert(callback: CallbackQuery, *, telegram_id: int) -> MasterWithClients | None:
     try:
-        return await _fetch_master_clients(telegram_id)
+        return await _fetch_master_with_clients(telegram_id)
+    except MasterNotFound:
+        await callback.answer(common_txt.generic_error(), show_alert=True)
+        return None
     except Exception as exc:
         await ev.aexception(
             "master_list_clients.fetch_failed",
@@ -285,15 +324,20 @@ def _build_empty_clients_keyboard() -> InlineKeyboardMarkup:
 async def start_clients_entry(callback: CallbackQuery) -> None:
     bind_log_context(flow="master_list_clients", step="start")
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
-    if all_clients is None:
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
         return
 
+    all_clients = master.clients
     if not all_clients:
-        await callback.message.answer(
-            text=txt.empty_long(),
-            reply_markup=_build_empty_clients_keyboard(),
-        )
+        if callback.message is not None:
+            await safe_edit_text(
+                callback.message,
+                text=txt.empty_long(),
+                reply_markup=_build_empty_clients_keyboard(),
+                ev=ev,
+                event="master_list_clients.edit_empty_failed",
+            )
         return
 
     page = 1
@@ -305,8 +349,17 @@ async def start_clients_entry(callback: CallbackQuery) -> None:
 
     text = _build_clients_page_text(clients_page, page, total_pages, start_index=start)
     keyboard = _build_list_menu_keyboard(page=page, total_pages=total_pages)
-
-    await callback.message.answer(text=text, reply_markup=keyboard)
+    if callback.message is not None:
+        ok = await safe_edit_text(
+            callback.message,
+            text=text,
+            reply_markup=keyboard,
+            ev=ev,
+            event="master_list_clients.edit_failed",
+        )
+        if ok:
+            return
+    await callback.bot.send_message(chat_id=callback.from_user.id, text=text, reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith(CLIENTS_PAGE_PREFIX))
@@ -325,10 +378,11 @@ async def master_clients_pagination(callback: CallbackQuery) -> None:
     page = int(action)
 
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
-    if all_clients is None:
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
         return
 
+    all_clients = master.clients
     if not all_clients:
         await safe_edit_text(
             callback.message,
@@ -389,30 +443,90 @@ async def _edit_select_page(message, *, all_clients: Sequence, page: int, total_
     )
 
 
-async def _edit_client_card(message, *, all_clients: Sequence, client_id: int, page: int) -> bool:
-    client = next((c for c in all_clients if int(c.id) == int(client_id)), None)
+async def _fetch_client_stats(*, master_id: int, client_id: int) -> ClientStats:
+    async with session_local() as session:
+        stmt = select(
+            func.max(BookingEntity.start_at).filter(BookingEntity.attendance_outcome == AttendanceOutcome.ATTENDED),
+            func.count().filter(BookingEntity.attendance_outcome == AttendanceOutcome.ATTENDED),
+            func.count().filter(BookingEntity.attendance_outcome == AttendanceOutcome.NO_SHOW),
+        ).where(
+            BookingEntity.master_id == master_id,
+            BookingEntity.client_id == client_id,
+        )
+        row = (await session.execute(stmt)).one()
+        last_visit_at, visits_count, no_show_count = row
+        return ClientStats(
+            last_visit_at_utc=last_visit_at,
+            visits_count=int(visits_count or 0),
+            no_show_count=int(no_show_count or 0),
+        )
+
+
+def _card_action_cb(action: str, *, client_id: int, page: int) -> str:
+    return f"{CLIENTS_CARD_PREFIX}{action}:{int(client_id)}:p:{int(page)}"
+
+
+def _kb_client_card(*, client_id: int, page: int, telegram_id: int | None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if telegram_id is not None:
+        rows.append([InlineKeyboardButton(text="💬 Написать в Telegram", url=f"tg://user?id={int(telegram_id)}")])
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="➕ Записать клиента",
+                    callback_data=_card_action_cb("book", client_id=client_id, page=page),
+                ),
+                InlineKeyboardButton(
+                    text="📅 История записей",
+                    callback_data=_card_action_cb("history", client_id=client_id, page=page),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✏️ Редактировать клиента",
+                    callback_data=f"m:edit_client:open:{int(client_id)}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=txt.btn_back_to_choose(),
+                    callback_data=f"{CLIENTS_CB_PREFIX}s:p:{int(page)}",
+                ),
+            ],
+        ],
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _edit_client_card(message, *, master: MasterWithClients, client_id: int, page: int) -> bool:
+    client = next((c for c in master.clients if int(c.id) == int(client_id)), None)
     if client is None:
         return False
 
-    from src.texts import edit_client as edit_client_txt
+    stats = await _fetch_client_stats(master_id=int(master.id), client_id=int(client_id))
+    last_visit_day = stats.last_visit_at_utc.date() if stats.last_visit_at_utc is not None else None
+
+    is_offline = client.telegram_id is None
+    phone_display = format_phone_display(str(client.phone)) if getattr(client, "phone", None) else None
+    name_safe = html_escape(str(getattr(client, "name", None) or common_txt.label_default_client()))
+
+    text = render_client_card(
+        name=name_safe,
+        is_offline=bool(is_offline),
+        phone=phone_display,
+        summary=ClientSummary(
+            last_visit_day=last_visit_day,
+            total_visits=int(stats.visits_count),
+            no_show=int(stats.no_show_count),
+        ),
+        hints=ClientHints(show_offline_hint=True, show_noshow_hint=True),
+    )
 
     await safe_edit_text(
         message,
-        text=edit_client_txt.client_card(
-            name=getattr(client, "name", None),
-            phone=getattr(client, "phone", None),
-            is_offline=getattr(client, "telegram_id", None) is None,
-        ),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(
-                        text=txt.btn_back_to_choose(),
-                        callback_data=f"{CLIENTS_CB_PREFIX}s:p:{page}",
-                    ),
-                ],
-            ],
-        ),
+        text=text,
+        reply_markup=_kb_client_card(client_id=int(client_id), page=int(page), telegram_id=client.telegram_id),
         ev=ev,
         event="master_list_clients.card_edit_failed",
     )
@@ -438,7 +552,17 @@ async def master_clients_list_page(callback: CallbackQuery) -> None:
         return
 
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        await safe_edit_text(
+            callback.message,
+            text=txt.no_clients_now(),
+            reply_markup=_build_empty_clients_keyboard(),
+            ev=ev,
+            event="master_list_clients.edit_failed",
+        )
+        return
+    all_clients = master.clients
     if not all_clients:
         await safe_edit_text(
             callback.message,
@@ -464,7 +588,17 @@ async def master_clients_select_mode(callback: CallbackQuery) -> None:
         return
 
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        await safe_edit_text(
+            callback.message,
+            text=txt.no_clients_now(),
+            reply_markup=_build_empty_clients_keyboard(),
+            ev=ev,
+            event="master_list_clients.edit_failed",
+        )
+        return
+    all_clients = master.clients
     if not all_clients:
         await safe_edit_text(
             callback.message,
@@ -495,7 +629,17 @@ async def master_clients_select_page(callback: CallbackQuery) -> None:
         return
 
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        await safe_edit_text(
+            callback.message,
+            text=txt.no_clients_now(),
+            reply_markup=_build_empty_clients_keyboard(),
+            ev=ev,
+            event="master_list_clients.edit_failed",
+        )
+        return
+    all_clients = master.clients
     if not all_clients:
         await safe_edit_text(
             callback.message,
@@ -526,7 +670,17 @@ async def master_clients_select_back(callback: CallbackQuery) -> None:
         return
 
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        await safe_edit_text(
+            callback.message,
+            text=txt.no_clients_now(),
+            reply_markup=_build_empty_clients_keyboard(),
+            ev=ev,
+            event="master_list_clients.edit_failed",
+        )
+        return
+    all_clients = master.clients
     if not all_clients:
         await safe_edit_text(
             callback.message,
@@ -553,7 +707,17 @@ async def master_clients_open_card(callback: CallbackQuery) -> None:
     client_id, page = parsed
 
     telegram_id = callback.from_user.id
-    all_clients = await _fetch_clients_or_alert(callback, telegram_id=telegram_id)
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        await safe_edit_text(
+            callback.message,
+            text=txt.no_clients_now(),
+            reply_markup=_build_empty_clients_keyboard(),
+            ev=ev,
+            event="master_list_clients.edit_failed",
+        )
+        return
+    all_clients = master.clients
     if not all_clients:
         await safe_edit_text(
             callback.message,
@@ -566,6 +730,146 @@ async def master_clients_open_card(callback: CallbackQuery) -> None:
 
     total_pages = max(1, ceil(len(all_clients) / PAGE_SIZE))
     current_page = max(1, min(page, total_pages))
-    ok = await _edit_client_card(callback.message, all_clients=all_clients, client_id=client_id, page=current_page)
+    ok = await _edit_client_card(
+        callback.message,
+        master=master,
+        client_id=client_id,
+        page=current_page,
+    )
     if not ok:
         await callback.answer(common_txt.generic_error(), show_alert=True)
+
+
+@router.callback_query(F.data.startswith(f"{CLIENTS_CARD_PREFIX}card:"))
+async def master_clients_card_show(callback: CallbackQuery) -> None:
+    bind_log_context(flow="master_list_clients", step="card")
+    await callback.answer()
+    if callback.message is None:
+        return
+    parsed = _parse_card_action("card", callback.data)
+    if parsed is None:
+        return
+    client_id, page = parsed
+
+    telegram_id = callback.from_user.id
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None or not master.clients:
+        return
+
+    total_pages = max(1, ceil(len(master.clients) / PAGE_SIZE))
+    current_page = max(1, min(page, total_pages))
+    ok = await _edit_client_card(callback.message, master=master, client_id=client_id, page=current_page)
+    if not ok:
+        await callback.answer(common_txt.generic_error(), show_alert=True)
+
+
+def _attendance_badge(outcome: AttendanceOutcome) -> str:
+    if outcome == AttendanceOutcome.ATTENDED:
+        return "✅"
+    if outcome == AttendanceOutcome.NO_SHOW:
+        return "❌"
+    return ""
+
+
+@router.callback_query(F.data.startswith(f"{CLIENTS_CARD_PREFIX}history:"))
+async def master_clients_card_history(callback: CallbackQuery) -> None:
+    bind_log_context(flow="master_list_clients", step="history")
+    await callback.answer()
+    if callback.message is None:
+        return
+    parsed = _parse_card_action("history", callback.data)
+    if parsed is None:
+        return
+    client_id, page = parsed
+
+    telegram_id = callback.from_user.id
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        return
+
+    async with session_local() as session:
+        stmt = (
+            select(BookingEntity)
+            .where(
+                BookingEntity.master_id == int(master.id),
+                BookingEntity.client_id == int(client_id),
+            )
+            .order_by(BookingEntity.start_at.desc())
+            .limit(10)
+        )
+        bookings = list((await session.execute(stmt)).scalars().all())
+
+    lines: list[str] = ["📅 История записей", ""]
+    if not bookings:
+        lines.append("Пока нет записей.")
+    else:
+        for booking in bookings:
+            slot = to_zone(booking.start_at, master.timezone)
+            lines.append(
+                f"• {slot:%d.%m.%Y %H:%M} {status_badge(booking.status)}"
+                f" {_attendance_badge(booking.attendance_outcome)}".rstrip(),
+            )
+
+    await safe_edit_text(
+        callback.message,
+        text="\n".join(lines).strip(),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="◀️ Назад",
+                        callback_data=_card_action_cb("card", client_id=int(client_id), page=int(page)),
+                    ),
+                ],
+            ],
+        ),
+        ev=ev,
+        event="master_list_clients.history_edit_failed",
+    )
+
+
+@router.callback_query(F.data.startswith(f"{CLIENTS_CARD_PREFIX}book:"))
+async def master_clients_card_book(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_list_clients", step="book")
+    await callback.answer()
+    if callback.message is None:
+        return
+    parsed = _parse_card_action("book", callback.data)
+    if parsed is None:
+        return
+    client_id, page = parsed
+
+    telegram_id = callback.from_user.id
+    master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
+    if master is None:
+        return
+
+    client = next((c for c in master.clients if int(c.id) == int(client_id)), None)
+    if client is None:
+        await callback.answer(common_txt.generic_error(), show_alert=True)
+        return
+
+    from aiogram_calendar import SimpleCalendar
+
+    from src.handlers.master.add_booking import AddBookingStates
+    from src.texts import master_add_booking as add_booking_txt
+
+    await state.clear()
+    await state.update_data(
+        master_id=int(master.id),
+        master_slot_size=int(master.slot_size_min),
+        master_timezone=str(master.timezone.value),
+        master_day=None,
+        client=client.to_state_dict(),
+        confirm_in_progress=False,
+    )
+
+    reply_markup = await SimpleCalendar().start_calendar()
+    await safe_edit_text(
+        callback.message,
+        text=add_booking_txt.choose_date(),
+        reply_markup=reply_markup,
+        ev=ev,
+        event="master_list_clients.book_edit_failed",
+    )
+    await state.set_state(AddBookingStates.selecting_date)

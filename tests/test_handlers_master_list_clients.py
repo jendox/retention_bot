@@ -19,6 +19,7 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
         from src.handlers.master import list_clients as h
 
         clients = [SimpleNamespace(name=f"C{i}", phone=None, telegram_id=1) for i in range(1, 16)]
+        master = SimpleNamespace(id=1, clients=clients)
 
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
@@ -27,7 +28,7 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock(), edit_reply_markup=AsyncMock()),
         )
 
-        with patch.object(h, "_fetch_master_clients", AsyncMock(return_value=clients)):
+        with patch.object(h, "_fetch_master_with_clients", AsyncMock(return_value=master)):
             await h.master_clients_list_page(callback)
 
         callback.message.edit_text.assert_awaited()

@@ -264,6 +264,55 @@ async def back(
     await state.set_state(EditClientStates.query)
 
 
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:edit_client:open:"))
+async def open_client_direct(
+    callback: CallbackQuery,
+    state: FSMContext,
+    rate_limiter: RateLimiter | None = None,
+) -> None:
+    bind_log_context(flow="master_edit_client", step="open_direct")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_edit_client:open_direct", ttl_sec=1):
+        return
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    raw_id = (callback.data or "").removeprefix("m:edit_client:open:")
+    try:
+        client_id = int(raw_id)
+    except ValueError:
+        await callback.answer(txt.invalid_client(), show_alert=True)
+        return
+
+    await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_BUCKET)
+    await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_CARD_BUCKET)
+    await state.clear()
+
+    telegram_id = callback.from_user.id
+    async with session_local() as session:
+        master_repo = MasterRepository(session)
+        try:
+            master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
+        except MasterNotFound:
+            await callback.answer(txt.master_profile_not_found(), show_alert=True)
+            return
+
+    selected = next((c.to_state_dict() for c in master.clients if int(c.id) == client_id), None)
+    if selected is None:
+        await callback.answer(txt.invalid_client(), show_alert=True)
+        return
+
+    await state.update_data(edit_client_results=[selected], edit_client_selected=selected)
+    await safe_edit_text(
+        callback.message,
+        text=_render_client_card(selected),
+        reply_markup=_kb_actions(),
+        parse_mode="HTML",
+        event="edit_client.open_direct_failed",
+    )
+    await state.set_state(EditClientStates.action)
+
+
 @router.callback_query(
     UserRole(ActiveRole.MASTER),
     StateFilter(EditClientStates.choosing),
