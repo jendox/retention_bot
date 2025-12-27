@@ -1,6 +1,13 @@
 from .booking import Booking, BookingCreate, BookingForReview, BookingUpdate
 from .invite import Invite
 from .override import WorkdayOverride, WorkdayOverrideCreate, WorkdayOverrideUpdate
+from .payment_invoice import (
+    PaymentInvoice,
+    PaymentInvoiceCreate,
+    PaymentInvoiceStatus,
+    PaymentInvoiceUpdate,
+    PaymentProvider,
+)
 from .subscription import Subscription
 from .users import (
     Client,

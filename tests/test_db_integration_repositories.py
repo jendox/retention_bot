@@ -14,10 +14,12 @@ from src.repositories import (
     ClientRepository,
     InviteRepository,
     MasterRepository,
+    PaymentInvoiceRepository,
     WorkdayOverrideRepository,
 )
-from src.schemas import BookingCreate, ClientCreate, Invite, MasterCreate, WorkdayOverrideCreate
+from src.schemas import BookingCreate, ClientCreate, Invite, MasterCreate, PaymentInvoiceCreate, WorkdayOverrideCreate
 from src.schemas.enums import BookingStatus, InviteType, Timezone
+from src.schemas.payment_invoice import PaymentInvoiceStatus, PaymentProvider
 
 
 def _env(name: str) -> str | None:
@@ -53,7 +55,8 @@ class RepositoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
             await session.execute(
                 text(
                     "TRUNCATE "
-                    "bookings, invites, master_clients, workday_overrides, subscriptions, clients, masters "
+                    "payment_invoices, bookings, invites, master_clients, workday_overrides, "
+                    "subscriptions, clients, masters "
                     "RESTART IDENTITY CASCADE;",
                 ),
             )
@@ -208,5 +211,36 @@ class RepositoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         date=datetime.now(UTC).date(),
                         start_time=time(11, 0),
                         end_time=time(17, 0),
+                    ),
+                )
+
+    async def test_payment_invoice_unique_by_invoice_no(self) -> None:
+        master_id, _client_id = await self._create_master_and_client()
+        async with active_session() as session:
+            repo = PaymentInvoiceRepository(session)
+            await repo.create(
+                PaymentInvoiceCreate(
+                    master_id=master_id,
+                    provider=PaymentProvider.EXPRESSPAY,
+                    invoice_no=123,
+                    invoice_url=None,
+                    amount=10.0,
+                    currency=933,
+                    status=PaymentInvoiceStatus.WAITING,
+                ),
+            )
+
+        with self.assertRaises(IntegrityError):
+            async with active_session() as session:
+                repo = PaymentInvoiceRepository(session)
+                await repo.create(
+                    PaymentInvoiceCreate(
+                        master_id=master_id,
+                        provider=PaymentProvider.EXPRESSPAY,
+                        invoice_no=123,
+                        invoice_url=None,
+                        amount=10.0,
+                        currency=933,
+                        status=PaymentInvoiceStatus.WAITING,
                     ),
                 )
