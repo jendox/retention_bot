@@ -181,7 +181,7 @@ class AppSettings(BaseSettings):
     admin: AdminSettings = Field(default_factory=AdminSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
-    express_pay: ExpressPaySettings = Field(default=ExpressPaySettings)
+    express_pay: ExpressPaySettings | None = None
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     model_config = SettingsConfigDict(
@@ -205,7 +205,7 @@ class AppSettings(BaseSettings):
         for nested models, which would crash during parsing.
         """
 
-        top_level = {"telegram", "database", "admin", "billing", "security", "observability"}
+        top_level = {"telegram", "database", "admin", "billing", "security", "express_pay", "observability"}
 
         def filtered_dotenv():
             env_vars = getattr(dotenv_settings, "env_vars", None)
@@ -223,7 +223,7 @@ class AppSettings(BaseSettings):
         # pydantic-settings treats top-level nested models as "complex" values and will attempt to JSON-decode
         # env vars like OBSERVABILITY/SECURITY/TELEGRAM if they are present. An empty value would crash JSON
         # decoding, so we proactively ignore empty top-level blobs.
-        for key in ("TELEGRAM", "DATABASE", "ADMIN", "BILLING", "SECURITY", "OBSERVABILITY"):
+        for key in ("TELEGRAM", "DATABASE", "ADMIN", "BILLING", "SECURITY", "EXPRESS_PAY", "OBSERVABILITY"):
             if key in os.environ and not os.environ[key].strip():
                 os.environ.pop(key, None)
         file_values = _read_env_file(env_file)

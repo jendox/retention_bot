@@ -29,7 +29,7 @@ class NotificationService:
         *,
         chat_id: int | None,
         message: RenderedMessage,
-        event: str,
+        notification_event: str,
         recipient: str,
     ) -> None:
         if chat_id is None:
@@ -44,14 +44,14 @@ class NotificationService:
             )
             ev.info(
                 "notifications.send_success",
-                event=event,
+                notification_event=notification_event,
                 recipient=recipient,
                 chat_id_hash=_hash_chat_id(int(chat_id)),
             )
         except TelegramAPIError as exc:
             ev.warning(
                 "notifications.send_failed",
-                event=event,
+                notification_event=notification_event,
                 recipient=recipient,
                 chat_id_hash=_hash_chat_id(int(chat_id)),
                 error_type=type(exc).__name__,
@@ -78,6 +78,6 @@ class NotificationService:
         await self._send_message(
             chat_id=chat_id,
             message=message,
-            event=str(event.value),
+            notification_event=str(event.value),
             recipient=str(recipient.value),
         )

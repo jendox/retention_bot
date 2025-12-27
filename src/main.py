@@ -102,16 +102,24 @@ async def main():
                 throttle_sec=60 * 60,
                 extra={"invite_only": False},
             )
-        async with (
-            Database.lifespan(url=postgres_url),
-            ExpressPayClient(settings.express_pay) as express_pay_client,
-        ):
-            await dp.start_polling(
-                bot,
-                notifier=notifier,
-                admin_alerter=admin_alerter,
-                express_pay_client=express_pay_client,
-            )
+        if settings.express_pay is None:
+            async with Database.lifespan(url=postgres_url):
+                await dp.start_polling(
+                    bot,
+                    notifier=notifier,
+                    admin_alerter=admin_alerter,
+                )
+        else:
+            async with (
+                Database.lifespan(url=postgres_url),
+                ExpressPayClient(settings.express_pay) as express_pay_client,
+            ):
+                await dp.start_polling(
+                    bot,
+                    notifier=notifier,
+                    admin_alerter=admin_alerter,
+                    express_pay_client=express_pay_client,
+                )
 
     except Exception as exc:
         await ev.aexception(
