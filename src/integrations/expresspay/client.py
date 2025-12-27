@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Self
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from .exceptions import (
     ExpressPayApiError,
@@ -52,7 +52,7 @@ class ExpressPayClient:
         """
         Выход: (invoice_no, invoice_url).
         """
-        account_no = default_epos_account_no(data.telegram_id, base_account_number=self._settings.account_number)
+        account_no = default_epos_account_no(data.master_id, base_account_number=self._settings.account_number)
 
         params: dict[str, str] = {
             "Token": self._settings.token,
@@ -80,7 +80,15 @@ class ExpressPayClient:
             data=params,
         )
 
-        response = TypeAdapter(CreateInvoiceResponse).validate_python(payload)
+        try:
+            response = TypeAdapter(CreateInvoiceResponse).validate_python(payload)
+        except ValidationError as exc:
+            if isinstance(payload, dict) and isinstance(payload.get("Message"), str):
+                raise ExpressPayApiError(
+                    ExpressPayErrorPayload(code=401, msg=str(payload["Message"]), msg_code=0),
+                    raw=payload,
+                ) from exc
+            raise ExpressPayTransportError("Unexpected ExpressPay response schema for create_invoice") from exc
         return response.InvoiceNo, response.InvoiceUrl
 
     async def update_invoice(self, invoice_no: int, patch: UpdateInvoicePatch) -> bool:

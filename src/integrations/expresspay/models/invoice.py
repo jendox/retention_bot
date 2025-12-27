@@ -7,7 +7,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-TelegramId = Annotated[int, Field(ge=1)]
+AccountSeed = Annotated[int, Field(ge=1)]
 
 
 class CurrencyCode(IntEnum):
@@ -28,7 +28,7 @@ class InvoiceStatus(IntEnum):
 
 
 class CreateInvoiceInput(BaseModel):
-    telegram_id: TelegramId
+    master_id: AccountSeed
     amount: Decimal = Field(gt=0)
     currency: CurrencyCode
     description: Annotated[str, StringConstraints(min_length=1, max_length=1024)]

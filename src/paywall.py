@@ -32,14 +32,22 @@ def _upgrade_url_from_contact(contact: str) -> str | None:
 
 
 def build_upgrade_button(*, contact: str, text: str) -> InlineKeyboardButton:
+    return build_upgrade_button_with_fallback(contact=contact, text=text)
+
+
+def build_upgrade_button_with_fallback(
+    *,
+    contact: str,
+    text: str,
+    callback_data: str = "paywall:contact",
+    force_callback: bool = False,
+) -> InlineKeyboardButton:
+    if force_callback:
+        return InlineKeyboardButton(text=text, callback_data=callback_data)
     upgrade_url = upgrade_url_from_contact(contact)
-    return (
-        InlineKeyboardButton(text=text, url=upgrade_url)
-        if upgrade_url
-        else InlineKeyboardButton(
-            text=text,
-            callback_data="paywall:contact",
-        )
+    return InlineKeyboardButton(text=text, url=upgrade_url) if upgrade_url else InlineKeyboardButton(
+        text=text,
+        callback_data=callback_data,
     )
 
 
@@ -49,12 +57,14 @@ def build_paywall_keyboard(
     upgrade_text: str,
     back_text: str,
     back_callback_data: str | None,
+    upgrade_callback_data: str = "paywall:contact",
+    force_upgrade_callback: bool = False,
 ) -> InlineKeyboardMarkup:
-    upgrade_url = upgrade_url_from_contact(contact)
-    upgrade_btn = (
-        InlineKeyboardButton(text=upgrade_text, url=upgrade_url)
-        if upgrade_url
-        else InlineKeyboardButton(text=upgrade_text, callback_data="paywall:contact")
+    upgrade_btn = build_upgrade_button_with_fallback(
+        contact=contact,
+        text=upgrade_text,
+        callback_data=upgrade_callback_data,
+        force_callback=force_upgrade_callback,
     )
 
     rows: list[list[InlineKeyboardButton]] = [[upgrade_btn]]
@@ -63,11 +73,17 @@ def build_paywall_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_upgrade_only_keyboard(*, contact: str, upgrade_text: str) -> InlineKeyboardMarkup:
-    upgrade_url = upgrade_url_from_contact(contact)
-    upgrade_btn = (
-        InlineKeyboardButton(text=upgrade_text, url=upgrade_url)
-        if upgrade_url
-        else InlineKeyboardButton(text=upgrade_text, callback_data="paywall:contact")
+def build_upgrade_only_keyboard(
+    *,
+    contact: str,
+    upgrade_text: str,
+    upgrade_callback_data: str = "paywall:contact",
+    force_upgrade_callback: bool = False,
+) -> InlineKeyboardMarkup:
+    upgrade_btn = build_upgrade_button_with_fallback(
+        contact=contact,
+        text=upgrade_text,
+        callback_data=upgrade_callback_data,
+        force_callback=force_upgrade_callback,
     )
     return InlineKeyboardMarkup(inline_keyboard=[[upgrade_btn]])

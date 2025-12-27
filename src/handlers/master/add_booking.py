@@ -295,6 +295,8 @@ async def _handle_quota_exceeded(
             upgrade_text=btn_go_pro(),
             back_text=btn_close(),
             back_callback_data="paywall:close",
+            upgrade_callback_data="billing:pro:start",
+            force_upgrade_callback=True,
         ),
         parse_mode="HTML",
         ev=ev,

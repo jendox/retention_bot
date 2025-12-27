@@ -10,12 +10,14 @@ from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_upgrade_button_with_fallback
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterNotFound, MasterRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
-from src.texts import common as common_txt, master_settings as txt
-from src.texts.buttons import btn_back, btn_cancel, btn_close
+from src.settings import get_settings
+from src.texts import billing as billing_txt, common as common_txt, master_settings as txt
+from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
@@ -45,6 +47,7 @@ def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMa
             [InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days")],
             [InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time")],
             [InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size")],
+            [InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs")],
             [
                 InlineKeyboardButton(
                     text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
@@ -54,6 +57,24 @@ def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMa
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
+
+
+def _kb_tariffs(*, contact: str, show_upgrade: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if show_upgrade:
+        rows.append(
+            [
+                build_upgrade_button_with_fallback(
+                    contact=contact,
+                    text=btn_go_pro(),
+                    callback_data="billing:pro:start",
+                    force_callback=True,
+                ),
+            ],
+        )
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _kb_timezones() -> InlineKeyboardMarkup:
@@ -195,7 +216,7 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith(SETTINGS_CB_PREFIX))
-async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
+async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
     callback: CallbackQuery,
     state: FSMContext,
     rate_limiter: RateLimiter | None = None,
@@ -234,6 +255,37 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
     if data == f"{SETTINGS_CB_PREFIX}back_menu":
         await callback.answer()
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}tariffs":
+        await callback.answer()
+        settings = get_settings()
+        contact = settings.billing.contact
+        price = settings.billing.pro_price_byn
+        days = settings.billing.pro_days
+
+        plan_label = "Pro" if plan.is_pro else "Free"
+        if plan.source == "trial":
+            plan_label = "Pro (trial)"
+        elif plan.source == "paid":
+            plan_label = "Pro (paid)"
+
+        msg = billing_txt.tariffs_message(
+            plan_label=plan_label,
+            source=str(plan.source),
+            active_until=plan.active_until,
+            pro_days=int(days) if days is not None else None,
+            pro_price_byn=float(price) if price is not None else None,
+        )
+        if callback.message is not None:
+            await safe_edit_text(
+                callback.message,
+                text=msg,
+                reply_markup=_kb_tariffs(contact=contact, show_upgrade=not plan.is_pro),
+                parse_mode="HTML",
+                ev=ev,
+                event="master.settings.tariffs_edit_failed",
+            )
         return
 
     if data == f"{SETTINGS_CB_PREFIX}tz":

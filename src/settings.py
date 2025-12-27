@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from contextvars import ContextVar
+from decimal import Decimal
 from functools import lru_cache
 from typing import Self
 
@@ -46,6 +47,10 @@ class AdminSettings(BaseModel):
 
 class BillingSettings(BaseModel):
     contact: str = "@admin"
+    pro_price_byn: Decimal | None = None
+    pro_days: int | None = None
+    pro_invoice_lifetime_sec: int = 60 * 30  # 30 min
+    pro_description: str = "BeautyDesk Pro"
 
 
 class SecuritySettings(BaseModel):

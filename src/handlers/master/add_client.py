@@ -124,7 +124,7 @@ async def _send_warning_message(
     return await notifier.maybe_send(request)
 
 
-async def _handle_confirm_result(
+async def _handle_confirm_result(  # noqa: C901
     *,
     callback: CallbackQuery,
     state: FSMContext,
@@ -191,7 +191,7 @@ async def _handle_confirm_result(
                 ev=ev,
                 event="master_add_client.disable_failed",
             )
-            await safe_edit_text(
+            edited = await safe_edit_text(
                 callback.message,
                 text=paywall_txt.clients_limit_reached(limit=int(result.clients_limit)),
                 reply_markup=build_paywall_keyboard(
@@ -199,11 +199,27 @@ async def _handle_confirm_result(
                     upgrade_text=btn_go_pro(),
                     back_text=btn_back(),
                     back_callback_data="paywall:back:clients_menu",
+                    upgrade_callback_data="billing:pro:start",
+                    force_upgrade_callback=True,
                 ),
                 parse_mode="HTML",
                 ev=ev,
                 event="master_add_client.paywall_edit_failed",
             )
+            if not edited:
+                await callback.bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=paywall_txt.clients_limit_reached(limit=int(result.clients_limit)),
+                    reply_markup=build_paywall_keyboard(
+                        contact=contact,
+                        upgrade_text=btn_go_pro(),
+                        back_text=btn_back(),
+                        back_callback_data="paywall:back:clients_menu",
+                        upgrade_callback_data="billing:pro:start",
+                        force_upgrade_callback=True,
+                    ),
+                    parse_mode="HTML",
+                )
         else:
             await callback.answer(txt.quota_reached(), show_alert=True)
         await state.clear()
@@ -218,7 +234,7 @@ async def _handle_confirm_result(
     await _reset_add_client(state, callback.bot)
 
 
-async def start_add_client(
+async def start_add_client(  # noqa: C901
     callback: CallbackQuery,
     state: FSMContext,
     notifier: Notifier,
@@ -272,7 +288,7 @@ async def start_add_client(
         await cleanup_messages(state, callback.bot, bucket=ADD_CLIENT_BUCKET)
         if callback.message is not None and result.clients_limit is not None:
             await callback.answer()
-            await safe_edit_text(
+            edited = await safe_edit_text(
                 callback.message,
                 text=paywall_txt.clients_limit_reached(limit=int(result.clients_limit)),
                 reply_markup=build_paywall_keyboard(
@@ -280,11 +296,27 @@ async def start_add_client(
                     upgrade_text=btn_go_pro(),
                     back_text=btn_back(),
                     back_callback_data="paywall:back:clients_menu",
+                    upgrade_callback_data="billing:pro:start",
+                    force_upgrade_callback=True,
                 ),
                 parse_mode="HTML",
                 ev=ev,
                 event="master_add_client.paywall_edit_failed",
             )
+            if not edited:
+                await callback.bot.send_message(
+                    chat_id=callback.from_user.id,
+                    text=paywall_txt.clients_limit_reached(limit=int(result.clients_limit)),
+                    reply_markup=build_paywall_keyboard(
+                        contact=contact,
+                        upgrade_text=btn_go_pro(),
+                        back_text=btn_back(),
+                        back_callback_data="paywall:back:clients_menu",
+                        upgrade_callback_data="billing:pro:start",
+                        force_upgrade_callback=True,
+                    ),
+                    parse_mode="HTML",
+                )
         else:
             await callback.answer(txt.quota_reached(), show_alert=True)
         await state.clear()

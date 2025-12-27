@@ -20,7 +20,7 @@ from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
-from src.paywall import build_upgrade_button
+from src.paywall import build_upgrade_button_with_fallback
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
@@ -214,7 +214,14 @@ def _build_booking_card_keyboard(
     inline_keyboard: list[list[InlineKeyboardButton]] = []
     if meta.show_no_show_paywall and not meta.plan_is_pro:
         inline_keyboard.append(
-            [build_upgrade_button(contact=get_settings().billing.contact, text=btn_go_pro())],
+            [
+                build_upgrade_button_with_fallback(
+                    contact=get_settings().billing.contact,
+                    text=btn_go_pro(),
+                    callback_data="billing:pro:start",
+                    force_callback=True,
+                ),
+            ],
         )
     if meta.show_review_actions:
         inline_keyboard.append(
@@ -755,16 +762,23 @@ async def _handle_action_reschedule(
             await safe_edit_text(
                 callback.message,
                 text=paywall_txt.reschedule_pro_only(),
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [build_upgrade_button(contact=get_settings().billing.contact, text=btn_go_pro())],
-                        [InlineKeyboardButton(text=btn_back(), callback_data=back_to_card)],
-                    ],
-                ),
-                parse_mode="HTML",
-                ev=ev,
-                event="master_schedule.paywall_reschedule_edit_failed",
-            )
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                build_upgrade_button_with_fallback(
+                                    contact=get_settings().billing.contact,
+                                    text=btn_go_pro(),
+                                    callback_data="billing:pro:start",
+                                    force_callback=True,
+                                ),
+                            ],
+                            [InlineKeyboardButton(text=btn_back(), callback_data=back_to_card)],
+                        ],
+                    ),
+                    parse_mode="HTML",
+                    ev=ev,
+                    event="master_schedule.paywall_reschedule_edit_failed",
+                )
         return
 
     await start_reschedule(callback, state, rate_limiter, booking_id=booking_id, scope=scope, page=page)

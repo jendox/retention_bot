@@ -629,6 +629,8 @@ async def _maybe_notify_master_bookings_limit_paywall(
             reply_markup=build_upgrade_only_keyboard(
                 contact=get_settings().billing.contact,
                 upgrade_text=btn_go_pro(),
+                upgrade_callback_data="billing:pro:start",
+                force_upgrade_callback=True,
             ),
         ),
     )

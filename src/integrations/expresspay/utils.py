@@ -41,7 +41,7 @@ def format_expiration(dt: datetime | date) -> str:
 
 
 def default_epos_account_no(
-    order_id: int,
+    master_id: int,
     *,
     base_account_number: str = "29239-0-",
     formed_at: datetime | None = None,
@@ -52,28 +52,28 @@ def default_epos_account_no(
         "1" +
         дата формирования инвойса ("%d%m%y") +
         нули до нужной длины +
-        order_id (в конце)
+        master_id (в конце)
 
-    Пример (order_id=123):
+    Пример (master_id=123):
         29239-0-1 271225 0000 123
         (пробелы только для примера; в реальности без пробелов)
     """
-    if order_id <= 0:
-        raise ValueError("order_id must be positive")
+    if master_id <= 0:
+        raise ValueError("master_id must be positive")
 
     if len(base_account_number) != 8:  # noqa: PLR2004
         raise ValueError("base_account_number must be exactly 8 characters")
 
     dt = formed_at or datetime.now(UTC)
     date_part = dt.strftime("%d%m%y")  # 6 символов
-    order_part = str(order_id)
+    order_part = str(master_id)
 
     # 22 = 8 (base) + 1 ("1") + 6 (date) + pad + len(order_part)
     fixed_len = len(base_account_number) + 1 + len(date_part)  # 8 + 1 + 6 = 15
-    remaining = 22 - fixed_len  # 7 символов под pad+order_id
+    remaining = 22 - fixed_len  # 7 символов под pad+master_id
 
     if len(order_part) > remaining:
-        raise ValueError(f"order_id is too long to fit: max {remaining} digits, got {len(order_part)}")
+        raise ValueError(f"master_id is too long to fit: max {remaining} digits, got {len(order_part)}")
 
     pad = "0" * (remaining - len(order_part))
 
