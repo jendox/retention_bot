@@ -5,11 +5,15 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
+from src.notifications import NotificationEvent, RecipientKind
+from src.notifications.context import BookingContext, ReminderContext
+from src.notifications.renderer import render
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.paywall import build_upgrade_button_with_fallback
@@ -31,6 +35,10 @@ ev = EventLogger(__name__)
 
 SETTINGS_CB_PREFIX = "m:settings:"
 _BILLING_CHECK_PREFIX = "billing:pro:check:"
+_GUIDE_PAGE_PREFIX = f"{SETTINGS_CB_PREFIX}guide:"
+_GUIDE_DEMO_CB = f"{SETTINGS_CB_PREFIX}guide_demo"
+_GUIDE_DEMO_PREFIX = f"{SETTINGS_CB_PREFIX}guide_demo:"
+_GUIDE_NOTIFICATIONS_PAGE = 3
 
 SETTINGS_BUCKET = "master_settings"
 SETTINGS_MAIN_KEY = "master_settings_main"
@@ -44,23 +52,28 @@ class MasterSettingsStates(StatesGroup):
 
 
 def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}phone")],
-            [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
-            [InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days")],
-            [InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time")],
-            [InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size")],
-            [
-                InlineKeyboardButton(
-                    text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
-                    callback_data=f"{SETTINGS_CB_PREFIX}notify",
-                ),
-            ],
-            [InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs")],
-            [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
-        ],
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}phone"),
+        InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz"),
     )
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days"),
+        InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time"),
+    )
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size"),
+        InlineKeyboardButton(
+            text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
+            callback_data=f"{SETTINGS_CB_PREFIX}notify",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs"),
+        InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide"),
+    )
+    builder.row(InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back"))
+    return builder.as_markup()
 
 
 def _kb_tariffs(
@@ -116,6 +129,141 @@ def _kb_tariffs_waiting_invoice(
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
     rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _guide_pages(*, plan_is_pro: bool) -> list[str]:
+    pro_line = "✅ (Pro)" if plan_is_pro else "🔒 (только Pro)"
+    return [
+        (
+            "<b>📘 Краткое руководство</b>\n\n"
+            "<b>1) Клиенты</b>\n"
+            "В BeautyDesk есть два типа клиентов:\n"
+            "• <b>Telegram-клиент</b> — клиент пишет боту и может получать уведомления о записи.\n"
+            "• <b>Офлайн-клиент</b> — клиент без Telegram (имя/телефон). Уведомления ему не отправляются.\n\n"
+            "Совет: офлайн-клиента удобно вести для истории и чтобы быстро создавать записи."
+        ),
+        (
+            "<b>2) Как добавить клиента</b>\n\n"
+            "• Если клиент в Telegram — отправь ему инвайт (ссылку) и он зарегистрируется сам.\n"
+            "• Если клиент без Telegram — добавь офлайн-клиента (имя/телефон) и веди записи по нему.\n"
+            "  Когда клиент появится в Telegram — отправь инвайт: бот привяжет его к карточке по телефону.\n\n"
+            "Важно: автоуведомления доступны только Telegram-клиентам."
+        ),
+        (
+            "<b>3) Как создать запись</b>\n\n"
+            "Открой расписание → выбери день/время → выбери клиента → подтверди.\n\n"
+            "Дальше ты сможешь:\n"
+            "• отменить запись;\n"
+            f"• перенести запись {pro_line};\n"
+            "• посмотреть ближайшие записи и историю."
+        ),
+        (
+            "<b>4) Уведомления клиенту</b>\n\n"
+            f"Автонапоминания клиентам: {pro_line}\n\n"
+            "В Pro бот может:\n"
+            "• отправлять подтверждение/перенос/отмену записи клиенту;\n"
+            "• напоминать о записи за 24 часа и за 2 часа;\n"
+            "• отправить «спасибо за визит» после записи.\n\n"
+            "Нажми «🧪 Демо уведомлений», чтобы увидеть примеры сообщений (они придут тебе в этот чат)."
+        ),
+    ]
+
+
+def _kb_guide(*, page: int, total: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{_GUIDE_PAGE_PREFIX}{page - 1}"))
+    if page < total - 1:
+        nav.append(InlineKeyboardButton(text="➡️ Далее", callback_data=f"{_GUIDE_PAGE_PREFIX}{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton(text="🧪 Демо уведомлений", callback_data=_GUIDE_DEMO_CB)])
+    rows.append([InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _guide_demo_menu_text() -> str:
+    return (
+        "<b>🧪 Демо уведомлений</b>\n\n"
+        "Выбери пример — я отправлю одно демо-сообщение в этот чат.\n"
+        "В демо кнопки не выполняют действий.\n"
+        "Демо-сообщение можно закрыть кнопкой «Закрыть»."
+    )
+
+
+def _kb_guide_demo_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Запись подтверждена",
+                    callback_data=f"{_GUIDE_DEMO_PREFIX}booking_confirmed",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⏰ Напоминание за 24 часа",
+                    callback_data=f"{_GUIDE_DEMO_PREFIX}reminder_24h",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⏳ Напоминание за 2 часа",
+                    callback_data=f"{_GUIDE_DEMO_PREFIX}reminder_2h",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💛 Спасибо за визит",
+                    callback_data=f"{_GUIDE_DEMO_PREFIX}followup_thanks",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=f"{_GUIDE_PAGE_PREFIX}{_GUIDE_NOTIFICATIONS_PAGE}",
+                ),
+            ],
+            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+        ],
+    )
+
+
+def _kb_demo_message() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Закрыть", callback_data="demo:close")],
+        ],
+    )
+
+
+def _kb_demo_booking_created_confirmed(*, master_telegram_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать мастеру",
+                    url=f"tg://user?id={int(master_telegram_id)}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отменить запись",
+                    callback_data="demo:cancel_booking",
+                ),
+            ],
+            [InlineKeyboardButton(text="Закрыть", callback_data="demo:close")],
+        ],
+    )
+
+
+def _guide_text(*, pages: list[str], page: int) -> str:
+    total = len(pages)
+    idx = max(0, min(int(page), total - 1))
+    return f"{pages[idx]}\n\n<i>{idx + 1}/{total}</i>"
 
 
 async def _load_latest_waiting_invoice(*, master_id: int):
@@ -367,6 +515,81 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
                 ev=ev,
                 event="master.settings.tariffs_edit_failed",
             )
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}guide" or data.startswith(_GUIDE_PAGE_PREFIX):
+        await callback.answer()
+        pages = _guide_pages(plan_is_pro=plan.is_pro)
+        page = 0
+        if data.startswith(_GUIDE_PAGE_PREFIX):
+            raw = data.removeprefix(_GUIDE_PAGE_PREFIX)
+            try:
+                page = int(raw)
+            except ValueError:
+                page = 0
+        total = len(pages)
+        await safe_edit_text(
+            callback.message,
+            text=_guide_text(pages=pages, page=page),
+            reply_markup=_kb_guide(page=page, total=total),
+            parse_mode="HTML",
+            ev=ev,
+            event="master.settings.guide_edit_failed",
+        )
+        return
+
+    if data == _GUIDE_DEMO_CB:
+        await callback.answer()
+        await safe_edit_text(
+            callback.message,
+            text=_guide_demo_menu_text(),
+            reply_markup=_kb_guide_demo_menu(),
+            parse_mode="HTML",
+            ev=ev,
+            event="master.settings.guide_demo_edit_failed",
+        )
+        return
+
+    if data.startswith(_GUIDE_DEMO_PREFIX):
+        await callback.answer()
+
+        key = data.removeprefix(_GUIDE_DEMO_PREFIX)
+        booking_ctx = BookingContext(
+            booking_id=0,
+            master_name=str(master.name),
+            client_name="Аня (демо)",
+            slot_str="10.01.2026 14:00",
+            duration_min=60,
+        )
+        reminder_ctx = ReminderContext(
+            master_name=str(master.name),
+            slot_str="10.01.2026 14:00",
+        )
+
+        demo_map: dict[str, tuple[NotificationEvent, RecipientKind, object]] = {
+            "booking_confirmed": (NotificationEvent.BOOKING_CREATED_CONFIRMED, RecipientKind.CLIENT, booking_ctx),
+            "reminder_24h": (NotificationEvent.REMINDER_24H, RecipientKind.CLIENT, reminder_ctx),
+            "reminder_2h": (NotificationEvent.REMINDER_2H, RecipientKind.CLIENT, reminder_ctx),
+            "followup_thanks": (NotificationEvent.FOLLOWUP_THANK_YOU, RecipientKind.CLIENT, reminder_ctx),
+        }
+
+        selected = demo_map.get(key)
+        if selected is None:
+            await callback.answer("Неизвестный демо-тип.", show_alert=True)
+            return
+
+        event, recipient, ctx = selected
+        rendered = render(event=event, recipient=recipient, context=ctx, reply_markup=None)
+        if key == "booking_confirmed":
+            markup = _kb_demo_booking_created_confirmed(master_telegram_id=int(telegram_id))
+        else:
+            markup = _kb_demo_message()
+        await callback.bot.send_message(
+            chat_id=telegram_id,
+            text="<b>🧪 ДЕМО (сообщение клиенту)</b>\n\n" + rendered.text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
         return
 
     if data == f"{SETTINGS_CB_PREFIX}tz":
