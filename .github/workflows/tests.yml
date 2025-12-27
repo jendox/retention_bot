@@ -1,0 +1,59 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Start Postgres + Redis
+        run: docker compose up -d
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            docker exec retention_bot_postgres pg_isready -U retention_bot && exit 0
+            sleep 1
+          done
+          echo "Postgres not ready" >&2
+          exit 1
+
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            docker exec retention_bot_redis redis-cli ping | grep -q PONG && exit 0
+            sleep 1
+          done
+          echo "Redis not ready" >&2
+          exit 1
+
+      - name: Run tests
+        env:
+          INTEGRATION_TESTS: "1"
+          TELEGRAM__BOT_TOKEN: "dummy"
+          TELEGRAM__BOT_USERNAME: "dummy_bot"
+          DATABASE__POSTGRES_URL: "postgresql+asyncpg://retention_bot:retention_bot_dev_password@localhost:5432/retention_bot"
+          DATABASE__REDIS_URL: "redis://localhost:6379/0"
+        run: uv run python -m unittest -v
+

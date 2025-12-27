@@ -1,0 +1,16 @@
+[extend]
+# Keep default ruleset shipped with gitleaks.
+useDefault = true
+
+[allowlist]
+description = "Local/dev artifacts and env files (secrets must live outside git anyway)."
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)\.ruff_cache/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)(__pycache__)/''',
+  '''(^|/)\.env(\..+)?$''',
+  '''(^|/)uv\.lock$''',
+]
+
