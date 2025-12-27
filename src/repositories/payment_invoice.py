@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, select, update
 
 from src.models import PaymentInvoice as PaymentInvoiceEntity
 from src.repositories.base import BaseRepository
@@ -22,6 +22,13 @@ class PaymentInvoiceRepository(BaseRepository):
 
     async def get_by_id(self, invoice_id: int) -> PaymentInvoice:
         stmt = select(PaymentInvoiceEntity).where(PaymentInvoiceEntity.id == int(invoice_id))
+        entity = await self._session.scalar(stmt)
+        if entity is None:
+            raise PaymentInvoiceNotFound("Payment invoice not found.")
+        return PaymentInvoice.from_db_entity(entity)
+
+    async def get_by_id_for_update(self, invoice_id: int) -> PaymentInvoice:
+        stmt = select(PaymentInvoiceEntity).where(PaymentInvoiceEntity.id == int(invoice_id)).with_for_update()
         entity = await self._session.scalar(stmt)
         if entity is None:
             raise PaymentInvoiceNotFound("Payment invoice not found.")
@@ -61,6 +68,20 @@ class PaymentInvoiceRepository(BaseRepository):
             update(PaymentInvoiceEntity)
             .where(PaymentInvoiceEntity.id == int(invoice_id))
             .values(last_checked_at=at)
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
+
+    async def mark_paid_notified(self, invoice_id: int, *, at: datetime) -> bool:
+        stmt = (
+            update(PaymentInvoiceEntity)
+            .where(
+                and_(
+                    PaymentInvoiceEntity.id == int(invoice_id),
+                    PaymentInvoiceEntity.paid_notified_at.is_(None),
+                ),
+            )
+            .values(paid_notified_at=at)
         )
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0

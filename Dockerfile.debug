@@ -1,0 +1,21 @@
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN pip install --no-cache-dir uv && uv sync --frozen --no-dev
+
+# Debug tooling (dev-only image)
+RUN pip install --no-cache-dir debugpy
+
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+COPY src ./src
+COPY alembic.ini ./alembic.ini
+
+CMD ["python", "-m", "src.main"]
+

@@ -17,7 +17,7 @@ from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import billing as billing_txt, common as common_txt, master_settings as txt
-from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel, btn_close
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
@@ -47,33 +47,38 @@ def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMa
             [InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days")],
             [InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time")],
             [InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size")],
-            [InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs")],
             [
                 InlineKeyboardButton(
                     text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
                     callback_data=f"{SETTINGS_CB_PREFIX}notify",
                 ),
             ],
+            [InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
 
 
-def _kb_tariffs(*, contact: str, show_upgrade: bool) -> InlineKeyboardMarkup:
+def _kb_tariffs(
+    *,
+    contact: str,
+    primary_callback_data: str,
+    primary_text: str | None,
+    secondary_text: str,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if show_upgrade:
+    if primary_text:
         rows.append(
             [
                 build_upgrade_button_with_fallback(
                     contact=contact,
-                    text=btn_go_pro(),
-                    callback_data="billing:pro:start",
+                    text=primary_text,
+                    callback_data=primary_callback_data,
                     force_callback=True,
                 ),
             ],
         )
-    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
-    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    rows.append([InlineKeyboardButton(text=secondary_text, callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -264,24 +269,39 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         price = settings.billing.pro_price_byn
         days = settings.billing.pro_days
 
+        source = str(plan.source)
         plan_label = "Pro" if plan.is_pro else "Free"
-        if plan.source == "trial":
+        if source == "trial":
             plan_label = "Pro (trial)"
-        elif plan.source == "paid":
+        elif source == "paid":
             plan_label = "Pro (paid)"
 
         msg = billing_txt.tariffs_message(
             plan_label=plan_label,
-            source=str(plan.source),
+            source=source,
             active_until=plan.active_until,
             pro_days=int(days) if days is not None else None,
             pro_price_byn=float(price) if price is not None else None,
         )
         if callback.message is not None:
+            primary_text: str | None = None
+            secondary_text = billing_txt.tariffs_secondary_button(source=source)
+            primary_cb = "billing:pro:start" if source == "free" else "billing:pro:renew"
+            if price is not None and days is not None:
+                primary_text = billing_txt.tariffs_primary_button(
+                    source=source,
+                    pro_days=int(days),
+                    pro_price_byn=float(price),
+                )
             await safe_edit_text(
                 callback.message,
                 text=msg,
-                reply_markup=_kb_tariffs(contact=contact, show_upgrade=not plan.is_pro),
+                reply_markup=_kb_tariffs(
+                    contact=contact,
+                    primary_callback_data=primary_cb,
+                    primary_text=primary_text,
+                    secondary_text=secondary_text,
+                ),
                 parse_mode="HTML",
                 ev=ev,
                 event="master.settings.tariffs_edit_failed",

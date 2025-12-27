@@ -302,7 +302,7 @@ pip-selfcheck.json
 # End of https://www.toptal.com/developers/gitignore/api/pycharm,python,venv
 
 Makefile
-.env.local
+.env*
 project_tree.txt
 docker-compose.yml
 /docs/LLM_PROJECT_CONTEXT_PROMPT.txt

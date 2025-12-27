@@ -78,9 +78,19 @@ class CheckProPayment:
         provider_status: InvoiceStatus,
         now_utc: datetime,
         request: CheckProPaymentRequest,
+        subscription,
     ) -> tuple[PaymentInvoiceUpdate, bool, datetime | None]:
         if provider_status in {InvoiceStatus.PAID, InvoiceStatus.PAID_BY_CARD}:
-            paid_until = now_utc + timedelta(days=int(request.pro_days))
+            base_until = now_utc
+            if subscription is not None:
+                paid_until_current = getattr(subscription, "paid_until", None)
+                trial_until_current = getattr(subscription, "trial_until", None)
+                if paid_until_current is not None and paid_until_current > base_until:
+                    base_until = paid_until_current
+                if trial_until_current is not None and trial_until_current > base_until:
+                    base_until = trial_until_current
+
+            paid_until = base_until + timedelta(days=int(request.pro_days))
             await self._subs.grant_pro(master_id, paid_until=paid_until)
             return (
                 PaymentInvoiceUpdate(
@@ -124,7 +134,7 @@ class CheckProPayment:
             None,
         )
 
-    async def execute(self, request: CheckProPaymentRequest) -> CheckProPaymentResult:
+    async def execute(self, request: CheckProPaymentRequest) -> CheckProPaymentResult:  # noqa: C901, PLR0911
         invalid = self._validate(request)
         if invalid is not None:
             return invalid
@@ -142,6 +152,17 @@ class CheckProPayment:
         if int(invoice.master_id) != int(master.id):
             return self._error(error=CheckProPaymentError.FORBIDDEN)
 
+        if invoice.status == PaymentInvoiceStatus.PAID:
+            now_utc = datetime.now(UTC)
+            await self._invoices.touch_last_checked_at(request.invoice_id, at=now_utc)
+            return CheckProPaymentResult(
+                ok=True,
+                invoice=invoice,
+                provider_status=None,
+                granted_pro=False,
+                paid_until=None,
+            )
+
         try:
             provider_status = await self._express_pay.get_invoice_status(int(invoice.invoice_no))
         except ExpressPayError as exc:
@@ -154,12 +175,27 @@ class CheckProPayment:
             )
             return self._error(error=CheckProPaymentError.INVALID_REQUEST, error_detail="provider_error")
         now_utc = datetime.now(UTC)
+        subscription = await self._subs.get_by_master_id(int(master.id))
+
+        # Avoid granting twice in concurrent checks: re-check under row lock *after* provider status is known.
+        if provider_status in {InvoiceStatus.PAID, InvoiceStatus.PAID_BY_CARD}:
+            locked = await self._invoices.get_by_id_for_update(request.invoice_id)
+            if locked.status == PaymentInvoiceStatus.PAID:
+                await self._invoices.touch_last_checked_at(request.invoice_id, at=now_utc)
+                return CheckProPaymentResult(
+                    ok=True,
+                    invoice=locked,
+                    provider_status=provider_status,
+                    granted_pro=False,
+                    paid_until=None,
+                )
 
         patch, granted_pro, paid_until = await self._apply_provider_status(
             master_id=int(master.id),
             provider_status=provider_status,
             now_utc=now_utc,
             request=request,
+            subscription=subscription,
         )
 
         await self._invoices.update_by_id(request.invoice_id, patch)

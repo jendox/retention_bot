@@ -44,6 +44,7 @@ class PaymentInvoice(Base):
 
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(

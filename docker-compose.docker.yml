@@ -1,0 +1,34 @@
+version: '3.9'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.debug
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./src:/app/src
+      - ./alembic.ini:/app/alembic.ini:ro
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
+    command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678", "-m", "src.main"]
+
+  reminders:
+    build:
+      context: .
+      dockerfile: Dockerfile.debug
+    volumes:
+      - ./src:/app/src
+      - ./alembic.ini:/app/alembic.ini:ro
+    command: ["python", "-m", "src.workers.reminders"]
+
+  payments:
+    build:
+      context: .
+      dockerfile: Dockerfile.debug
+    volumes:
+      - ./src:/app/src
+      - ./alembic.ini:/app/alembic.ini:ro
+    command: ["python", "-m", "src.workers.payments"]
+

@@ -56,6 +56,7 @@ _PHONE_RE = re.compile(r"(?<!\\d)(?:\\+\\d{11,15}|375\\d{9})(?!\\d)")
 # Common "key=value" patterns that show up in errors/exceptions.
 _KV_PHONE_RE = re.compile(r"(?i)\\bphone\\s*=\\s*(?:\\+?\\d{11,15}|375\\d{9})\\b")
 _KV_INVITE_TOKEN_RE = re.compile(r"(?i)\\binvite_token\\s*=\\s*[^\\s,;]+")
+_KV_SECRET_RE = re.compile(r"(?i)\\b(token|signature|api[_-]?key|authorization)\\s*=\\s*[^\\s,&;]+")
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -67,6 +68,7 @@ def _redact_text(text: str) -> str:
     out = _PHONE_RE.sub(_REDACTED, text)
     out = _KV_PHONE_RE.sub(f"phone={_REDACTED}", out)
     out = _KV_INVITE_TOKEN_RE.sub(f"invite_token={_REDACTED}", out)
+    out = _KV_SECRET_RE.sub(lambda m: f"{m.group(1)}={_REDACTED}", out)
     return out
 
 
@@ -157,7 +159,13 @@ def setup_logging(
         "aiogram.middlewares",
         "aiogram.dispatcher",
         "aiohttp.access",
+        "httpx",
+        "httpcore",
         "urllib3",
     ]
     for name in noisy:
         logging.getLogger(name).setLevel(logging.DEBUG if debug else logging.WARNING)
+
+    # Never allow these libraries to log request URLs (may include secrets in query params).
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)

@@ -34,6 +34,7 @@ class PaymentInvoice(BaseModel):
 
     expires_at: datetime | None = None
     paid_at: datetime | None = None
+    paid_notified_at: datetime | None = None
     last_checked_at: datetime | None = None
 
     created_at: datetime
@@ -70,6 +71,7 @@ class PaymentInvoiceUpdate(BaseModel):
     provider_status_code: int | None = None
     expires_at: datetime | None = None
     paid_at: datetime | None = None
+    paid_notified_at: datetime | None = None
     last_checked_at: datetime | None = None
 
     model_config = ConfigDict(extra="forbid")

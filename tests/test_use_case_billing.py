@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest import mock
@@ -169,6 +169,9 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
             async def get_by_id(self, invoice_id: int):
                 return self._saved
 
+            async def get_by_id_for_update(self, invoice_id: int):
+                return self._saved
+
             async def update_by_id(self, invoice_id: int, patch):
                 if getattr(patch, "status", None) is not None:
                     self._saved.status = patch.status
@@ -177,6 +180,9 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
         class _SubsRepo:
             def __init__(self, session) -> None:
                 self.grant_pro = mock.AsyncMock()
+
+            async def get_by_master_id(self, master_id: int):
+                return None
 
         express = SimpleNamespace(get_invoice_status=mock.AsyncMock(return_value=InvoiceStatus.PAID))
 
@@ -192,3 +198,108 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertTrue(result.granted_pro)
         self.assertIsNotNone(result.paid_until)
+
+    async def test_check_pro_payment_extends_from_existing_paid_until(self) -> None:
+        import src.use_cases.check_pro_payment as uc
+
+        fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
+
+        class _FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now
+
+        class _MasterRepo:
+            def __init__(self, session) -> None:
+                pass
+
+            async def get_by_telegram_id(self, telegram_id: int):
+                return SimpleNamespace(id=1)
+
+        class _InvoicesRepo:
+            def __init__(self, session) -> None:
+                self._saved = SimpleNamespace(
+                    id=7,
+                    master_id=1,
+                    invoice_no=123,
+                    status=PaymentInvoiceStatus.WAITING,
+                )
+
+            async def get_by_id(self, invoice_id: int):
+                return self._saved
+
+            async def get_by_id_for_update(self, invoice_id: int):
+                return self._saved
+
+            async def update_by_id(self, invoice_id: int, patch):
+                return True
+
+        class _SubsRepo:
+            def __init__(self, session) -> None:
+                self.grant_pro = mock.AsyncMock()
+
+            async def get_by_master_id(self, master_id: int):
+                return SimpleNamespace(paid_until=fixed_now + timedelta(days=10), trial_until=None)
+
+        express = SimpleNamespace(get_invoice_status=mock.AsyncMock(return_value=InvoiceStatus.PAID))
+
+        with (
+            mock.patch.object(uc, "datetime", _FixedDatetime),
+            mock.patch.object(uc, "MasterRepository", _MasterRepo),
+            mock.patch.object(uc, "PaymentInvoiceRepository", _InvoicesRepo),
+            mock.patch.object(uc, "SubscriptionRepository", _SubsRepo),
+        ):
+            result = await CheckProPayment(session=object(), express_pay_client=express).execute(
+                CheckProPaymentRequest(master_telegram_id=1, invoice_id=7, pro_days=30),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.granted_pro)
+        self.assertEqual(result.paid_until, fixed_now + timedelta(days=40))
+
+    async def test_check_pro_payment_is_idempotent_for_paid_invoice(self) -> None:
+        import src.use_cases.check_pro_payment as uc
+
+        class _MasterRepo:
+            def __init__(self, session) -> None:
+                pass
+
+            async def get_by_telegram_id(self, telegram_id: int):
+                return SimpleNamespace(id=1)
+
+        class _InvoicesRepo:
+            def __init__(self, session) -> None:
+                self._saved = SimpleNamespace(
+                    id=7,
+                    master_id=1,
+                    invoice_no=123,
+                    status=PaymentInvoiceStatus.PAID,
+                )
+
+            async def get_by_id(self, invoice_id: int):
+                return self._saved
+
+            async def touch_last_checked_at(self, invoice_id: int, *, at):
+                return True
+
+        class _SubsRepo:
+            def __init__(self, session) -> None:
+                self.grant_pro = mock.AsyncMock()
+
+            async def get_by_master_id(self, master_id: int):
+                return None
+
+        express = SimpleNamespace(get_invoice_status=mock.AsyncMock(return_value=InvoiceStatus.PAID))
+
+        with (
+            mock.patch.object(uc, "MasterRepository", _MasterRepo),
+            mock.patch.object(uc, "PaymentInvoiceRepository", _InvoicesRepo),
+            mock.patch.object(uc, "SubscriptionRepository", _SubsRepo),
+        ):
+            result = await CheckProPayment(session=object(), express_pay_client=express).execute(
+                CheckProPaymentRequest(master_telegram_id=1, invoice_id=7, pro_days=30),
+            )
+
+        self.assertTrue(result.ok)
+        self.assertFalse(result.granted_pro)
+        express.get_invoice_status.assert_not_awaited()
