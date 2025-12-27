@@ -7,7 +7,7 @@ from enum import StrEnum
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.expresspay import ExpressPayClient, InvoiceStatus
-from src.integrations.expresspay.exceptions import ExpressPayError
+from src.integrations.expresspay.exceptions import ExpressPayApiError, ExpressPayError
 from src.observability.events import EventLogger
 from src.repositories import (
     MasterNotFound,
@@ -19,6 +19,8 @@ from src.repositories import (
 from src.schemas.payment_invoice import PaymentInvoice, PaymentInvoiceStatus, PaymentInvoiceUpdate
 
 ev = EventLogger(__name__)
+
+EXPRESSPAY_INVOICE_NOT_FOUND_MSG_CODE = 4041002
 
 
 class CheckProPaymentError(StrEnum):
@@ -166,6 +168,40 @@ class CheckProPayment:
         try:
             provider_status = await self._express_pay.get_invoice_status(int(invoice.invoice_no))
         except ExpressPayError as exc:
+            now_utc = datetime.now(UTC)
+
+            # Throttle repeated checks on provider errors.
+            await self._invoices.touch_last_checked_at(request.invoice_id, at=now_utc)
+
+            # ExpressPay: 4041002 = "Счет на оплату не найден"
+            # This is a terminal state for our invoice_no: it cannot ever become paid.
+            if (
+                isinstance(exc, ExpressPayApiError)
+                and int(exc.payload.msg_code) == EXPRESSPAY_INVOICE_NOT_FOUND_MSG_CODE
+            ):
+                await self._invoices.update_by_id(
+                    request.invoice_id,
+                    PaymentInvoiceUpdate(
+                        status=PaymentInvoiceStatus.CANCELED,
+                        last_checked_at=now_utc,
+                    ),
+                )
+                updated = await self._invoices.get_by_id(request.invoice_id)
+                ev.warning(
+                    "billing.pro_payment_invoice_not_found",
+                    master_id=master.id,
+                    invoice_id=updated.id,
+                    invoice_no=updated.invoice_no,
+                    msg_code=int(exc.payload.msg_code),
+                )
+                return CheckProPaymentResult(
+                    ok=True,
+                    invoice=updated,
+                    provider_status=None,
+                    granted_pro=False,
+                    paid_until=None,
+                )
+
             ev.warning(
                 "billing.pro_payment_provider_error",
                 master_id=master.id,

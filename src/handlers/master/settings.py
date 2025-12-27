@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -13,6 +15,7 @@ from src.observability.events import EventLogger
 from src.paywall import build_upgrade_button_with_fallback
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterNotFound, MasterRepository
+from src.repositories.payment_invoice import PaymentInvoiceRepository
 from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
 from src.settings import get_settings
@@ -27,6 +30,7 @@ ev = EventLogger(__name__)
 
 
 SETTINGS_CB_PREFIX = "m:settings:"
+_BILLING_CHECK_PREFIX = "billing:pro:check:"
 
 SETTINGS_BUCKET = "master_settings"
 SETTINGS_MAIN_KEY = "master_settings_main"
@@ -80,6 +84,50 @@ def _kb_tariffs(
         )
     rows.append([InlineKeyboardButton(text=secondary_text, callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _kb_tariffs_waiting_invoice(
+    *,
+    contact: str,
+    invoice_id: int,
+    invoice_url: str | None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if invoice_url:
+        rows.append([InlineKeyboardButton(text=billing_txt.btn_pay(), url=invoice_url)])
+
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=billing_txt.btn_check(),
+                callback_data=f"{_BILLING_CHECK_PREFIX}{int(invoice_id)}",
+            ),
+        ],
+    )
+    rows.append(
+        [
+            build_upgrade_button_with_fallback(
+                contact=contact,
+                text=billing_txt.btn_contact(),
+                callback_data="paywall:contact",
+            ),
+        ],
+    )
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _load_latest_waiting_invoice(*, master_id: int):
+    now_utc = datetime.now(UTC)
+    async with session_local() as session:
+        repo = PaymentInvoiceRepository(session)
+        invoice = await repo.get_latest_waiting_for_master(master_id=int(master_id))
+        if invoice is None:
+            return None
+        if invoice.expires_at is not None and invoice.expires_at <= now_utc:
+            return None
+        return invoice
 
 
 def _kb_timezones() -> InlineKeyboardMarkup:
@@ -283,6 +331,11 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             pro_days=int(days) if days is not None else None,
             pro_price_byn=float(price) if price is not None else None,
         )
+
+        waiting = await _load_latest_waiting_invoice(master_id=int(master.id))
+        if waiting is not None:
+            msg = f"{msg}\n\n<b>Есть выставленный счёт</b>\nМожно оплатить или проверить оплату."
+
         if callback.message is not None:
             primary_text: str | None = None
             secondary_text = billing_txt.tariffs_secondary_button(source=source)
@@ -296,11 +349,19 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             await safe_edit_text(
                 callback.message,
                 text=msg,
-                reply_markup=_kb_tariffs(
-                    contact=contact,
-                    primary_callback_data=primary_cb,
-                    primary_text=primary_text,
-                    secondary_text=secondary_text,
+                reply_markup=(
+                    _kb_tariffs_waiting_invoice(
+                        contact=contact,
+                        invoice_id=int(waiting.id),
+                        invoice_url=waiting.invoice_url,
+                    )
+                    if waiting is not None
+                    else _kb_tariffs(
+                        contact=contact,
+                        primary_callback_data=primary_cb,
+                        primary_text=primary_text,
+                        secondary_text=secondary_text,
+                    )
                 ),
                 parse_mode="HTML",
                 ev=ev,

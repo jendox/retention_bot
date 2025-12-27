@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html
+
 from src.texts.base import Translator, noop_t as _noop_t
 
 
@@ -30,6 +32,10 @@ def no_show_value(*, t: Translator = _noop_t) -> str:
 
 
 def contact_message(*, contact: str, t: Translator = _noop_t) -> str:
+    safe_contact = html.escape(str(contact))
     return t(
-        f"🔓 Подключить Pro\n\nНапиши сюда — поможем подключить подписку:\n{contact}",
+        "💬 Поддержка\n\n"
+        "Если возникли сложности с оплатой подписки Pro — напиши на email: "
+        f"{safe_contact}\n\n"
+        "Чтобы мы быстро нашли аккаунт, укажи своё имя мастера и телефон.",
     )
