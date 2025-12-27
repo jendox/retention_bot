@@ -1,5 +1,3 @@
-import logging
-
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -29,7 +27,6 @@ from src.rate_limiter import RateLimiter
 from src.texts import common as common_txt, master_menu as txt
 from src.user_context import ActiveRole, UserContextStorage
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 ev = EventLogger(__name__)
 
@@ -95,6 +92,7 @@ async def send_master_main_menu(
 @router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_CLIENTS)
 async def master_clients(message: Message, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_menu", step="clients_menu")
+    ev.info("master_menu.clients_menu")
     if not await rate_limit_message(message, rate_limiter, name="master_menu:clients", ttl_sec=2):
         return
     await message.answer(
@@ -107,6 +105,7 @@ async def master_clients(message: Message, rate_limiter: RateLimiter | None = No
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["list"])
 async def master_clients_list(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_menu", step="clients_list")
+    ev.info("master_menu.clients_list")
     if not await rate_limit_callback(callback, rate_limiter, name="master_menu:clients_list", ttl_sec=2):
         return
     await callback.answer()
@@ -122,6 +121,7 @@ async def master_add_client(
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_menu", step="clients_add")
+    ev.info("master_menu.clients_add")
     if not await rate_limit_callback(callback, rate_limiter, name="master_menu:clients_add", ttl_sec=2):
         return
     await callback.answer()
@@ -135,6 +135,7 @@ async def master_search_client(
     rate_limiter: RateLimiter | None = None,
 ) -> None:
     bind_log_context(flow="master_menu", step="clients_search")
+    ev.info("master_menu.clients_search")
     if not await rate_limit_callback(callback, rate_limiter, name="master_menu:clients_search", ttl_sec=2):
         return
     await start_edit_client(callback, state)
@@ -149,6 +150,7 @@ async def master_invite_client(
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_menu", step="clients_invite")
+    ev.info("master_menu.clients_invite")
     if not await rate_limit_callback(callback, rate_limiter, name="master_menu:clients_invite", ttl_sec=2):
         return
     await callback.answer()
@@ -158,6 +160,7 @@ async def master_invite_client(
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == CLIENTS_MENU_CB["back"])
 async def master_back_to_main_menu(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_menu", step="clients_back")
+    ev.info("master_menu.clients_back")
     if not await rate_limit_callback(callback, rate_limiter, name="master_menu:clients_back", ttl_sec=2):
         return
     await callback.answer(txt.back_to_main_menu())
@@ -172,6 +175,7 @@ async def master_switch_role(
     user_ctx_storage: UserContextStorage,
 ) -> None:
     bind_log_context(flow="master_menu", step="switch_role")
+    ev.info("master_menu.switch_role")
     from src.handlers.client.client_menu import send_client_main_menu
 
     telegram_id = message.from_user.id
@@ -183,6 +187,8 @@ async def master_switch_role(
 
 @router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_ADD_BOOKING)
 async def master_add_booking(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="master_menu", step="add_booking")
+    ev.info("master_menu.add_booking")
     if not await rate_limit_message(message, rate_limiter, name="master_add_booking:start", ttl_sec=2):
         return
     await start_add_booking(message, state)
@@ -191,6 +197,7 @@ async def master_add_booking(message: Message, state: FSMContext, rate_limiter: 
 @router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_SCHEDULE)
 async def master_schedule_entry(message: Message, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_menu", step="schedule")
+    ev.info("master_menu.schedule")
     if not await rate_limit_message(message, rate_limiter, name="master_menu:schedule", ttl_sec=2):
         return
     await master_schedule(message)
@@ -200,6 +207,7 @@ async def master_schedule_entry(message: Message, rate_limiter: RateLimiter | No
 @router.message(UserRole(ActiveRole.MASTER), F.text == txt.MENU_SETTINGS)
 async def master_settings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_menu", step="settings")
+    ev.info("master_menu.settings")
     if not await rate_limit_message(message, rate_limiter, name="master_menu:settings", ttl_sec=2):
         return
     await open_master_settings(message, state)

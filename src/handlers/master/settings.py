@@ -1,5 +1,3 @@
-import logging
-
 from aiogram import F, Router
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
@@ -22,7 +20,6 @@ from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 ev = EventLogger(__name__)
 
@@ -102,19 +99,16 @@ def _render_details(*, master, plan) -> str:
     phone = getattr(master, "phone", None) or common_txt.placeholder_empty()
     notify_clients = bool(getattr(master, "notify_clients", True))
 
-    return (
-        _render(
-            master_name=master.name,
-            tz=master.timezone,
-            notify_clients=notify_clients,
-            plan_is_pro=plan.is_pro,
-        )
-        + txt.render_details(
-            phone=str(phone),
-            work_days=str(work_days),
-            work_time=str(work_time),
-            slot_size=str(slot_size),
-        )
+    return _render(
+        master_name=master.name,
+        tz=master.timezone,
+        notify_clients=notify_clients,
+        plan_is_pro=plan.is_pro,
+    ) + txt.render_details(
+        phone=str(phone),
+        work_days=str(work_days),
+        work_time=str(work_time),
+        slot_size=str(slot_size),
     )
 
 
@@ -135,12 +129,14 @@ async def open_master_settings(
     bind_log_context(flow="master_settings", step="open")
     if not await rate_limit_message(message, rate_limiter, name="master_settings:open", ttl_sec=2):
         return
+    ev.info("master_settings.open")
     telegram_id = message.from_user.id
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     try:
         master, plan = await _load_master_and_plan(telegram_id)
     except MasterNotFound:
+        ev.warning("master_settings.master_not_found")
         await message.answer(txt.master_only(), parse_mode="HTML")
         return
 
@@ -165,11 +161,14 @@ async def open_master_settings(
         ),
         parse_mode="HTML",
     )
-    await state.update_data(**{
-        SETTINGS_MAIN_KEY: {
-            "chat_id": settings_msg.chat.id, "message_id": settings_msg.message_id,
+    await state.update_data(
+        **{
+            SETTINGS_MAIN_KEY: {
+                "chat_id": settings_msg.chat.id,
+                "message_id": settings_msg.message_id,
+            },
         },
-    })
+    )
 
 
 async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int) -> bool:
@@ -206,6 +205,11 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
         return
     telegram_id = callback.from_user.id
     data = callback.data or ""
+    action = data.removeprefix(SETTINGS_CB_PREFIX) if data.startswith(SETTINGS_CB_PREFIX) else "unknown"
+    action_key = action.split(":", 1)[0] if action else "unknown"
+    if action_key == "set_tz":
+        action_key = "set_tz"
+    ev.info("master_settings.action", action=action_key)
 
     if data == f"{SETTINGS_CB_PREFIX}back":
         await callback.answer()
@@ -216,6 +220,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0915
     try:
         master, plan = await _load_master_and_plan(telegram_id)
     except MasterNotFound:
+        ev.warning("master_settings.master_not_found")
         await callback.answer(txt.master_only(), show_alert=True)
         return
 
@@ -431,16 +436,19 @@ def _parse_slot_size(raw: str) -> int | None:
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_phone))
 async def save_phone(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_settings", step="edit_phone_save")
     await track_message(state, message, bucket=SETTINGS_BUCKET)
     telegram_id = message.from_user.id
     phone = validate_phone((message.text or "").strip())
     if phone is None:
+        ev.debug("master_settings.input_invalid", field="phone", reason="invalid")
         await message.answer(txt.invalid_phone(), parse_mode="HTML")
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(phone=phone))
+    ev.info("master_settings.phone_updated")
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
@@ -450,16 +458,19 @@ async def save_phone(message: Message, state: FSMContext) -> None:
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_work_days))
 async def save_work_days(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_settings", step="edit_work_days_save")
     await track_message(state, message, bucket=SETTINGS_BUCKET)
     telegram_id = message.from_user.id
     days = _parse_work_days(message.text or "")
     if days is None:
+        ev.debug("master_settings.input_invalid", field="work_days", reason="invalid")
         await message.answer(txt.invalid_days(), parse_mode="HTML")
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(work_days=days))
+    ev.info("master_settings.work_days_updated", days_count=len(days))
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
@@ -469,10 +480,12 @@ async def save_work_days(message: Message, state: FSMContext) -> None:
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_work_time))
 async def save_work_time(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_settings", step="edit_work_time_save")
     await track_message(state, message, bucket=SETTINGS_BUCKET)
     telegram_id = message.from_user.id
     parsed = _parse_time_range(message.text or "")
     if parsed is None:
+        ev.debug("master_settings.input_invalid", field="work_time", reason="invalid")
         await message.answer(txt.invalid_work_time(), parse_mode="HTML")
         return
     start_time, end_time = parsed
@@ -480,6 +493,7 @@ async def save_work_time(message: Message, state: FSMContext) -> None:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(start_time=start_time, end_time=end_time))
+    ev.info("master_settings.work_time_updated")
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
@@ -489,16 +503,19 @@ async def save_work_time(message: Message, state: FSMContext) -> None:
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_slot_size))
 async def save_slot_size(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_settings", step="edit_slot_size_save")
     await track_message(state, message, bucket=SETTINGS_BUCKET)
     telegram_id = message.from_user.id
     slot_size = _parse_slot_size(message.text or "")
     if slot_size is None:
+        ev.debug("master_settings.input_invalid", field="slot_size", reason="invalid")
         await message.answer(txt.invalid_slot_size(), parse_mode="HTML")
         return
     async with active_session() as session:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(slot_size_min=slot_size))
+    ev.info("master_settings.slot_size_updated", slot_size_min=int(slot_size))
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)

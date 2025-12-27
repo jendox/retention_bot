@@ -6,10 +6,13 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.repositories import MasterNotFound, MasterRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview, Master
 from src.schemas.enums import AttendanceOutcome, BookingStatus
+
+ev = EventLogger(__name__)
 
 
 class MarkBookingAttendanceError(StrEnum):
@@ -186,6 +189,12 @@ class MarkBookingAttendance:
         except self._Abort as abort:
             return abort.result
 
+        ev.info(
+            "booking.attendance_marked",
+            booking_id=request.booking_id,
+            master_id=master.id,
+            outcome=str(request.outcome.value),
+        )
         return MarkBookingAttendanceResult(
             ok=True,
             master=master,

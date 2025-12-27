@@ -1,4 +1,3 @@
-import logging
 import re
 from datetime import datetime
 
@@ -17,6 +16,7 @@ from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_bot_edit_message_text, safe_edit_text
 from src.models import Booking as BookingEntity
 from src.observability.context import bind_log_context
+from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientUpdate
@@ -27,8 +27,8 @@ from src.texts.master_client_card import ClientHints, ClientSummary, card as ren
 from src.user_context import ActiveRole
 from src.utils import answer_tracked, cleanup_messages, format_phone_display, track_message, validate_phone
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
+ev = EventLogger(__name__)
 
 EDIT_CLIENT_BUCKET = "master_edit_client"
 EDIT_CLIENT_CARD_BUCKET = "master_edit_client_card"
@@ -400,6 +400,7 @@ async def start_edit_client(
     bind_log_context(flow="master_edit_client", step="start")
     if not await rate_limit_callback(callback, rate_limiter, name="master_edit_client:start", ttl_sec=2):
         return
+    ev.info("master_edit_client.start")
     await callback.answer()
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_BUCKET)
     await cleanup_messages(state, callback.bot, bucket=EDIT_CLIENT_CARD_BUCKET)
@@ -422,6 +423,7 @@ async def process_query(message: Message, state: FSMContext, rate_limiter: RateL
     await track_message(state, message, bucket=EDIT_CLIENT_BUCKET)
     query = (message.text or "").strip()
     if not query:
+        ev.debug("master_edit_client.input_invalid", field="query", reason="empty")
         await answer_tracked(
             message,
             state,
@@ -440,6 +442,7 @@ async def process_query(message: Message, state: FSMContext, rate_limiter: RateL
         try:
             master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
         except MasterNotFound:
+            ev.warning("master_edit_client.master_not_found")
             await message.answer(txt.master_profile_not_found())
             return
 
@@ -450,6 +453,7 @@ async def process_query(message: Message, state: FSMContext, rate_limiter: RateL
         if q in (client.name or "").lower() or q in (client.phone or "")
     ]
     if not matches:
+        ev.info("master_edit_client.search_result", outcome="no_matches")
         await answer_tracked(
             message,
             state,
@@ -460,6 +464,7 @@ async def process_query(message: Message, state: FSMContext, rate_limiter: RateL
         return
 
     await state.update_data(edit_client_results=matches)
+    ev.info("master_edit_client.search_result", outcome="matches", matches=len(matches))
     await answer_tracked(
         message,
         state,

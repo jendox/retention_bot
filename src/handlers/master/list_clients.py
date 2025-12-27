@@ -62,7 +62,7 @@ def _parse_clients_page(callback_data: str | None) -> int | str | None:
 
 
 def _parse_int_suffix(prefix: str, data: str | None) -> int | None:
-    raw = (data or "")
+    raw = data or ""
     if not raw.startswith(prefix):
         return None
     try:
@@ -111,12 +111,7 @@ def _parse_card_action(action: str, data: str | None) -> tuple[int, int] | None:
     # m:cl:c:<action>:<client_id>:p:<page>:c:<chunk>
     if len(parts) != 9:  # noqa: PLR2004
         return None
-    if (
-        parts[:3] != ["m", "cl", "c"]
-        or parts[3] != action
-        or parts[5] != "p"
-        or parts[7] != "c"
-    ):  # noqa: PLR2004
+    if parts[:3] != ["m", "cl", "c"] or parts[3] != action or parts[5] != "p" or parts[7] != "c":  # noqa: PLR2004
         return None
     try:
         client_id = int(parts[4])

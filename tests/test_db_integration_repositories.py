@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import os
 import unittest
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, time, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from src.core.sa import Database, active_session
-from src.repositories import BookingRepository, ClientRepository, InviteRepository, MasterRepository, WorkdayOverrideRepository
+from src.repositories import (
+    BookingRepository,
+    ClientRepository,
+    InviteRepository,
+    MasterRepository,
+    WorkdayOverrideRepository,
+)
 from src.schemas import BookingCreate, ClientCreate, Invite, MasterCreate, WorkdayOverrideCreate
 from src.schemas.enums import BookingStatus, InviteType, Timezone
 
@@ -19,8 +26,7 @@ def _env(name: str) -> str | None:
 
 
 @unittest.skipUnless(
-    os.getenv("INTEGRATION_TESTS") == "1"
-    and _env("DATABASE__POSTGRES_URL") is not None,
+    os.getenv("INTEGRATION_TESTS") == "1" and _env("DATABASE__POSTGRES_URL") is not None,
     "Set INTEGRATION_TESTS=1 and DATABASE__POSTGRES_URL to run integration tests.",
 )
 class RepositoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
@@ -35,12 +41,12 @@ class RepositoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self) -> None:
         postgres_url = os.environ["DATABASE__POSTGRES_URL"]
-        self._db_cm = Database.lifespan(url=postgres_url, echo=False)
-        await self._db_cm.__aenter__()
+        self._exit_stack = AsyncExitStack()
+        await self._exit_stack.enter_async_context(Database.lifespan(url=postgres_url, echo=False))
         await self._truncate_all()
 
     async def asyncTearDown(self) -> None:
-        await self._db_cm.__aexit__(None, None, None)
+        await self._exit_stack.aclose()
 
     async def _truncate_all(self) -> None:
         async with active_session() as session:
@@ -204,5 +210,3 @@ class RepositoryIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         end_time=time(17, 0),
                     ),
                 )
-
-

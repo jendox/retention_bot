@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import logging
+import hashlib
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -9,8 +9,15 @@ from aiogram.types import InlineKeyboardMarkup
 from src.notifications.context import BookingContext, LimitsContext, ReminderContext
 from src.notifications.renderer import RenderedMessage, render
 from src.notifications.types import NotificationEvent, RecipientKind
+from src.observability.events import EventLogger
 
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
+
+_CHAT_ID_HASH_LEN = 12
+
+
+def _hash_chat_id(chat_id: int) -> str:
+    return hashlib.sha256(str(int(chat_id)).encode("utf-8")).hexdigest()[:_CHAT_ID_HASH_LEN]
 
 
 class NotificationService:
@@ -35,15 +42,19 @@ class NotificationService:
                 reply_markup=message.reply_markup,
                 parse_mode=message.parse_mode,
             )
-            logger.info(
+            ev.info(
                 "notifications.send_success",
-                extra={"event": event, "recipient": recipient, "chat_id": chat_id},
+                event=event,
+                recipient=recipient,
+                chat_id_hash=_hash_chat_id(int(chat_id)),
             )
-        except TelegramAPIError:
-            logger.warning(
+        except TelegramAPIError as exc:
+            ev.warning(
                 "notifications.send_failed",
-                extra={"event": event, "recipient": recipient, "chat_id": chat_id},
-                exc_info=True,
+                event=event,
+                recipient=recipient,
+                chat_id_hash=_hash_chat_id(int(chat_id)),
+                error_type=type(exc).__name__,
             )
 
     async def send(
@@ -57,9 +68,10 @@ class NotificationService:
     ) -> None:
         message = render(event=event, recipient=recipient, context=context, reply_markup=reply_markup)
         if not message.text.strip():
-            logger.warning(
+            ev.warning(
                 "notifications.empty_message",
-                extra={"event": event.value, "recipient": recipient.value},
+                event=event.value,
+                recipient=recipient.value,
             )
             return
 

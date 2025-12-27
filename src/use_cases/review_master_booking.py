@@ -6,11 +6,14 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.repositories import BookingNotFound, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import BookingForReview, Master
 from src.schemas.enums import BookingStatus
 from src.use_cases.entitlements import EntitlementsService
+
+ev = EventLogger(__name__)
 
 
 class ReviewMasterBookingAction(StrEnum):
@@ -171,6 +174,13 @@ class ReviewMasterBooking:
         except self._Abort as abort:
             return abort.result
 
+        ev.info(
+            "booking.reviewed_by_master",
+            booking_id=request.booking_id,
+            master_id=master.id,
+            action=str(request.action.value),
+            new_status=str(new_status.value),
+        )
         return ReviewMasterBookingResult(
             ok=True,
             booking=booking,

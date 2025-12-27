@@ -7,21 +7,18 @@ from src.texts.base import Translator, noop_t as _noop_t
 
 def ask_name(*, t: Translator = _noop_t) -> str:
     return t(
-        "Привет! 👋\n"
-        "Давай настроим твой профиль клиента в BeautyDesk.\n\n"
-        "Как тебя зовут? (Например: Маша)",
+        "Привет! 👋\nДавай настроим твой профиль клиента в BeautyDesk.\n\nКак тебя зовут? (Например: Маша)",
     )
 
 
 def name_invalid(*, t: Translator = _noop_t) -> str:
     return t(
-        "⚠️ Не понял имя 🤔\n"
-        "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Маша</b>",
+        "⚠️ Не понял имя 🤔\nПожалуйста, напиши, как к тебе обращаться. Например: <b>Маша</b>",
     )
 
 
 def ask_phone(*, name: str, t: Translator = _noop_t) -> str:
-    return t(f"Отлично, <b>{name}</b>! ✨\n\n" "Добавь свой номер телефона (375...):")
+    return t(f"Отлично, <b>{name}</b>! ✨\n\nДобавь свой номер телефона (375...):")
 
 
 def phone_invalid(*, t: Translator = _noop_t) -> str:
@@ -34,15 +31,12 @@ def phone_invalid(*, t: Translator = _noop_t) -> str:
 
 def confirm_details(*, name: str, phone: str, t: Translator = _noop_t) -> str:
     return t(
-        "Проверь, пожалуйста, данные 👇\n\n"
-        f"<b>Имя:</b> {name}\n"
-        f"<b>Номер телефона:</b> {phone}\n"
-        "Всё верно?",
+        f"Проверь, пожалуйста, данные 👇\n\n<b>Имя:</b> {name}\n<b>Номер телефона:</b> {phone}\nВсё верно?",
     )
 
 
 def creating_profile(*, t: Translator = _noop_t) -> str:
-    return t("⏳ Создаю профиль клиента…\n" "Пожалуйста, подожди несколько секунд.")
+    return t("⏳ Создаю профиль клиента…\nПожалуйста, подожди несколько секунд.")
 
 
 def state_broken_alert(*, t: Translator = _noop_t) -> str:
@@ -51,9 +45,7 @@ def state_broken_alert(*, t: Translator = _noop_t) -> str:
 
 def done(*, t: Translator = _noop_t) -> str:
     return t(
-        "🎉 Готово!\n\n"
-        "Твой профиль клиента создан.\n"
-        "Теперь ты можешь управлять записями в BeautyDesk.",
+        "🎉 Готово!\n\nТвой профиль клиента создан.\nТеперь ты можешь управлять записями в BeautyDesk.",
     )
 
 
@@ -66,6 +58,7 @@ def cancel_alert(*, t: Translator = _noop_t) -> str:
 
 
 # ----- Error texts -----
+
 
 def err_invite_inactive(*, t: Translator = _noop_t) -> str:
     return t(
@@ -84,8 +77,7 @@ def err_invite_wrong_link(*, t: Translator = _noop_t) -> str:
 
 def err_quota_exceeded(*, t: Translator = _noop_t) -> str:
     return t(
-        "🚫 Похоже, у мастера закончился лимит клиентов на Free.\n\n"
-        "Попроси мастера подключить Pro или попробуй позже.",
+        "🚫 Похоже, у мастера закончился лимит клиентов на Free.\n\nПопроси мастера подключить Pro или попробуй позже.",
     )
 
 
@@ -99,6 +91,5 @@ def err_phone_conflict(*, t: Translator = _noop_t) -> str:
 
 def err_generic(*, t: Translator = _noop_t) -> str:
     return t(
-        "⚠️ Не получилось зарегистрироваться по ссылке.\n\n"
-        "Попробуй ещё раз или попроси мастера прислать новую ссылку.",
+        "⚠️ Не получилось зарегистрироваться по ссылке.\n\nПопробуй ещё раз или попроси мастера прислать новую ссылку.",
     )

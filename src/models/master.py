@@ -62,7 +62,9 @@ class Master(Base):
         order_by="Client.name",
     )
     bookings: Mapped[list[Booking]] = relationship(
-        "Booking", back_populates="master", cascade="all, delete-orphan",
+        "Booking",
+        back_populates="master",
+        cascade="all, delete-orphan",
     )
     overrides: Mapped[list[WorkdayOverride]] = relationship(
         "WorkdayOverride",
@@ -72,10 +74,15 @@ class Master(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=func.now(), nullable=False,
+        DateTime(timezone=True),
+        default=func.now(),
+        nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=False,
+        DateTime(timezone=True),
+        default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
 
@@ -92,9 +99,7 @@ class WorkdayOverride(Base):
 
     master: Mapped[Master] = relationship("Master", back_populates="overrides")
 
-    __table_args__ = (
-        UniqueConstraint("master_id", "date", name="uq_override_master_date"),
-    )
+    __table_args__ = (UniqueConstraint("master_id", "date", name="uq_override_master_date"),)
 
 
 master_clients = Table(

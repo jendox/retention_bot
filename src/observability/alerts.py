@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import time
 from collections.abc import Iterable
 from typing import Any
@@ -9,10 +8,11 @@ from typing import Any
 from aiogram import Bot
 from redis.asyncio import Redis
 
+from src.observability.events import EventLogger
 from src.settings import get_settings
 from src.utils import notify_admins
 
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 _SENSITIVE_KEYS = {
     "token",
@@ -100,14 +100,14 @@ class AdminAlerter:
 
         allowed = await self._allow(storage_key, throttle_sec=throttle_sec)
         if not allowed:
-            logger.debug("admin_alert.suppressed", extra={"event": event, "storage_key": storage_key})
+            ev.debug("admin_alert.suppressed", target_event=event, storage_key=storage_key)
             return False
 
         safe_extra = _sanitize_dict(extra)
         message = self._format_message(event=event, level=level, text=text, extra=safe_extra)
 
         await notify_admins(self._bot, self._admin_ids, message)
-        logger.info("admin_alert.sent", extra={"event": event, "storage_key": storage_key})
+        ev.info("admin_alert.sent", target_event=event, storage_key=storage_key)
         return True
 
     async def _allow(self, key: str, *, throttle_sec: int) -> bool:
@@ -122,8 +122,8 @@ class AdminAlerter:
 
         try:
             ok = await self._redis.set(name=key, value="1", ex=throttle_sec, nx=True)
-        except Exception:
-            logger.warning("admin_alert.redis_error", exc_info=True)
+        except Exception as exc:
+            ev.warning("admin_alert.redis_error", error_type=type(exc).__name__)
             self._in_memory[key] = now + throttle_sec
             return True
 

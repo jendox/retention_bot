@@ -7,11 +7,14 @@ from enum import StrEnum
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.repositories import MasterNotFound, MasterRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview, Master
 from src.schemas.enums import BookingStatus
 from src.use_cases.entitlements import EntitlementsService
+
+ev = EventLogger(__name__)
 
 
 class RescheduleMasterBookingError(StrEnum):
@@ -259,6 +262,11 @@ class RescheduleMasterBooking:
             return abort.result
 
         booking = await self._booking_repo.get_for_review(request.booking_id)
+        ev.info(
+            "booking.rescheduled_by_master",
+            booking_id=request.booking_id,
+            master_id=master.id,
+        )
         return RescheduleMasterBookingResult(
             ok=True,
             booking=booking,

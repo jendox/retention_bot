@@ -6,7 +6,7 @@ from aiogram.types import CallbackQuery
 
 from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback
-from src.handlers.shared.ui import safe_delete
+from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
@@ -41,6 +41,7 @@ async def master_close(
     bind_log_context(flow="master_close", step="close")
     if not await rate_limit_callback(callback, rate_limiter, name="master_close:close", ttl_sec=1):
         return
+    ev.info("master_close.close")
     await callback.answer()
 
     for bucket in _MASTER_CLEANUP_BUCKETS:
@@ -48,7 +49,13 @@ async def master_close(
     await state.clear()
 
     if callback.message is None:
+        ev.warning("master_close.state_invalid", reason="missing_message")
         return
     deleted = await safe_delete(callback.message, ev=ev, event="master_close.delete_failed")
     if not deleted:
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await safe_edit_reply_markup(
+            callback.message,
+            reply_markup=None,
+            ev=ev,
+            event="master_close.hide_keyboard_failed",
+        )

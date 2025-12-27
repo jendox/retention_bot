@@ -312,7 +312,9 @@ class AcceptClientInviteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.outcome, AcceptInviteOutcome.MERGED_OFFLINE)
         self.assertEqual(result.client_id, existing.id)
         uc._booking_repo.reassign_client_for_master.assert_awaited_with(
-            master_id=1, from_client_id=offline.id, to_client_id=existing.id,
+            master_id=1,
+            from_client_id=offline.id,
+            to_client_id=existing.id,
         )
         uc._master_repo.detach_client.assert_awaited_with(1, offline.id)
         uc._master_repo.attach_client.assert_awaited_with(1, existing.id)

@@ -19,16 +19,15 @@ def btn_back_to_search(*, t: Translator = _noop_t) -> str:
 
 # ----- Flow texts -----
 
+
 def client_card(*, name: str | None, phone: str | None, is_offline: bool, t: Translator = _noop_t) -> str:
     from src.texts.common import placeholder_empty
+
     name_ = name or placeholder_empty(t=t)
     phone_ = phone or placeholder_empty(t=t)
     offline = t("да") if is_offline else t("нет")
     return t(
-        "Карточка клиента 👤\n\n"
-        f"<b>Имя:</b> {name_}\n"
-        f"<b>Телефон:</b> {phone_}\n"
-        f"<b>Оффлайн:</b> {offline}",
+        f"Карточка клиента 👤\n\n<b>Имя:</b> {name_}\n<b>Телефон:</b> {phone_}\n<b>Оффлайн:</b> {offline}",
     )
 
 

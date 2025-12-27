@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-import logging
+import hashlib
 
 from redis.asyncio import Redis
 
-logger = logging.getLogger(__name__)
+from src.observability.events import EventLogger
+
+ev = EventLogger(__name__)
+
+_KEY_HASH_LEN = 12
+
+
+def _hash_key(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:_KEY_HASH_LEN]
 
 
 class RateLimiter:
@@ -28,8 +36,12 @@ class RateLimiter:
     async def allow(self, *, key: str, ttl_sec: int) -> bool:
         try:
             return bool(await self._redis.set(key, "1", ex=int(ttl_sec), nx=True))
-        except Exception:
-            logger.warning("rate_limit.redis_error", exc_info=True, extra={"key": key})
+        except Exception as exc:
+            ev.warning(
+                "rate_limit.redis_error",
+                key_hash=_hash_key(key),
+                error_type=type(exc).__name__,
+            )
             return True
 
     async def hit(self, *, name: str, ttl_sec: int, **labels: object) -> bool:

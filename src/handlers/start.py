@@ -113,8 +113,9 @@ async def resolve_role_and_dispatch(
     user_ctx_storage: UserContextStorage,
 ) -> None:
     settings = get_settings()
-    invite_only_master_reg = bool(
-        settings.security.master_invite_secret) and not settings.security.master_public_registration
+    invite_only_master_reg = (
+        bool(settings.security.master_invite_secret) and not settings.security.master_public_registration
+    )
     async with session_local() as session:
         is_master = True
         is_client = True

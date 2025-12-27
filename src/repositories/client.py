@@ -69,21 +69,13 @@ class ClientRepository(BaseRepository):
         return ClientDetails.from_db_entity(entity)
 
     async def update_by_id(self, client_id: int, client: ClientUpdate) -> bool:
-        stmt = (
-            update(ClientEntity)
-            .where(ClientEntity.id == client_id)
-            .values(client.to_db_update())
-        )
+        stmt = update(ClientEntity).where(ClientEntity.id == client_id).values(client.to_db_update())
         result = await self._session.execute(stmt)
 
         return (result.rowcount or 0) > 0
 
     async def update_by_telegram_id(self, telegram_id: int, client: ClientUpdate) -> bool:
-        stmt = (
-            update(ClientEntity)
-            .where(ClientEntity.telegram_id == telegram_id)
-            .values(client.to_db_update())
-        )
+        stmt = update(ClientEntity).where(ClientEntity.telegram_id == telegram_id).values(client.to_db_update())
         result = await self._session.execute(stmt)
 
         return (result.rowcount or 0) > 0
@@ -106,7 +98,7 @@ class ClientRepository(BaseRepository):
         )
         entity = await self._session.scalar(stmt)
         if entity is None:
-            raise ClientNotFound(f"Client with phone={phone} for master_id={master_id} not found.")
+            raise ClientNotFound(f"Client not found for master_id={master_id} (lookup=phone).")
         return Client.model_validate(entity)
 
     async def find_for_master_by_phone(
@@ -126,5 +118,5 @@ class ClientRepository(BaseRepository):
         )
         entity = await self._session.scalar(stmt)
         if entity is None:
-            raise ClientNotFound(f"Client with phone={phone} for master_id={master_id} not found.")
+            raise ClientNotFound(f"Client not found for master_id={master_id} (lookup=phone).")
         return Client.model_validate(entity)

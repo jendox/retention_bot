@@ -15,6 +15,7 @@ class WorkdayOverrideBase(BaseModel):
 class WorkdayOverrideCreate(WorkdayOverrideBase):
     def to_db_entity(self):
         from src.models import WorkdayOverride as WorkdayOverrideEntity
+
         return WorkdayOverrideEntity(**self.model_dump())
 
 

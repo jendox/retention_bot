@@ -19,6 +19,7 @@ def btn_formal(*, t: Translator = _noop_t) -> str:
 
 # ----- Flow / alerts -----
 
+
 def quota_reached(*, current: int, limit: int | None, t: Translator = _noop_t) -> str:
     return t(
         "Похоже, у тебя закончился лимит клиентов на Free.\n\n"
@@ -29,9 +30,7 @@ def quota_reached(*, current: int, limit: int | None, t: Translator = _noop_t) -
 
 def warn_near_limit(*, current: int, limit: int, t: Translator = _noop_t) -> str:
     return t(
-        "\n\n⚠️ Лимит клиентов на Free почти исчерпан:\n"
-        f"<b>{current}</b> из <b>{limit}</b>.\n"
-        "В Pro лимитов нет.",
+        f"\n\n⚠️ Лимит клиентов на Free почти исчерпан:\n<b>{current}</b> из <b>{limit}</b>.\nВ Pro лимитов нет.",
     )
 
 

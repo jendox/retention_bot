@@ -238,15 +238,21 @@ async def start_client_list_masters(
         return
 
     telegram_id = message.from_user.id
+    ev.info("client_list_masters.start")
     masters = await _load_masters(telegram_id)
     if masters is None:
+        ev.warning("client_list_masters.client_not_found")
         await message.answer(CLIENT_NOT_FOUND_MESSAGE)
         return
 
     if not masters:
-        msg = await message.answer(text=txt.empty(), reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=btn_close(), callback_data=f"{CB_PREFIX}close")]],
-        ))
+        ev.info("client_list_masters.start_result", outcome="empty")
+        msg = await message.answer(
+            text=txt.empty(),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=btn_close(), callback_data=f"{CB_PREFIX}close")]],
+            ),
+        )
         await _set_main_ref(state, chat_id=msg.chat.id, message_id=msg.message_id)
         await safe_delete(message, ev=ev, event="client_list_masters.delete_menu_message_failed")
         return
@@ -254,6 +260,7 @@ async def start_client_list_masters(
     await state.update_data(**{LIST_KEY: masters})
     total_pages = _total_pages(len(masters))
     page = 1
+    ev.info("client_list_masters.start_result", outcome="listed", masters_count=len(masters))
     msg = await message.answer(
         text=_render_list_page(masters=masters, page=page),
         reply_markup=_kb_list(total_pages=total_pages, page=page),
@@ -272,6 +279,7 @@ async def noop(callback: CallbackQuery) -> None:
 @router.callback_query(UserRole(ActiveRole.CLIENT), F.data == f"{CB_PREFIX}close")
 async def close(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="client_list_masters", step="close")
+    ev.info("client_list_masters.close")
     await callback.answer()
     if callback.message is not None:
         await safe_delete(callback.message, ev=ev, event="client_list_masters.delete_failed")
@@ -355,6 +363,7 @@ async def open_master(callback: CallbackQuery, state: FSMContext, rate_limiter: 
         chunk = int(parts[7])
     except Exception:
         return
+    ev.info("client_list_masters.open", master_id=int(master_id))
 
     data = await state.get_data()
     masters: list[dict] = data.get(LIST_KEY) or []

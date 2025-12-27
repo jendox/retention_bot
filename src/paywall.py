@@ -11,7 +11,7 @@ class PaywallButtons:
     back: InlineKeyboardButton | None = None
 
 
-def _upgrade_url_from_contact(contact: str) -> str | None:
+def upgrade_url_from_contact(contact: str) -> str | None:
     raw = (contact or "").strip()
     url: str | None = None
     if raw:
@@ -26,11 +26,20 @@ def _upgrade_url_from_contact(contact: str) -> str | None:
     return url
 
 
+def _upgrade_url_from_contact(contact: str) -> str | None:
+    # Backward-compatible wrapper for internal uses/tests.
+    return upgrade_url_from_contact(contact)
+
+
 def build_upgrade_button(*, contact: str, text: str) -> InlineKeyboardButton:
-    upgrade_url = _upgrade_url_from_contact(contact)
-    return InlineKeyboardButton(text=text, url=upgrade_url) if upgrade_url else InlineKeyboardButton(
-        text=text,
-        callback_data="paywall:contact",
+    upgrade_url = upgrade_url_from_contact(contact)
+    return (
+        InlineKeyboardButton(text=text, url=upgrade_url)
+        if upgrade_url
+        else InlineKeyboardButton(
+            text=text,
+            callback_data="paywall:contact",
+        )
     )
 
 
@@ -41,7 +50,7 @@ def build_paywall_keyboard(
     back_text: str,
     back_callback_data: str | None,
 ) -> InlineKeyboardMarkup:
-    upgrade_url = _upgrade_url_from_contact(contact)
+    upgrade_url = upgrade_url_from_contact(contact)
     upgrade_btn = (
         InlineKeyboardButton(text=upgrade_text, url=upgrade_url)
         if upgrade_url
@@ -55,7 +64,7 @@ def build_paywall_keyboard(
 
 
 def build_upgrade_only_keyboard(*, contact: str, upgrade_text: str) -> InlineKeyboardMarkup:
-    upgrade_url = _upgrade_url_from_contact(contact)
+    upgrade_url = upgrade_url_from_contact(contact)
     upgrade_btn = (
         InlineKeyboardButton(text=upgrade_text, url=upgrade_url)
         if upgrade_url

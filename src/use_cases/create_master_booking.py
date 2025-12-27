@@ -7,11 +7,14 @@ from enum import StrEnum
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import Booking, BookingCreate, Client, Master
 from src.schemas.enums import BookingStatus
 from src.use_cases.entitlements import EntitlementsService, Usage
+
+ev = EventLogger(__name__)
 
 
 class CreateMasterBookingError(StrEnum):
@@ -249,6 +252,13 @@ class CreateMasterBooking:
             )
         except self._Abort as abort:
             return abort.result
+
+        ev.info(
+            "booking.created_by_master",
+            booking_id=booking.id,
+            master_id=request.master_id,
+            client_id=request.client_id,
+        )
 
         warn_near_limit = usage is not None and bookings_limit is not None and not plan_is_pro
         return CreateMasterBookingResult(

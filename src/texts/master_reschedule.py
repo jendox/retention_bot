@@ -31,8 +31,7 @@ def broken_state(*, t: Translator = _noop_t) -> str:
 
 def date_out_of_range(*, today: date, max_day: date, t: Translator = _noop_t) -> str:
     return t(
-        f"Можно выбрать дату с {today.strftime('%d.%m.%Y')} "
-        f"по {max_day.strftime('%d.%m.%Y')}",
+        f"Можно выбрать дату с {today.strftime('%d.%m.%Y')} по {max_day.strftime('%d.%m.%Y')}",
     )
 
 
@@ -46,10 +45,7 @@ def slots_title(*, day: date, t: Translator = _noop_t) -> str:
 
 def confirm(*, client_name: str, day: str, time_str: str, t: Translator = _noop_t) -> str:
     return t(
-        "Подтверди перенос записи:\n\n"
-        f"👤 {client_name}\n"
-        f"📅 {day}\n"
-        f"⏰ {time_str}",
+        f"Подтверди перенос записи:\n\n👤 {client_name}\n📅 {day}\n⏰ {time_str}",
     )
 
 

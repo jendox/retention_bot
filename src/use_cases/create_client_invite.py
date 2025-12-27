@@ -2,10 +2,13 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.repositories import InviteRepository, MasterRepository
 from src.schemas import Invite
 from src.schemas.enums import InviteType
 from src.settings import get_settings
+
+ev = EventLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,10 @@ class CreateClientInvite:
         bot_username = self._bot_username or get_settings().telegram.bot_username
         link = f"https://t.me/{bot_username}?start=c_{invite.token}"
 
+        ev.info(
+            "invite.client_created",
+            master_id=master.id,
+        )
         return CreateClientInviteResult(
             token=invite.token,
             link=link,

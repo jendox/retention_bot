@@ -12,13 +12,13 @@ def title_add_client(*, t: Translator = _noop_t) -> str:
 
 # ----- Errors / alerts -----
 
+
 def err_for_preflight(error: CreateClientOfflineError | None, *, t: Translator = _noop_t) -> str:
     mapping: dict[CreateClientOfflineError | None, str] = {
         CreateClientOfflineError.MASTER_NOT_FOUND: t("⚠️ Профиль мастера не найден. Пройди регистрацию."),
         CreateClientOfflineError.INVALID_REQUEST: t("❌ Возникла ошибка. Попробуй ещё раз."),
         CreateClientOfflineError.PHONE_CONFLICT: t(
-            "ℹ️ Клиент с таким телефоном уже есть в твоей базе.\n"
-            "Проверь правильность введённого номера.",
+            "ℹ️ Клиент с таким телефоном уже есть в твоей базе.\nПроверь правильность введённого номера.",
         ),
         None: t("Неизвестная ошибка."),
     }
@@ -47,6 +47,7 @@ def ask_phone_conflict_retry(*, t: Translator = _noop_t) -> str:
 
 # ----- Flow texts -----
 
+
 def ask_name(*, t: Translator = _noop_t) -> str:
     return t("Добавим клиента ✍️\n\nКак зовут клиента?")
 
@@ -69,8 +70,5 @@ def phone_not_recognized(*, t: Translator = _noop_t) -> str:
 
 def confirm(*, name: str, phone: str, t: Translator = _noop_t) -> str:
     return t(
-        "Проверь, пожалуйста:\n\n"
-        f"<b>Имя:</b> {name}\n"
-        f"<b>Телефон:</b> {phone}\n"
-        "Всё верно?",
+        f"Проверь, пожалуйста:\n\n<b>Имя:</b> {name}\n<b>Телефон:</b> {phone}\nВсё верно?",
     )

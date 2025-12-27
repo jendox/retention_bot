@@ -7,23 +7,19 @@ from src.texts.base import Translator, noop_t as _noop_t
 
 def ask_name(*, t: Translator = _noop_t) -> str:
     return t(
-        "Привет! 👋\n"
-        "Давай настроим твой профиль мастера в BeautyDesk.\n\n"
-        "Как тебя зовут? (Например: Мария)",
+        "Привет! 👋\nДавай настроим твой профиль мастера в BeautyDesk.\n\nКак тебя зовут? (Например: Мария)",
     )
 
 
 def name_not_recognized(*, t: Translator = _noop_t) -> str:
     return t(
-        "Я не понял имя 🤔\n"
-        "Пожалуйста, напиши, как к тебе обращаться. Например: <b>Мария</b>",
+        "Я не понял имя 🤔\nПожалуйста, напиши, как к тебе обращаться. Например: <b>Мария</b>",
     )
 
 
 def name_too_long(*, max_len: int, t: Translator = _noop_t) -> str:
     return t(
-        "Имя слишком длинное 🤔\n"
-        f"Пожалуйста, введи имя короче (до <code>{max_len}</code> символов).",
+        f"Имя слишком длинное 🤔\nПожалуйста, введи имя короче (до <code>{max_len}</code> символов).",
     )
 
 
@@ -36,8 +32,7 @@ def ask_phone(*, name: str, t: Translator = _noop_t) -> str:
 
 def phone_not_recognized(*, t: Translator = _noop_t) -> str:
     return t(
-        "Не смог разобрать номер 🤔\n\n"
-        "Пожалуйста, введи реальный номер в формате <code>375291234567</code>:",
+        "Не смог разобрать номер 🤔\n\nПожалуйста, введи реальный номер в формате <code>375291234567</code>:",
     )
 
 
@@ -127,9 +122,7 @@ def creating_profile(*, t: Translator = _noop_t) -> str:
 
 def done(*, t: Translator = _noop_t) -> str:
     return t(
-        "Готово! 🎉\n\n"
-        "Твой профиль мастера создан.\n"
-        "Теперь ты можешь принимать клиентов и вести записи в BeautyDesk.",
+        "Готово! 🎉\n\nТвой профиль мастера создан.\nТеперь ты можешь принимать клиентов и вести записи в BeautyDesk.",
     )
 
 

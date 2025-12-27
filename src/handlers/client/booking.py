@@ -140,6 +140,7 @@ async def start_client_add_booking(
     bind_log_context(flow="client_booking", step="start")
     if not await rate_limit_message(message, rate_limiter, name="client_booking:start", ttl_sec=2):
         return
+    ev.info("client_booking.start")
     await track_message(state, message, bucket=BOOKING_BUCKET)
     telegram_id = message.from_user.id
     async with session_local() as session:
@@ -147,11 +148,13 @@ async def start_client_add_booking(
         try:
             client = await repo.get_details_by_telegram_id(telegram_id)
         except ClientNotFound:
+            ev.warning("client_booking.client_not_found")
             await message.answer(CLIENT_NOT_FOUND_MESSAGE)
             return
         masters = client.masters
 
     if not masters:
+        ev.info("client_booking.start_result", outcome="no_masters")
         await message.answer(no_masters())
         return
 
@@ -163,9 +166,11 @@ async def start_client_add_booking(
 
     if len(masters) == 1:
         master = masters[0]
+        ev.info("client_booking.start_result", outcome="single_master", master_id=int(master.id))
         await start_booking_for_master(message, state, master.id)
         return
 
+    ev.info("client_booking.start_result", outcome="choose_master", masters_count=len(masters))
     await answer_tracked(
         message,
         state,
@@ -188,6 +193,7 @@ async def booking_select_master(callback: CallbackQuery, state: FSMContext) -> N
 
     _, _, master_id = callback.data.split(":")
     master_id = int(master_id)
+    ev.info("client_booking.master_selected", master_id=master_id)
     await start_booking_for_master(callback.message, state, master_id)
 
 
@@ -197,12 +203,14 @@ async def start_booking_for_master(
     master_id: int,
 ) -> None:
     bind_log_context(flow="client_booking", step="start_for_master")
+    ev.info("client_booking.start_for_master", master_id=int(master_id))
     await state.update_data(master_id=master_id)
 
     async with session_local() as session:
         entitlements = EntitlementsService(session)
         check = await entitlements.can_create_booking(master_id=master_id)
         if not check.allowed:
+            ev.info("client_booking.booking_limit_reached", master_id=int(master_id))
             await cleanup_messages(state, message.bot, bucket=BOOKING_BUCKET)
             await state.clear()
             await message.answer(booking_limit_reached())
@@ -272,6 +280,7 @@ async def _handle_calendar_cancel(callback: CallbackQuery, state: FSMContext, *,
 async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContext, *, picked_date: datetime) -> None:
     ctx = await _load_calendar_context(state)
     if ctx is None:
+        ev.warning("client_booking.state_invalid", reason="missing_master_or_timezone")
         await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_master_or_timezone")
         return
     master_id, client_timezone = ctx
@@ -288,6 +297,11 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
             client_tz_info=client_tz_info,
         )
         if not allowed:
+            ev.info(
+                "client_booking.day_rejected",
+                master_id=int(master_id),
+                day=str(client_day),
+            )
             await callback.answer(
                 text=available_dates(min_date=min_date, max_date=max_date, pro_max_date=pro_max_date),
                 show_alert=True,
@@ -313,6 +327,7 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
         )
 
     if not result.slots_utc:
+        ev.info("client_booking.no_slots", master_id=int(master_id), day=str(client_day))
         await callback.answer(no_available_slots(), show_alert=False)
         if callback.message is not None:
             calendar = SimpleCalendar()
@@ -326,6 +341,7 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
             )
         return
 
+    ev.info("client_booking.slots_loaded", master_id=int(master_id), day=str(client_day), slots=len(result.slots_utc))
     slots_iso = [dt.isoformat() for dt in result.slots_utc]
     await state.update_data(
         booking_slots_utc=slots_iso,
@@ -367,6 +383,7 @@ async def process_booking_calendar(
     if not selected:
         return
 
+    ev.info("client_booking.day_selected", day=str(picked_date.date()))
     await _handle_booking_day_selected(callback, state, picked_date=picked_date)
 
 
@@ -391,6 +408,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
         return
 
     if index < 0 or index >= len(slots_iso):
+        ev.warning("client_booking.input_invalid", field="slot_index", reason="out_of_range", index=index)
         await callback.answer(incorrect_slot(), show_alert=True)
         return
 
@@ -400,6 +418,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
     slot_dt_client = slot_dt_utc.astimezone(get_timezone(str(client_timezone.value)))
 
     await state.update_data(selected_slot_index=index)
+    ev.info("client_booking.slot_selected", index=int(index))
 
     if callback.message is not None:
         await safe_edit_text(
@@ -420,6 +439,7 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 )
 async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="client_booking", step="cancel")
+    ev.info("client_booking.cancel")
     await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
@@ -438,6 +458,7 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
 )
 async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="client_booking", step="cancel_flow")
+    ev.info("client_booking.cancel_flow")
     await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
@@ -459,6 +480,7 @@ async def booking_confirm(
     bind_log_context(flow="client_booking", step="confirm")
     if not await rate_limit_callback(callback, rate_limiter, name="client_booking:confirm", ttl_sec=2):
         return
+    ev.info("client_booking.confirm")
     await _booking_confirm_impl(callback=callback, state=state, notifier=notifier, rate_limiter=rate_limiter)
 
 
@@ -479,6 +501,7 @@ async def _booking_confirm_impl(
     client_name = data.get("client_name", "")
 
     if master_id is None or index is None or client_id is None or not slots_iso:
+        ev.warning("client_booking.state_invalid", reason="missing_confirm_data")
         await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_confirm_data")
         return
 
@@ -496,6 +519,7 @@ async def _booking_confirm_impl(
 
         if not result.ok:
             if result.error == CreateClientBookingError.QUOTA_EXCEEDED:
+                ev.info("client_booking.create_failed", error="quota_exceeded", master_id=int(master_id))
                 await callback.answer(text=booking_limit_reached(), show_alert=True)
                 await _maybe_notify_master_bookings_limit_paywall(
                     notifier=notifier,
@@ -504,16 +528,20 @@ async def _booking_confirm_impl(
                 )
                 return
             if result.error == CreateClientBookingError.SLOT_NOT_AVAILABLE:
+                ev.info("client_booking.create_failed", error="slot_not_available", master_id=int(master_id))
                 await _recover_after_slot_not_available(callback=callback, state=state)
                 return
+            ev.warning("client_booking.create_failed", error=str(result.error.value) if result.error else None)
             await callback.answer(state_broken_alert(), show_alert=True)
             return
 
         booking = result.booking
         master = result.master
         if booking is None or master is None:
+            ev.warning("client_booking.state_invalid", reason="missing_result_objects")
             await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_result_objects")
             return
+        ev.info("client_booking.created", booking_id=int(booking.id), master_id=int(master.id))
     await callback.answer()
 
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)

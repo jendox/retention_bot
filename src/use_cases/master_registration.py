@@ -21,11 +21,14 @@ from enum import StrEnum
 
 from sqlalchemy.exc import IntegrityError
 
+from src.observability.events import EventLogger
 from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository, SubscriptionRepository
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
 from src.security.master_invites import verify_master_invite_token
+
+ev = EventLogger(__name__)
 
 
 class StartMasterRegistrationOutcome(StrEnum):
@@ -82,6 +85,11 @@ class StartMasterRegistration:
         is_client = await self._check_if_client(request.telegram_id)
 
         if is_master:
+            ev.info(
+                "master_registration.start_outcome",
+                outcome=str(StartMasterRegistrationOutcome.ALREADY_MASTER.value),
+                is_client=bool(is_client),
+            )
             return StartMasterRegistrationResult(
                 outcome=StartMasterRegistrationOutcome.ALREADY_MASTER,
                 is_client=is_client,
@@ -89,22 +97,44 @@ class StartMasterRegistration:
 
         if request.invite_only:
             if not request.token:
+                ev.info(
+                    "master_registration.start_outcome",
+                    outcome=str(StartMasterRegistrationOutcome.INVITE_REQUIRED.value),
+                    is_client=bool(is_client),
+                )
                 return StartMasterRegistrationResult(
                     outcome=StartMasterRegistrationOutcome.INVITE_REQUIRED,
                     is_client=is_client,
                 )
             if not request.invite_secret:
+                ev.info(
+                    "master_registration.start_outcome",
+                    outcome=str(StartMasterRegistrationOutcome.INVITE_INVALID.value),
+                    is_client=bool(is_client),
+                    reason="missing_invite_secret",
+                )
                 return StartMasterRegistrationResult(
                     outcome=StartMasterRegistrationOutcome.INVITE_INVALID,
                     is_client=is_client,
                 )
             claims = verify_master_invite_token(secret=request.invite_secret, token=request.token)
             if claims is None:
+                ev.info(
+                    "master_registration.start_outcome",
+                    outcome=str(StartMasterRegistrationOutcome.INVITE_INVALID.value),
+                    is_client=bool(is_client),
+                    reason="invalid_token",
+                )
                 return StartMasterRegistrationResult(
                     outcome=StartMasterRegistrationOutcome.INVITE_INVALID,
                     is_client=is_client,
                 )
 
+        ev.info(
+            "master_registration.start_outcome",
+            outcome=str(StartMasterRegistrationOutcome.START_FSM.value),
+            is_client=bool(is_client),
+        )
         return StartMasterRegistrationResult(
             outcome=StartMasterRegistrationOutcome.START_FSM,
             is_client=is_client,
@@ -171,8 +201,18 @@ class CompleteMasterRegistration:
             trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
             await subscription_repo.upsert_trial(master.id, trial_until)
 
+        ev.info(
+            "master_registration.completed",
+            master_id=master.id,
+            outcome=str(
+                CompleteMasterRegistrationOutcome.CREATED.value
+                if created
+                else CompleteMasterRegistrationOutcome.ALREADY_EXISTS.value,
+            ),
+        )
         return CompleteMasterRegistrationResult(
-            outcome=CompleteMasterRegistrationOutcome.CREATED if created
+            outcome=CompleteMasterRegistrationOutcome.CREATED
+            if created
             else CompleteMasterRegistrationOutcome.ALREADY_EXISTS,
             master_id=master.id,
         )

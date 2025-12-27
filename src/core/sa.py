@@ -1,4 +1,3 @@
-import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,7 +18,6 @@ __all__ = (
 
 URL_PARTS = 2
 
-logger = logging.getLogger("db.sa")
 ev = EventLogger("db.sa")
 
 
@@ -43,15 +41,17 @@ class Database:
         )
         _setup_query_observability(cls.engine)
         cls.session_maker = async_sessionmaker(
-            cls.engine, expire_on_commit=False, class_=AsyncSession,
+            cls.engine,
+            expire_on_commit=False,
+            class_=AsyncSession,
         )
-        logger.info("db.engine.initialized", extra={"url": _redact_url(url)})
+        ev.info("db.engine.initialized", url=_redact_url(url))
 
     @classmethod
     async def _close(cls) -> None:
         if cls.engine is not None:
             await cls.engine.dispose()
-            logger.info("db.engine.closed")
+            ev.info("db.engine.closed")
         cls.engine = None
         cls.session_maker = None
 

@@ -19,6 +19,7 @@ ev = EventLogger(__name__)
 @router.callback_query(F.data == "paywall:contact")
 async def paywall_contact(callback: CallbackQuery) -> None:
     bind_log_context(flow="paywall", step="contact")
+    ev.info("paywall.contact")
     await callback.answer()
     contact = get_settings().billing.contact
     await callback.bot.send_message(
@@ -31,6 +32,7 @@ async def paywall_contact(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "paywall:close")
 async def paywall_close(callback: CallbackQuery) -> None:
     bind_log_context(flow="paywall", step="close")
+    ev.info("paywall.close")
     await callback.answer()
     if callback.message is None:
         return
@@ -42,6 +44,7 @@ async def paywall_close(callback: CallbackQuery) -> None:
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == "paywall:back:clients_menu")
 async def paywall_back_clients_menu(callback: CallbackQuery) -> None:
     bind_log_context(flow="paywall", step="back_clients_menu")
+    ev.info("paywall.back_clients_menu")
     await callback.answer()
     if callback.message is None:
         return

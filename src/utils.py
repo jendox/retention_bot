@@ -1,4 +1,4 @@
-import logging
+import hashlib
 from collections.abc import Iterable
 
 import phonenumbers
@@ -8,7 +8,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from phonenumbers.phonenumberutil import NumberParseException
 
-logger = logging.getLogger(__name__)
+from src.observability.events import EventLogger
+
+ev = EventLogger(__name__)
+
+_CHAT_ID_HASH_LEN = 12
+
+
+def _hash_chat_id(chat_id: int) -> str:
+    return hashlib.sha256(str(int(chat_id)).encode("utf-8")).hexdigest()[:_CHAT_ID_HASH_LEN]
+
 
 BUCKET_KEY = "_gc_buckets"
 BucketName = str
@@ -73,14 +82,19 @@ async def _delete_message_best_effort(
     except (TelegramBadRequest, TelegramAPIError) as exc:
         error_text = str(exc)
         if isinstance(exc, TelegramBadRequest) and _is_delete_race(exc):
-            logger.debug(
+            ev.debug(
                 "message_gc.delete_skipped",
-                extra={"chat_id": chat_id, "message_id": message_id, "error": error_text},
+                chat_id_hash=_hash_chat_id(chat_id),
+                message_id=message_id,
+                error=error_text,
             )
         else:
-            logger.warning(
+            ev.warning(
                 "message_gc.delete_failed",
-                extra={"chat_id": chat_id, "message_id": message_id, "error": error_text},
+                chat_id_hash=_hash_chat_id(chat_id),
+                message_id=message_id,
+                error=error_text,
+                error_type=type(exc).__name__,
             )
         if not ignore_errors:
             raise
@@ -256,9 +270,9 @@ async def notify_admins(
     for admin_id in admin_ids:
         try:
             await bot.send_message(chat_id=int(admin_id), text=text, parse_mode=parse_mode)
-        except TelegramAPIError:
-            logger.warning(
+        except TelegramAPIError as exc:
+            ev.warning(
                 "admin.notify_failed",
-                extra={"admin_id": int(admin_id)},
-                exc_info=True,
+                admin_id_hash=_hash_chat_id(int(admin_id)),
+                error_type=type(exc).__name__,
             )

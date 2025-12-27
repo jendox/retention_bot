@@ -12,7 +12,6 @@ Entry point is `start_master_registration(...)`, which can be called with an opt
 Invite validation and "already a master" checks are performed in `StartMasterRegistration` use-case.
 """
 
-import logging
 from datetime import datetime, time
 
 from aiogram import Bot, F, Router
@@ -50,7 +49,6 @@ from src.utils import (
 )
 
 router = Router(name=__name__)
-logger = logging.getLogger(__name__)
 ev = EventLogger(__name__)
 
 MASTER_REGISTRATION_BUCKET = "master_registration"
@@ -81,6 +79,7 @@ _SLOT_SIZE_STEP_MINUTES = 5
 
 
 # ------------ helpers ------------
+
 
 def _normalize_token(token: str | None) -> str | None:
     return (token or "").strip() or None
@@ -287,6 +286,7 @@ async def _handle_start_result(
 
 
 # ------------ handlers ------------
+
 
 async def start_master_registration(  # noqa: C901
     message: Message,

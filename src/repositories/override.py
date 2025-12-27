@@ -9,10 +9,7 @@ from src.schemas import WorkdayOverride, WorkdayOverrideCreate
 
 class WorkdayOverrideRepository(BaseRepository):
     async def get_for_master(self, master_id: int) -> list[WorkdayOverride]:
-        stmt = (
-            select(WorkdayOverrideEntity)
-            .where(WorkdayOverrideEntity.master_id == master_id)
-        )
+        stmt = select(WorkdayOverrideEntity).where(WorkdayOverrideEntity.master_id == master_id)
         result = await self._session.execute(stmt)
         return [WorkdayOverride.model_validate(entity) for entity in result.scalars().all()]
 
@@ -48,12 +45,9 @@ class WorkdayOverrideRepository(BaseRepository):
         master_id: int,
         date: date_type,
     ) -> WorkdayOverride | None:
-        stmt = (
-            select(WorkdayOverrideEntity)
-            .where(
-                WorkdayOverrideEntity.master_id == master_id,
-                WorkdayOverrideEntity.date == date,
-            )
+        stmt = select(WorkdayOverrideEntity).where(
+            WorkdayOverrideEntity.master_id == master_id,
+            WorkdayOverrideEntity.date == date,
         )
         entity = await self._session.scalar(stmt)
 

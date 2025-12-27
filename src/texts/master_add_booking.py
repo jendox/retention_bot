@@ -36,8 +36,7 @@ def choose_date(*, t: Translator = _noop_t) -> str:
 
 def date_out_of_range(*, today: date, max_date: date, t: Translator = _noop_t) -> str:
     return t(
-        f"Можно выбрать дату с {today.strftime('%d.%m.%Y')} "
-        f"по {max_date.strftime('%d.%m.%Y')}",
+        f"Можно выбрать дату с {today.strftime('%d.%m.%Y')} по {max_date.strftime('%d.%m.%Y')}",
     )
 
 
@@ -51,9 +50,7 @@ def slots_title(*, day: date, t: Translator = _noop_t) -> str:
 
 def confirm_booking(*, client_name: str, slot_str: str, t: Translator = _noop_t) -> str:
     return t(
-        "Подтверди запись:\n\n"
-        f"Клиент: {client_name}\n"
-        f"Дата/время: {slot_str}",
+        f"Подтверди запись:\n\nКлиент: {client_name}\nДата/время: {slot_str}",
     )
 
 

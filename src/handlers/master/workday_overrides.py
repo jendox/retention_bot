@@ -284,8 +284,10 @@ async def start_overrides(callback: CallbackQuery, state: FSMContext, rate_limit
     bind_log_context(flow="master_overrides", step="start")
     if not await rate_limit_callback(callback, rate_limiter, name="master_overrides:start", ttl_sec=1):
         return
+    ev.info("master_overrides.start")
     await callback.answer()
     if callback.message is None:
+        ev.warning("master_overrides.state_invalid", reason="missing_message")
         return
 
     await cleanup_messages(state, callback.bot, bucket=OVERRIDES_BUCKET)
@@ -327,8 +329,10 @@ async def pick_override_day(
         return
 
     try:
+        ev.info("master_overrides.day_selected", day=str(picked_dt.date()))
         await _render_day_menu_main(state, bot=callback.bot, telegram_id=callback.from_user.id, day=picked_dt.date())
     except MasterNotFound:
+        ev.warning("master_overrides.master_not_found")
         await callback.answer(common_txt.generic_error(), show_alert=True)
         await state.clear()
 
@@ -340,6 +344,7 @@ async def pick_override_day(
 )
 async def back_to_schedule(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_overrides", step="back_schedule")
+    ev.info("master_overrides.back_to_schedule")
     await callback.answer()
     await _back_to_schedule(callback, state)
 
@@ -351,11 +356,13 @@ async def back_to_schedule(callback: CallbackQuery, state: FSMContext) -> None:
 )
 async def make_day_off(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_overrides", step="day_off")
+    ev.info("master_overrides.make_day_off")
     await callback.answer()
     data = await state.get_data()
     day = _get_day_from_state(data)
     master_id = _get_master_id_from_state(data)
     if day is None or master_id is None:
+        ev.warning("master_overrides.state_invalid", reason="missing_day_or_master")
         await callback.answer(common_txt.context_lost(), show_alert=True)
         await state.clear()
         return
@@ -364,12 +371,14 @@ async def make_day_off(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         master = await _load_master_for_schedule(telegram_id=telegram_id)
     except MasterNotFound:
+        ev.warning("master_overrides.master_not_found")
         await callback.answer(common_txt.generic_error(), show_alert=True)
         await state.clear()
         return
     bookings = await _bookings_for_master_day(master_id=master_id, master_tz=master.timezone, day=day)
     conflicts = _conflicts_for_window(bookings=bookings, master_tz=master.timezone, window=None)
     if conflicts:
+        ev.info("master_overrides.conflicts", action="day_off", conflicts=len(conflicts))
         await _edit_main(
             state,
             bot=callback.bot,
@@ -385,6 +394,7 @@ async def make_day_off(callback: CallbackQuery, state: FSMContext) -> None:
         await _clear_override(master_id=master_id, day=day)
     else:
         await _apply_override(master_id=master_id, day=day, start_time=None, end_time=None)
+    ev.info("master_overrides.day_off_set", day=str(day))
     await _render_day_menu_main(state, bot=callback.bot, telegram_id=telegram_id, day=day)
 
 
@@ -395,11 +405,13 @@ async def make_day_off(callback: CallbackQuery, state: FSMContext) -> None:
 )
 async def make_working(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_overrides", step="make_working")
+    ev.info("master_overrides.make_working")
     await callback.answer()
     data = await state.get_data()
     day = _get_day_from_state(data)
     master_id = _get_master_id_from_state(data)
     if day is None or master_id is None:
+        ev.warning("master_overrides.state_invalid", reason="missing_day_or_master")
         await callback.answer(common_txt.context_lost(), show_alert=True)
         await state.clear()
         return
@@ -407,6 +419,7 @@ async def make_working(callback: CallbackQuery, state: FSMContext) -> None:
     try:
         master = await _load_master_for_schedule(telegram_id=callback.from_user.id)
     except MasterNotFound:
+        ev.warning("master_overrides.master_not_found")
         await callback.answer(common_txt.generic_error(), show_alert=True)
         await state.clear()
         return
@@ -417,6 +430,7 @@ async def make_working(callback: CallbackQuery, state: FSMContext) -> None:
     bookings = await _bookings_for_master_day(master_id=master_id, master_tz=master.timezone, day=day)
     conflicts = _conflicts_for_window(bookings=bookings, master_tz=master.timezone, window=desired_window)
     if conflicts:
+        ev.info("master_overrides.conflicts", action="make_working", conflicts=len(conflicts))
         await _edit_main(
             state,
             bot=callback.bot,
@@ -437,6 +451,7 @@ async def make_working(callback: CallbackQuery, state: FSMContext) -> None:
     else:
         await _clear_override(master_id=master_id, day=day)
 
+    ev.info("master_overrides.working_set", day=str(day))
     await _render_day_menu_main(state, bot=callback.bot, telegram_id=callback.from_user.id, day=day)
 
 
@@ -447,6 +462,7 @@ async def make_working(callback: CallbackQuery, state: FSMContext) -> None:
 )
 async def prompt_start(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_overrides", step="set_hours_start")
+    ev.info("master_overrides.set_hours_start")
     await callback.answer()
     await _edit_main(
         state,
@@ -468,6 +484,7 @@ async def read_start(message: Message, state: FSMContext, rate_limiter: RateLimi
 
     start_time = _parse_hhmm(message.text or "")
     if start_time is None:
+        ev.debug("master_overrides.input_invalid", field="start_time", reason="invalid")
         await cleanup_messages(state, message.bot, bucket=OVERRIDES_BUCKET)
         await _edit_main(
             state,
@@ -481,6 +498,7 @@ async def read_start(message: Message, state: FSMContext, rate_limiter: RateLimi
 
     await cleanup_messages(state, message.bot, bucket=OVERRIDES_BUCKET)
     await state.update_data(override_start=start_time.strftime("%H:%M"))
+    ev.info("master_overrides.start_time_set")
     await _edit_main(
         state,
         bot=message.bot,
@@ -505,12 +523,14 @@ async def read_end(message: Message, state: FSMContext, rate_limiter: RateLimite
     start_raw = data.get("override_start")
     start_time = _parse_hhmm(str(start_raw)) if start_raw else None
     if day is None or master_id is None or start_time is None:
+        ev.warning("master_overrides.state_invalid", reason="missing_day_master_start")
         await message.answer(common_txt.context_lost())
         await state.clear()
         return
 
     end_time = _parse_hhmm(message.text or "")
     if end_time is None:
+        ev.debug("master_overrides.input_invalid", field="end_time", reason="invalid")
         await cleanup_messages(state, message.bot, bucket=OVERRIDES_BUCKET)
         await _edit_main(
             state,
@@ -523,6 +543,7 @@ async def read_end(message: Message, state: FSMContext, rate_limiter: RateLimite
         return
 
     if datetime.combine(day, end_time) <= datetime.combine(day, start_time):
+        ev.debug("master_overrides.input_invalid", field="end_time", reason="before_start")
         await cleanup_messages(state, message.bot, bucket=OVERRIDES_BUCKET)
         await _edit_main(
             state,
@@ -537,12 +558,14 @@ async def read_end(message: Message, state: FSMContext, rate_limiter: RateLimite
     try:
         master = await _load_master_for_schedule(telegram_id=message.from_user.id)
     except MasterNotFound:
+        ev.warning("master_overrides.master_not_found")
         await message.answer(common_txt.generic_error())
         await state.clear()
         return
     bookings = await _bookings_for_master_day(master_id=master_id, master_tz=master.timezone, day=day)
     conflicts = _conflicts_for_window(bookings=bookings, master_tz=master.timezone, window=(start_time, end_time))
     if conflicts:
+        ev.info("master_overrides.conflicts", action="set_hours", conflicts=len(conflicts))
         await cleanup_messages(state, message.bot, bucket=OVERRIDES_BUCKET)
         await _edit_main(
             state,
@@ -556,6 +579,7 @@ async def read_end(message: Message, state: FSMContext, rate_limiter: RateLimite
 
     await cleanup_messages(state, message.bot, bucket=OVERRIDES_BUCKET)
     await _apply_override(master_id=master_id, day=day, start_time=start_time, end_time=end_time)
+    ev.info("master_overrides.hours_set", day=str(day))
     await _render_day_menu_main(state, bot=message.bot, telegram_id=message.from_user.id, day=day)
 
 

@@ -45,6 +45,7 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         async def _raise_not_found(_telegram_id: int):
             from src.repositories.master import MasterNotFound
+
             raise MasterNotFound()
 
         master_repo = SimpleNamespace(get_by_telegram_id=AsyncMock(side_effect=_raise_not_found))
@@ -69,6 +70,7 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         async def _raise_not_found(_telegram_id: int):
             from src.repositories.master import MasterNotFound
+
             raise MasterNotFound()
 
         master_repo = SimpleNamespace(get_by_telegram_id=AsyncMock(side_effect=_raise_not_found))
@@ -94,6 +96,7 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         async def _raise_not_found(_telegram_id: int):
             from src.repositories.master import MasterNotFound
+
             raise MasterNotFound()
 
         master_repo = SimpleNamespace(get_by_telegram_id=AsyncMock(side_effect=_raise_not_found))

@@ -5,12 +5,15 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import InviteRepository, MasterNotFound, MasterRepository
 from src.schemas import Invite
 from src.schemas.enums import InviteType
 from src.settings import get_settings
 from src.use_cases.entitlements import EntitlementsService, PlanInfo, Usage
+
+ev = EventLogger(__name__)
 
 
 class CreateMasterClientInviteOutcome(StrEnum):
@@ -49,6 +52,7 @@ class CreateMasterClientInvite:
         try:
             master = await self._master_repo.get_by_telegram_id(master_telegram_id)
         except MasterNotFound:
+            ev.warning("invite_client.master_not_found")
             return CreateMasterClientInviteResult(outcome=CreateMasterClientInviteOutcome.MASTER_NOT_FOUND)
 
         plan = await self._entitlements.get_plan(master_id=master.id)
@@ -57,6 +61,12 @@ class CreateMasterClientInvite:
 
         allowed = bool(plan.is_pro or usage.clients_count < int(clients_limit))
         if not allowed:
+            ev.info(
+                "invite_client.quota_exceeded",
+                master_id=master.id,
+                current=usage.clients_count,
+                limit=clients_limit,
+            )
             return CreateMasterClientInviteResult(
                 outcome=CreateMasterClientInviteOutcome.QUOTA_EXCEEDED,
                 plan=plan,
@@ -73,6 +83,10 @@ class CreateMasterClientInvite:
         bot_username = get_settings().telegram.bot_username
         link = f"https://t.me/{bot_username}?start=c_{invite.token}"
 
+        ev.info(
+            "invite_client.created",
+            master_id=master.id,
+        )
         return CreateMasterClientInviteResult(
             outcome=CreateMasterClientInviteOutcome.OK,
             invite_link=link,

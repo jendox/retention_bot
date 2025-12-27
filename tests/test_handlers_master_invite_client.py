@@ -137,4 +137,4 @@ class MasterInviteClientHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.message.answer.assert_awaited()
         sent_text = callback.message.answer.await_args.args[0]
         self.assertIn("&lt;b&gt;M&lt;/b&gt;", sent_text)
-        self.assertIn("href=\"https://t.me/x?start=&quot;bad&quot;\"", sent_text)
+        self.assertIn('href="https://t.me/x?start=&quot;bad&quot;"', sent_text)

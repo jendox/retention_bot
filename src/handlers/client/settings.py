@@ -236,6 +236,7 @@ async def _handle_set_timezone(
     try:
         tz = Timezone(raw_tz)
     except ValueError:
+        ev.debug("client_settings.input_invalid", field="timezone", reason="invalid")
         await callback.answer(txt.invalid_timezone(), show_alert=True)
         return
 
@@ -243,6 +244,7 @@ async def _handle_set_timezone(
         repo = ClientRepository(session)
         await repo.update_by_id(client_id, ClientUpdate(timezone=tz))
 
+    ev.info("client_settings.timezone_updated", tz=str(tz.value))
     await callback.answer(txt.timezone_updated())
     await _edit_main_or_context_lost(
         callback,
@@ -265,6 +267,7 @@ async def _handle_toggle_notify(
         repo = ClientRepository(session)
         await repo.update_by_id(client_id, ClientUpdate(notifications_enabled=new_value))
 
+    ev.info("client_settings.notifications_toggled", enabled=bool(new_value))
     await callback.answer(txt.saved())
     await _edit_main_or_context_lost(
         callback,
@@ -295,6 +298,7 @@ def _kb_phone_prompt() -> InlineKeyboardMarkup:
 async def _handle_edit_phone(callback: CallbackQuery, *, state: FSMContext) -> None:
     await callback.answer()
     await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+    ev.info("client_settings.edit_phone_start")
     ok = await safe_edit_text(
         callback.message,
         text=txt.ask_new_phone(),
@@ -313,6 +317,7 @@ async def _load_client_or_alert(callback: CallbackQuery, state: FSMContext, *, t
     try:
         return await _load_client(telegram_id)
     except ClientNotFound:
+        ev.warning("client_settings.client_not_found")
         await callback.answer(txt.client_only_alert(), show_alert=True)
         await _clear_main_ref(state)
         return None
@@ -356,6 +361,7 @@ async def _settings_callbacks_impl(*, callback: CallbackQuery, state: FSMContext
     telegram_id = callback.from_user.id
     data = callback.data or ""
     action, arg = _parse_action(data)
+    ev.info("client_settings.action", action=str(action))
 
     if action == "back":
         await _handle_back(callback, state)
@@ -439,6 +445,7 @@ async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimi
     raw = (message.text or "").strip()
     phone = validate_phone(raw)
     if phone is None:
+        ev.debug("client_settings.input_invalid", field="phone", reason="invalid")
         await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
         data = await state.get_data()
         ref = _get_main_ref(data, telegram_id=message.from_user.id)
@@ -463,6 +470,7 @@ async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimi
     try:
         client = await _load_client(telegram_id)
     except ClientNotFound:
+        ev.warning("client_settings.client_not_found")
         await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
         await message.answer(txt.client_only())
         await _clear_main_ref(state)
@@ -473,6 +481,7 @@ async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimi
         repo = ClientRepository(session)
         await repo.update_by_id(client.id, ClientUpdate(phone=phone))
 
+    ev.info("client_settings.phone_updated")
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await _render_and_edit_main(state=state, bot=message.bot, telegram_id=telegram_id)
     await state.set_state(None)

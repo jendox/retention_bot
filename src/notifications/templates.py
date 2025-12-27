@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 
 from src.notifications.context import BookingContext, LimitsContext, ReminderContext
 from src.notifications.types import NotificationEvent, RecipientKind
+from src.observability.events import EventLogger
 
-logger = logging.getLogger("notification_template")
+ev = EventLogger("notification_template")
 
 
 def _limit_str(value: int | None) -> str:
@@ -48,14 +48,10 @@ BOOKING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Booki
         "Подтвердить запись?"
     ),
     (NotificationEvent.BOOKING_CANCELLED_BY_CLIENT, RecipientKind.MASTER): lambda context: (
-        "❌ Клиент отменил запись.\n\n"
-        f"<b>Клиент:</b> {context.client_name}\n"
-        f"<b>Дата и время:</b> {context.slot_str}"
+        f"❌ Клиент отменил запись.\n\n<b>Клиент:</b> {context.client_name}\n<b>Дата и время:</b> {context.slot_str}"
     ),
     (NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER_NOTICE, RecipientKind.MASTER): lambda context: (
-        "🔄 Запись перенесена.\n\n"
-        f"<b>Клиент:</b> {context.client_name}\n"
-        f"<b>Новая дата и время:</b> {context.slot_str}"
+        f"🔄 Запись перенесена.\n\n<b>Клиент:</b> {context.client_name}\n<b>Новая дата и время:</b> {context.slot_str}"
     ),
     # Pro
     (NotificationEvent.BOOKING_CONFIRMED, RecipientKind.CLIENT): lambda context: (
@@ -107,8 +103,7 @@ REMINDER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Remi
         "До встречи 🙂"
     ),
     (NotificationEvent.FOLLOWUP_THANK_YOU, RecipientKind.CLIENT): lambda context: (
-        "💛 Спасибо за визит!\n\n"
-        "Если захочешь записаться снова — открой «➕ Записаться» в BeautyDesk."
+        "💛 Спасибо за визит!\n\nЕсли захочешь записаться снова — открой «➕ Записаться» в BeautyDesk."
     ),
 }
 
@@ -116,28 +111,24 @@ REMINDER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Remi
 def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind, context: LimitsContext) -> str:
     fn = LIMITS_TEMPLATES.get((event, recipient))
     if fn is None:
-        logger.debug(
-            "unsupported_template",
-            extra={"event": event.value, "recipient": recipient.value},
-        )
+        ev.debug("notifications.unsupported_template", template="limits", event=event.value, recipient=recipient.value)
     return fn(context) if fn else ""
 
 
 def render_booking_template(*, event: NotificationEvent, recipient: RecipientKind, context: BookingContext) -> str:
     fn = BOOKING_TEMPLATES.get((event, recipient))
     if fn is None:
-        logger.debug(
-            "unsupported_template",
-            extra={"event": event.value, "recipient": recipient.value},
-        )
+        ev.debug("notifications.unsupported_template", template="booking", event=event.value, recipient=recipient.value)
     return fn(context) if fn else ""
 
 
 def render_reminder_template(*, event: NotificationEvent, recipient: RecipientKind, context: ReminderContext) -> str:
     fn = REMINDER_TEMPLATES.get((event, recipient))
     if fn is None:
-        logger.debug(
-            "unsupported_template",
-            extra={"event": event.value, "recipient": recipient.value},
+        ev.debug(
+            "notifications.unsupported_template",
+            template="reminder",
+            event=event.value,
+            recipient=recipient.value,
         )
     return fn(context) if fn else ""

@@ -21,5 +21,3 @@ class AdminPlanRenderTests(unittest.TestCase):
         text = h._render_plan_text(title="T", plan=plan, usage=usage, horizon_days=60)
 
         self.assertIn("∞", text)
-
-

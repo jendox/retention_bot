@@ -30,6 +30,7 @@ class MasterBase(BaseModel):
 class MasterCreate(MasterBase):
     def to_db_entity(self):
         from src.models import Master as MasterEntity
+
         return MasterEntity(**self.model_dump())
 
 
@@ -82,6 +83,7 @@ class Master(MasterBase):
 
 # ---------- WorkdayOverride ----------
 
+
 class MasterWithOverrides(Master):
     overrides: list[WorkdayOverride] = Field(default_factory=list)
 
@@ -113,6 +115,7 @@ class MasterWithClients(Master):
 
 # ---------- Client ----------
 
+
 class BaseClient(BaseModel):
     telegram_id: int | None = Field(default=None)
     name: str
@@ -124,6 +127,7 @@ class BaseClient(BaseModel):
 class ClientCreate(BaseClient):
     def to_db_entity(self):
         from src.models import Client as ClientEntity
+
         return ClientEntity(**self.model_dump())
 
 

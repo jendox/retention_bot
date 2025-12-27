@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from aiogram.exceptions import TelegramAPIError
@@ -9,7 +8,6 @@ from aiogram.types import ErrorEvent
 from src.observability.alerts import AdminAlerter
 from src.observability.events import EventLogger
 
-logger = logging.getLogger(__name__)
 ev = EventLogger(__name__)
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -8,12 +7,13 @@ from enum import StrEnum
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.schemas import Booking, BookingCreate, Master
 from src.use_cases.entitlements import EntitlementsService, Usage
 
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 
 class CreateClientBookingError(StrEnum):
@@ -231,13 +231,11 @@ class CreateClientBooking:
         except self._Abort as abort:
             return abort.result
 
-        logger.info(
+        ev.info(
             "booking.created_by_client",
-            extra={
-                "booking_id": booking.id,
-                "master_id": request.master_id,
-                "client_id": request.client_id,
-            },
+            booking_id=booking.id,
+            master_id=request.master_id,
+            client_id=request.client_id,
         )
 
         warn_near_limit = usage is not None and bookings_limit is not None and not plan_is_pro

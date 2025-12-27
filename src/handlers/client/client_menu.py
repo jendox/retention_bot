@@ -1,5 +1,3 @@
-import logging
-
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
@@ -17,7 +15,6 @@ from src.rate_limiter import RateLimiter
 from src.texts import client_menu as txt, common as common_txt
 from src.user_context import ActiveRole, UserContextStorage
 
-logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 ev = EventLogger(__name__)
 
@@ -55,6 +52,7 @@ async def send_client_main_menu(
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOK)
 async def client_add_booking(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="client_menu", step="book")
+    ev.info("client_menu.book")
     if not await rate_limit_message(message, rate_limiter, name="client_menu:book", ttl_sec=2):
         return
     await start_client_add_booking(message, state, rate_limiter)
@@ -63,6 +61,7 @@ async def client_add_booking(message: Message, state: FSMContext, rate_limiter: 
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_BOOKINGS)
 async def client_list_bookings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="client_menu", step="bookings")
+    ev.info("client_menu.bookings")
     if not await rate_limit_message(message, rate_limiter, name="client_menu:bookings", ttl_sec=2):
         return
     await start_client_list_bookings(message, state, rate_limiter)
@@ -71,6 +70,7 @@ async def client_list_bookings(message: Message, state: FSMContext, rate_limiter
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_MASTERS)
 async def client_list_masters(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="client_menu", step="masters")
+    ev.info("client_menu.masters")
     if not await rate_limit_message(message, rate_limiter, name="client_menu:masters", ttl_sec=2):
         return
     await start_client_list_masters(message, state, rate_limiter)
@@ -83,6 +83,7 @@ async def client_switch_role(
     user_ctx_storage: UserContextStorage,
 ) -> None:
     bind_log_context(flow="client_menu", step="switch_role")
+    ev.info("client_menu.switch_role")
     from src.handlers.master.master_menu import send_master_main_menu
 
     telegram_id = message.from_user.id
@@ -95,6 +96,7 @@ async def client_switch_role(
 @router.message(UserRole(ActiveRole.CLIENT), F.text == txt.MENU_SETTINGS)
 async def client_settings(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="client_menu", step="settings")
+    ev.info("client_menu.settings")
     if not await rate_limit_message(message, rate_limiter, name="client_menu:settings", ttl_sec=2):
         return
     await state.clear()

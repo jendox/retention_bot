@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 
 from src.core.sa import Database
 from src.handlers import routers
+from src.integrations.expresspay import ExpressPayClient
 from src.middlewares import (
     HandlerLogContextMiddleware,
     LogContextMiddleware,
@@ -101,8 +102,16 @@ async def main():
                 throttle_sec=60 * 60,
                 extra={"invite_only": False},
             )
-        async with Database.lifespan(url=postgres_url):
-            await dp.start_polling(bot, notifier=notifier, admin_alerter=admin_alerter)
+        async with (
+            Database.lifespan(url=postgres_url),
+            ExpressPayClient(settings.express_pay) as express_pay_client,
+        ):
+            await dp.start_polling(
+                bot,
+                notifier=notifier,
+                admin_alerter=admin_alerter,
+                express_pay_client=express_pay_client,
+            )
 
     except Exception as exc:
         await ev.aexception(
@@ -120,4 +129,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        ev.info(event="app.shutdown")
+        ev.info("app.shutdown")

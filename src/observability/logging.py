@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import traceback
 from datetime import UTC, datetime
@@ -33,6 +34,57 @@ _RESERVED_ATTRS: set[str] = {
     "threadName",
     "taskName",
 }
+
+_REDACTED = "<redacted>"
+
+# Keep this intentionally broad; it's a last line of defense against accidental PII leakage.
+_SENSITIVE_KEY_PARTS: tuple[str, ...] = (
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "api_key",
+    "apikey",
+    "invite",
+    "phone",
+    "msisdn",
+)
+
+# E.164-ish (best-effort). We prefer occasional over-redaction to accidental leakage.
+_PHONE_RE = re.compile(r"(?<!\\d)(?:\\+\\d{11,15}|375\\d{9})(?!\\d)")
+
+# Common "key=value" patterns that show up in errors/exceptions.
+_KV_PHONE_RE = re.compile(r"(?i)\\bphone\\s*=\\s*(?:\\+?\\d{11,15}|375\\d{9})\\b")
+_KV_INVITE_TOKEN_RE = re.compile(r"(?i)\\binvite_token\\s*=\\s*[^\\s,;]+")
+
+
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
+
+
+def _redact_text(text: str) -> str:
+    out = _PHONE_RE.sub(_REDACTED, text)
+    out = _KV_PHONE_RE.sub(f"phone={_REDACTED}", out)
+    out = _KV_INVITE_TOKEN_RE.sub(f"invite_token={_REDACTED}", out)
+    return out
+
+
+def _redact_value(key: str, value: object) -> object:
+    if value is None:
+        return None
+    if _is_sensitive_key(key):
+        return _REDACTED
+    if isinstance(value, str):
+        return _redact_text(value)
+    return value
+
+
+def _redact_payload(payload: dict[str, object]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for k, v in payload.items():
+        out[k] = _redact_value(str(k), v)
+    return out
 
 
 class JsonFormatter(logging.Formatter):
@@ -71,18 +123,16 @@ class JsonFormatter(logging.Formatter):
                     payload[k] = v
 
         if record.exc_info:
-            payload["exception"] = "".join(traceback.format_exception(*record.exc_info)).strip()
+            payload["exception"] = _redact_text("".join(traceback.format_exception(*record.exc_info)).strip())
 
-        extras = {
-            k: v for k, v in record.__dict__.items() if k not in _RESERVED_ATTRS and not k.startswith("_")
-        }
+        extras = {k: v for k, v in record.__dict__.items() if k not in _RESERVED_ATTRS and not k.startswith("_")}
         for k, v in extras.items():
             if k in payload:
                 payload[f"extra_{k}"] = v
             else:
                 payload[k] = v
 
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        return json.dumps(_redact_payload(payload), ensure_ascii=False, default=str)
 
 
 def setup_logging(

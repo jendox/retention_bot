@@ -20,5 +20,3 @@ class MasterOverridesParserTests(unittest.TestCase):
 
         self.assertEqual(h._get_day_from_state({"override_day": "2025-12-31"}), date(2025, 12, 31))
         self.assertIsNone(h._get_day_from_state({"override_day": "bad"}))
-
-

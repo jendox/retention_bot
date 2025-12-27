@@ -8,6 +8,8 @@ from typing import Self
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.integrations.expresspay import ExpressPaySettings
+
 
 class TelegramSettings(BaseModel):
     bot_token: SecretStr
@@ -179,6 +181,7 @@ class AppSettings(BaseSettings):
     admin: AdminSettings = Field(default_factory=AdminSettings)
     billing: BillingSettings = Field(default_factory=BillingSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    express_pay: ExpressPaySettings = Field(default=ExpressPaySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 
     model_config = SettingsConfigDict(

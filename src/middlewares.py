@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -9,10 +8,11 @@ from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject
 
 from src.observability.context import bind_log_context, new_trace_id, reset_log_context, set_log_context
+from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.user_context import UserContextStorage
 
-logger = logging.getLogger(__name__)
+ev = EventLogger(__name__)
 
 
 class LogContextMiddleware(BaseMiddleware):
@@ -101,17 +101,18 @@ class LoggingMiddleware(BaseMiddleware):
         except Exception as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             # Keep one canonical error log in the global error handler; here we only add timing in debug.
-            logger.debug(
+            ev.debug(
                 "handler.exception",
-                extra={"duration_ms": duration_ms, "error_type": type(exc).__name__},
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
             )
             raise
 
         duration_ms = int((time.perf_counter() - started) * 1000)
         if duration_ms >= self._slow_threshold_ms:
-            logger.warning("handler.slow", extra={"duration_ms": duration_ms})
+            ev.warning("handler.slow", duration_ms=duration_ms)
         else:
-            logger.debug("handler.ok", extra={"duration_ms": duration_ms})
+            ev.debug("handler.ok", duration_ms=duration_ms)
         return result
 
 

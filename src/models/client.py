@@ -37,12 +37,20 @@ class Client(Base):
     )
 
     masters: Mapped[list[Master]] = relationship(
-        "Master", secondary="master_clients", back_populates="clients",
+        "Master",
+        secondary="master_clients",
+        back_populates="clients",
     )
     bookings: Mapped[list[Booking]] = relationship(
-        "Booking", back_populates="client", cascade="all, delete-orphan",
+        "Booking",
+        back_populates="client",
+        cascade="all, delete-orphan",
     )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), onupdate=func.now(),
-                                                 nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

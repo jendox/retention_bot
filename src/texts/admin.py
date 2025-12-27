@@ -40,11 +40,7 @@ def render_plan_text(  # noqa: PLR0913
         f"<b>Горизонт записи:</b> {horizon_days} дней"
     )
     if "Pro" not in status:
-        text += (
-            "\n\n"
-            "Чтобы подключить Pro — напиши: "
-            f"{billing_contact}"
-        )
+        text += f"\n\nЧтобы подключить Pro — напиши: {billing_contact}"
     return t(text)
 
 
@@ -66,9 +62,7 @@ def master_not_found(*, t: Translator = _noop_t) -> str:
 
 def pro_activated(*, master_name: str, master_telegram_id: int, until: str, t: Translator = _noop_t) -> str:
     return t(
-        "✅ Pro активирован\n\n"
-        f"<b>Мастер:</b> {master_name} ({master_telegram_id})\n"
-        f"<b>До:</b> {until}",
+        f"✅ Pro активирован\n\n<b>Мастер:</b> {master_name} ({master_telegram_id})\n<b>До:</b> {until}",
     )
 
 
@@ -123,7 +117,5 @@ def invite_master_bad_ttl(*, t: Translator = _noop_t) -> str:
 
 def invite_master_created(*, link: str, ttl_hours: int, t: Translator = _noop_t) -> str:
     return t(
-        "✅ Ссылка для регистрации мастера готова.\n\n"
-        f"{link}\n\n"
-        f"Ссылка действует {ttl_hours} ч.",
+        f"✅ Ссылка для регистрации мастера готова.\n\n{link}\n\nСсылка действует {ttl_hours} ч.",
     )

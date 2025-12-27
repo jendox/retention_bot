@@ -21,10 +21,7 @@ def day_summary(*, day: date, window: tuple[time, time] | None, has_override: bo
         window_txt = t(f"{start:%H:%M}–{end:%H:%M}")
     override_txt = t("да") if has_override else t("нет")
     return t(
-        f"{title(t=t)}\n\n"
-        f"<b>{day:%d.%m.%Y}</b>\n"
-        f"Рабочее время: <b>{window_txt}</b>\n"
-        f"Исключение: <b>{override_txt}</b>",
+        f"{title(t=t)}\n\n<b>{day:%d.%m.%Y}</b>\nРабочее время: <b>{window_txt}</b>\nИсключение: <b>{override_txt}</b>",
     )
 
 

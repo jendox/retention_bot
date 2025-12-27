@@ -5,8 +5,7 @@ from src.texts.base import Translator, noop_t as _noop_t
 
 def empty_list(*, t: Translator = _noop_t) -> str:
     return t(
-        "Пока нет активных записей 🗓\n\n"
-        "Чтобы записаться — нажми «➕ Записаться».",
+        "Пока нет активных записей 🗓\n\nЧтобы записаться — нажми «➕ Записаться».",
     )
 
 

@@ -11,7 +11,6 @@ from src.schemas import Subscription
 
 
 class SubscriptionRepository(BaseRepository):
-
     async def get_by_master_id(self, master_id: int) -> Subscription | None:
         stmt = select(SubscriptionEntity).where(SubscriptionEntity.master_id == master_id)
         entity = await self._session.scalar(stmt)

@@ -40,6 +40,7 @@ class NotificationFacts:
     Всё, что policy может использовать, должно быть передано извне (без DB).
     Для разных event часть полей может быть None.
     """
+
     event: NotificationEvent
     recipient: RecipientKind
     chat_id: int | None

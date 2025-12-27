@@ -328,9 +328,11 @@ async def start_client_list_bookings(
     if not await rate_limit_message(message, rate_limiter, name="client_list_bookings:start", ttl_sec=2):
         return
     telegram_id = message.from_user.id
+    ev.info("client_list_bookings.start")
 
     fetched = await _fetch_client_bookings(telegram_id)
     if fetched is None:
+        ev.warning("client_list_bookings.client_not_found")
         await message.answer(CLIENT_NOT_FOUND_MESSAGE)
         return
 
@@ -352,6 +354,7 @@ async def start_client_list_bookings(
     page = 1
 
     if not all_bookings:
+        ev.info("client_list_bookings.start_result", outcome="empty")
         sent = await message.answer(
             txt.empty_list(),
             reply_markup=InlineKeyboardMarkup(
@@ -363,6 +366,7 @@ async def start_client_list_bookings(
         await safe_delete(message, ev=ev, event="client_list_bookings.delete_menu_message_failed")
         return
 
+    ev.info("client_list_bookings.start_result", outcome="listed", bookings_count=len(all_bookings))
     page_bookings = all_bookings[:TEXT_PAGE_SIZE]
     sent = await message.answer(
         _render_list_page_text(
@@ -545,12 +549,14 @@ async def _delete_callback_message(callback: CallbackQuery, *, event: str) -> No
 
 async def _handle_close(*, callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    ev.info("client_list_bookings.close")
     await _delete_callback_message(callback, event="client_list_bookings.close_delete_failed")
     await _clear_main_message(state)
 
 
 async def _handle_cancel_ntf_prompt(*, callback: CallbackQuery, booking_id: int) -> None:
     await callback.answer()
+    ev.info("client_list_bookings.cancel_prompt", source="notification", booking_id=int(booking_id))
     if callback.message is None:
         return
     await safe_edit_text(
@@ -565,10 +571,12 @@ async def _handle_cancel_ntf_prompt(*, callback: CallbackQuery, booking_id: int)
 
 async def _handle_cancel_ntf_no(*, callback: CallbackQuery) -> None:
     await callback.answer()
+    ev.info("client_list_bookings.cancel_no", source="notification")
     await _delete_callback_message(callback, event="client_list_bookings.cancel_ntf_no_delete_failed")
 
 
 async def _handle_cancel_ntf_yes(*, callback: CallbackQuery, notifier: Notifier, booking_id: int) -> None:
+    ev.info("client_list_bookings.cancel_yes", source="notification", booking_id=int(booking_id))
     booking = await _cancel_booking_and_notify(callback=callback, notifier=notifier, booking_id=booking_id)
     if booking is None:
         return
@@ -577,6 +585,7 @@ async def _handle_cancel_ntf_yes(*, callback: CallbackQuery, notifier: Notifier,
 
 async def _handle_cancel_prompt(*, callback: CallbackQuery, booking_id: int, page: int, chunk: int) -> None:
     await callback.answer()
+    ev.info("client_list_bookings.cancel_prompt", source="list", booking_id=int(booking_id))
     if callback.message is None:
         return
     await safe_edit_text(
@@ -590,6 +599,7 @@ async def _handle_cancel_prompt(*, callback: CallbackQuery, booking_id: int, pag
 
 
 async def _handle_cancel_no(*, callback: CallbackQuery, booking_id: int, page: int, chunk: int) -> None:
+    ev.info("client_list_bookings.cancel_no", source="list", booking_id=int(booking_id))
     await _render_booking_card(callback=callback, booking_id=booking_id, page=page, chunk=chunk)
 
 
@@ -601,6 +611,7 @@ async def _handle_cancel_yes(
     page: int,
     chunk: int,
 ) -> None:
+    ev.info("client_list_bookings.cancel_yes", source="list", booking_id=int(booking_id))
     booking = await _cancel_booking_and_notify(callback=callback, notifier=notifier, booking_id=booking_id)
     if booking is None:
         return
@@ -994,21 +1005,25 @@ async def _cancel_booking_and_notify(
         try:
             client = await client_repo.get_by_telegram_id(callback.from_user.id)
         except ClientNotFound:
+            ev.warning("client_list_bookings.client_not_found")
             await callback.answer(CLIENT_NOT_FOUND_MESSAGE, show_alert=True)
             return None
         try:
             booking = await booking_repo.get_for_review(booking_id)
         except BookingNotFound:
+            ev.warning("client_list_bookings.booking_not_found", booking_id=int(booking_id))
             await callback.answer(txt.booking_not_found(), show_alert=True)
             return None
 
         if booking.client.id != client.id:
+            ev.warning("client_list_bookings.forbidden", booking_id=int(booking_id))
             await callback.answer(txt.forbidden(), show_alert=True)
             return None
 
         cancelled = await booking_repo.cancel_by_client(booking_id=booking_id, client_id=client.id)
 
     if not cancelled:
+        ev.info("client_list_bookings.cannot_cancel", booking_id=int(booking_id))
         await callback.answer(txt.cannot_cancel(), show_alert=True)
         return None
 
@@ -1029,6 +1044,12 @@ async def _cancel_booking_and_notify(
         ),
     )
 
+    master_id = getattr(booking.master, "id", None)
+    ev.info(
+        "client_list_bookings.cancelled",
+        booking_id=int(booking.id),
+        master_id=int(master_id) if master_id is not None else None,
+    )
     await callback.answer(txt.cancelled_alert())
     return booking
 

@@ -3,10 +3,13 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientCreate
 from src.use_cases.entitlements import EntitlementsService, Usage
+
+ev = EventLogger(__name__)
 
 
 class CreateClientOfflineError(StrEnum):
@@ -59,11 +62,14 @@ class CreateClientOffline:
         try:
             master = await self._master_repo.get_by_telegram_id(telegram_master_id)
         except MasterNotFound:
+            ev.warning(
+                "client_offline.preflight_master_not_found",
+            )
             return CreateClientOfflinePreflightResult(
                 ok=False,
                 allowed=False,
                 error=CreateClientOfflineError.MASTER_NOT_FOUND,
-                error_detail=f"master not found telegram_master_id={telegram_master_id}",
+                error_detail="master not found",
             )
 
         plan = await self._entitlements.get_plan(master_id=master.id)
@@ -92,6 +98,10 @@ class CreateClientOffline:
         result = await self.preflight(telegram_master_id)
         master_id = result.master_id
         if not result.ok:
+            ev.info(
+                "client_offline.create_rejected",
+                error=str((result.error or CreateClientOfflineError.INVALID_REQUEST).value),
+            )
             return CreateClientOfflineCreateResult(
                 ok=False,
                 plan_is_pro=result.plan_is_pro,
@@ -101,6 +111,7 @@ class CreateClientOffline:
             )
 
         if master_id is None:
+            ev.warning("client_offline.create_state_invalid", reason="missing_master_id")
             return CreateClientOfflineCreateResult(
                 ok=False,
                 plan_is_pro=result.plan_is_pro,
@@ -109,6 +120,11 @@ class CreateClientOffline:
             )
 
         if not result.allowed:
+            ev.info(
+                "client_offline.create_rejected",
+                master_id=master_id,
+                error=str((result.error or CreateClientOfflineError.QUOTA_EXCEEDED).value),
+            )
             return CreateClientOfflineCreateResult(
                 ok=False,
                 plan_is_pro=result.plan_is_pro,
@@ -120,14 +136,20 @@ class CreateClientOffline:
 
         try:
             await self._client_repo.find_for_master_by_phone(
-                master_id=master_id, phone=phone_e164,
+                master_id=master_id,
+                phone=phone_e164,
+            )
+            ev.info(
+                "client_offline.create_rejected",
+                master_id=master_id,
+                error=str(CreateClientOfflineError.PHONE_CONFLICT.value),
             )
             return CreateClientOfflineCreateResult(
                 ok=False,
                 plan_is_pro=result.plan_is_pro,
                 master_id=master_id,
                 error=CreateClientOfflineError.PHONE_CONFLICT,
-                error_detail=f"phone={phone_e164}",
+                error_detail="phone conflict",
             )
         except ClientNotFound:
             pass
@@ -147,6 +169,11 @@ class CreateClientOffline:
             warn = True
             usage = await self._entitlements.get_usage(master_id=master_id)
 
+        ev.info(
+            "client.offline_created",
+            master_id=master_id,
+            client_id=client.id,
+        )
         return CreateClientOfflineCreateResult(
             ok=True,
             master_id=master_id,

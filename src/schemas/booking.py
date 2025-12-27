@@ -19,6 +19,7 @@ class BaseBooking(BaseModel):
 class BookingCreate(BaseBooking):
     def to_db_entity(self):
         from src.models import Booking as BookingEntity
+
         return BookingEntity(**self.model_dump())
 
 

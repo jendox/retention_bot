@@ -30,6 +30,7 @@ class Invite(BaseModel):
     @model_validator(mode="after")
     def set_token(self) -> Self:
         from src.models.invite import TOKEN_LENGTH
+
         if self.token is None:
             raw = secrets.token_urlsafe(TOKEN_LENGTH)
             self.token = raw[:TOKEN_LENGTH]
@@ -47,6 +48,7 @@ class Invite(BaseModel):
 
     def to_db_entity(self):
         from src.models import Invite as InviteEntity
+
         return InviteEntity(**self.model_dump(exclude={"used_count"}))
 
     def is_invite_valid(self) -> bool:

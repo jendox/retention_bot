@@ -41,11 +41,7 @@ class MasterRepository(BaseRepository):
         return Master.from_db_entity(entity)
 
     async def get_with_clients_by_id(self, master_id: int) -> MasterWithClients:
-        stmt = (
-            select(MasterEntity)
-            .where(MasterEntity.id == master_id)
-            .options(selectinload(MasterEntity.clients))
-        )
+        stmt = select(MasterEntity).where(MasterEntity.id == master_id).options(selectinload(MasterEntity.clients))
         entity = await self._session.scalar(stmt)
         if entity is None:
             raise MasterNotFound(f"Master id={master_id} not found.")
@@ -66,11 +62,7 @@ class MasterRepository(BaseRepository):
         return MasterWithClients.model_validate(entity)
 
     async def get_for_schedule_by_id(self, master_id: int) -> MasterWithOverrides:
-        stmt = (
-            select(MasterEntity)
-            .where(MasterEntity.id == master_id)
-            .options(selectinload(MasterEntity.overrides))
-        )
+        stmt = select(MasterEntity).where(MasterEntity.id == master_id).options(selectinload(MasterEntity.overrides))
         entity = await self._session.scalar(stmt)
         if entity is None:
             raise MasterNotFound(f"Master id={master_id} not found.")
@@ -88,21 +80,13 @@ class MasterRepository(BaseRepository):
         return MasterWithOverrides.model_validate(entity)
 
     async def update_by_id(self, master_id: int, master: MasterUpdate) -> bool:
-        stmt = (
-            update(MasterEntity)
-            .where(MasterEntity.id == master_id)
-            .values(master.to_db_update())
-        )
+        stmt = update(MasterEntity).where(MasterEntity.id == master_id).values(master.to_db_update())
         result = await self._session.execute(stmt)
 
         return (result.rowcount or 0) > 0
 
     async def update_by_telegram_id(self, telegram_id: int, master: MasterUpdate) -> bool:
-        stmt = (
-            update(MasterEntity)
-            .where(MasterEntity.telegram_id == telegram_id)
-            .values(master.to_db_update())
-        )
+        stmt = update(MasterEntity).where(MasterEntity.telegram_id == telegram_id).values(master.to_db_update())
         result = await self._session.execute(stmt)
 
         return (result.rowcount or 0) > 0
@@ -119,23 +103,16 @@ class MasterRepository(BaseRepository):
         await self._session.flush()
 
     async def detach_client(self, master_id: int, client_id: int) -> bool:
-        stmt = (
-            delete(master_clients)
-            .where(
-                master_clients.c.master_id == master_id,
-                master_clients.c.client_id == client_id,
-            )
+        stmt = delete(master_clients).where(
+            master_clients.c.master_id == master_id,
+            master_clients.c.client_id == client_id,
         )
         result = await self._session.execute(stmt)
         await self._session.flush()
         return (result.rowcount or 0) > 0
 
     async def count_clients(self, master_id: int) -> int:
-        stmt = (
-            select(func.count())
-            .select_from(master_clients)
-            .where(master_clients.c.master_id == master_id)
-        )
+        stmt = select(func.count()).select_from(master_clients).where(master_clients.c.master_id == master_id)
         count = await self._session.scalar(stmt)
         return int(count or 0)
 
