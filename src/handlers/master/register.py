@@ -31,7 +31,12 @@ from src.rate_limiter import RateLimiter
 from src.repositories.consent import ConsentRepository
 from src.schemas.enums import Timezone
 from src.settings import get_settings
-from src.texts import common as common_txt, master_registration as txt, personal_data as pd_txt
+from src.texts import (
+    common as common_txt,
+    master_onboarding as onb_txt,
+    master_registration as txt,
+    personal_data as pd_txt,
+)
 from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_restart
 from src.use_cases.master_registration import (
     CompleteMasterRegistration,
@@ -795,6 +800,18 @@ async def master_reg_confirm(  # noqa: C901
     await _reset_master_registration(state, callback.bot)
     await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
     await send_master_main_menu(callback.bot, telegram_id, show_switch_role=is_client)
+    await callback.bot.send_message(
+        chat_id=telegram_id,
+        text=onb_txt.after_registration(name=str(data.get("name") or "")),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="➕ Добавить клиента", callback_data="m:onb:add_client")],
+                [InlineKeyboardButton(text="📩 Пригласить в Telegram", callback_data="m:onb:invite_client")],
+                [InlineKeyboardButton(text="🔕 Не напоминать", callback_data="m:onb:disable")],
+            ],
+        ),
+    )
 
 
 @router.callback_query(

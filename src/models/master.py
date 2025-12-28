@@ -66,6 +66,12 @@ class Master(Base):
         server_default=text("false"),
         nullable=False,
     )
+    onboarding_nudges_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        nullable=False,
+    )
 
     clients: Mapped[list[Client]] = relationship(
         "Client",

@@ -10,20 +10,20 @@ This module contains two high-level operations used by the Telegram bot master r
 
 2) CompleteMasterRegistration
    - Creates a master profile (idempotent via telegram_id).
-   - Ensures the master has an active trial subscription if none exists.
+   - Schedules onboarding nudges ("add first client").
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time
 from enum import StrEnum
 
 from sqlalchemy.exc import IntegrityError
 
 from src.observability.events import EventLogger
-from src.plans import TRIAL_DAYS
-from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository, SubscriptionRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas import MasterCreate
 from src.schemas.enums import Timezone
 from src.security.master_invites import verify_master_invite_token
@@ -170,14 +170,13 @@ class CompleteMasterRegistration:
 
     async def execute(self, request: CompleteMasterRegistrationRequest) -> CompleteMasterRegistrationResult:
         """
-        Create a master profile and ensure a trial subscription exists.
+        Create a master profile and schedule onboarding nudges.
 
         This operation is idempotent for a given `telegram_id`: if the master already exists, it is loaded and
-        the outcome is `ALREADY_EXISTS`. In both cases, if the master has no subscription record, a trial
-        subscription is created/updated with `TRIAL_DAYS` duration.
+        the outcome is `ALREADY_EXISTS`.
         """
         master_repo = MasterRepository(self._session)
-        subscription_repo = SubscriptionRepository(self._session)
+        outbox = ScheduledNotificationRepository(self._session)
 
         master_create = MasterCreate(
             telegram_id=request.telegram_id,
@@ -197,9 +196,15 @@ class CompleteMasterRegistration:
             master = await master_repo.get_by_telegram_id(request.telegram_id)
             created = False
 
-        if await subscription_repo.get_by_master_id(master.id) is None:
-            trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
-            await subscription_repo.upsert_trial(master.id, trial_until)
+        if created:
+            now_utc = datetime.now(UTC)
+            await outbox.schedule_master_onboarding_add_first_client(
+                master_id=int(master.id),
+                master_telegram_id=int(master.telegram_id),
+                master_timezone=str(master.timezone.value),
+                master_created_at=master.created_at,
+                now_utc=now_utc,
+            )
 
         ev.info(
             "master_registration.completed",

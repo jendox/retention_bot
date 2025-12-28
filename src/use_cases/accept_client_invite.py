@@ -1,4 +1,5 @@
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from src.repositories import (
     InviteRepository,
     MasterRepository,
 )
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas import Client, ClientCreate, ClientUpdate, Invite, Master
 from src.schemas.enums import InviteType, Timezone
 from src.use_cases.entitlements import EntitlementsService, Usage
@@ -108,6 +110,7 @@ class AcceptClientInvite:
         self._master_repo = MasterRepository(session)
         self._booking_repo = BookingRepository(session)
         self._entitlements = EntitlementsService(session)
+        self._outbox = ScheduledNotificationRepository(session)
 
     async def _get_valid_invite(self, telegram_id: int, token: str) -> tuple[Invite | None, AcceptInviteError | None]:
         try:
@@ -462,6 +465,9 @@ class AcceptClientInvite:
 
         assert state.master_id is not None
         assert state.resolved is not None
+        assert state.quota is not None
+
+        had_clients = (await self._master_repo.count_clients(state.master_id)) > 0
 
         result = await self._apply_attach(
             master_id=state.master_id,
@@ -473,6 +479,21 @@ class AcceptClientInvite:
         warn = await self._should_warn_clients_limit(state.master_id)
         usage = await self._entitlements.get_usage(master_id=state.master_id) if warn else None
         final = replace(result, warn_master_clients_near_limit=warn, usage=usage)
+
+        if (
+            final.ok
+            and (not had_clients)
+            and (not state.quota.already_attached)
+            and bool(getattr(state.resolved.master, "onboarding_nudges_enabled", True))
+        ):
+            now_utc = datetime.now(UTC)
+            await self._outbox.cancel_onboarding_for_master(master_id=int(state.master_id))
+            await self._outbox.schedule_master_onboarding_add_first_booking(
+                master_id=int(state.master_id),
+                master_telegram_id=int(state.resolved.master.telegram_id),
+                master_timezone=str(state.resolved.master.timezone.value),
+                now_utc=now_utc,
+            )
 
         self._log_success(
             extra={

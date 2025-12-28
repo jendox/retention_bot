@@ -32,3 +32,6 @@ class NotificationEvent(StrEnum):
     FOLLOWUP_THANK_YOU = "followup_thank_you"
 
     MASTER_ATTENDANCE_NUDGE = "master_attendance_nudge"
+
+    MASTER_ONBOARDING_ADD_FIRST_CLIENT = "master_onboarding_add_first_client"
+    MASTER_ONBOARDING_ADD_FIRST_BOOKING = "master_onboarding_add_first_booking"

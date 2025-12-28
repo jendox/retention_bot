@@ -15,8 +15,8 @@ from sqlalchemy.orm import selectinload
 
 from src.core.sa import Database, active_session, session_local
 from src.datetime_utils import to_zone
-from src.models import Booking as BookingEntity
-from src.notifications.context import BookingContext, ReminderContext
+from src.models import Booking as BookingEntity, Master as MasterEntity
+from src.notifications.context import BookingContext, OnboardingContext, ReminderContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import DefaultNotificationPolicy, NotificationFacts
 from src.notifications.types import NotificationEvent, RecipientKind
@@ -29,6 +29,8 @@ from src.settings import AppSettings, app_settings, get_settings
 from src.use_cases.entitlements import EntitlementsService
 
 ev = EventLogger("workers.reminders")
+
+_ONBOARDING_CLIENT_CHOICE_SEQUENCE = 2
 
 
 @dataclass(frozen=True)
@@ -157,9 +159,14 @@ def _attendance_keyboard(*, booking_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="❌ Не пришёл", callback_data=f"m:att_rem:no_show:{int(booking_id)}"),
             ],
             [
-                InlineKeyboardButton(text="⏳ Через 3 часа", callback_data=f"m:att_rem:snooze3h:{int(booking_id)}"),
                 InlineKeyboardButton(
-                    text="🗓 Завтра в 10:00",
+                    text="⏳ Напомнить через 3 часа",
+                    callback_data=f"m:att_rem:snooze3h:{int(booking_id)}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🗓 Напомнить завтра в 10:00",
                     callback_data=f"m:att_rem:tomorrow10:{int(booking_id)}",
                 ),
             ],
@@ -167,6 +174,24 @@ def _attendance_keyboard(*, booking_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📄 Открыть запись", callback_data=open_card_cb)],
         ],
     )
+
+
+def _onboarding_keyboard(*, event: NotificationEvent, sequence: int | None) -> InlineKeyboardMarkup:
+    disable = InlineKeyboardButton(text="🔕 Не напоминать", callback_data="m:onb:disable")
+    add_client = InlineKeyboardButton(text="➕ Добавить клиента", callback_data="m:onb:add_client")
+    invite = InlineKeyboardButton(text="📩 Пригласить в Telegram", callback_data="m:onb:invite_client")
+    add_offline = InlineKeyboardButton(text="📵 Добавить офлайн", callback_data="m:onb:add_client")
+    add_booking = InlineKeyboardButton(text="➕ Добавить запись", callback_data="m:onb:add_booking")
+
+    if event == NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT:
+        if int(sequence or 1) == _ONBOARDING_CLIENT_CHOICE_SEQUENCE:
+            return InlineKeyboardMarkup(inline_keyboard=[[invite], [add_offline], [disable]])
+        return InlineKeyboardMarkup(inline_keyboard=[[add_client], [disable]])
+
+    if event == NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING:
+        return InlineKeyboardMarkup(inline_keyboard=[[add_booking], [disable]])
+
+    return InlineKeyboardMarkup(inline_keyboard=[[disable]])
 
 
 async def _load_booking_for_notification(*, booking_id: int) -> BookingEntity | None:
@@ -179,6 +204,12 @@ async def _load_booking_for_notification(*, booking_id: int) -> BookingEntity | 
                 selectinload(BookingEntity.client),
             )
         )
+        return await session.scalar(stmt)
+
+
+async def _load_master_for_notification(*, master_id: int) -> MasterEntity | None:
+    async with session_local() as session:
+        stmt = select(MasterEntity).where(MasterEntity.id == int(master_id))
         return await session.scalar(stmt)
 
 
@@ -294,6 +325,42 @@ async def _send_master_attendance_nudge(
         return None
 
 
+async def _send_master_onboarding_nudge(
+    *,
+    notifier: Notifier,
+    event: NotificationEvent,
+    job: ScheduledNotificationJob,
+    chat_id: int,
+    plan_cache: dict[int, bool],
+) -> bool | None:
+    if job.master_id is None:
+        return False
+    master = await _load_master_for_notification(master_id=int(job.master_id))
+    if master is None:
+        return False
+
+    plan_is_pro = await _plan_is_pro(master_id=int(master.id), cache=plan_cache)
+    try:
+        return await notifier.maybe_send(
+            NotificationRequest(
+                event=event,
+                recipient=RecipientKind.MASTER,
+                chat_id=int(chat_id),
+                context=OnboardingContext(master_name=str(master.name)),
+                reply_markup=_onboarding_keyboard(event=event, sequence=job.sequence),
+                facts=NotificationFacts(
+                    event=event,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=int(chat_id),
+                    plan_is_pro=bool(plan_is_pro),
+                    master_onboarding_nudges_enabled=bool(getattr(master, "onboarding_nudges_enabled", True)),
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
 async def _send_job(
     *,
     notifier: Notifier,
@@ -313,13 +380,24 @@ async def _send_job(
     booking_start_at = job.booking_start_at
     chat_id = int(job.chat_id)
 
+    if event in {
+        NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT,
+        NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING,
+    }:
+        if recipient == RecipientKind.MASTER:
+            return await _send_master_onboarding_nudge(
+                notifier=notifier,
+                event=event,
+                job=job,
+                chat_id=int(chat_id),
+                plan_cache=plan_cache,
+            )
+
     if booking_id is None:
         return False
 
     booking = await _load_booking_for_notification(booking_id=booking_id)
-    if booking is None:
-        return False
-    if booking_start_at is not None and booking.start_at != booking_start_at:
+    if booking is None or (booking_start_at is not None and booking.start_at != booking_start_at):
         return False
 
     plan_is_pro = await _plan_is_pro(master_id=int(booking.master_id), cache=plan_cache)

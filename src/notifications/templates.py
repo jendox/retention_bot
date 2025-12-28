@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from src.notifications.context import BookingContext, LimitsContext, ReminderContext
+from src.notifications.context import BookingContext, LimitsContext, OnboardingContext, ReminderContext
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.events import EventLogger
 
@@ -117,6 +117,18 @@ MASTER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Bookin
     ),
 }
 
+ONBOARDING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[OnboardingContext], str]] = {
+    (NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT, RecipientKind.MASTER): lambda context: (
+        f"👋 {context.master_name}, чтобы начать — добавь первого клиента.\n\n"
+        "После этого можно создавать записи и вести историю."
+    ),
+    (NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING, RecipientKind.MASTER): lambda context: (
+        f"✨ {context.master_name}, клиент уже добавлен.\n\n"
+        "Следующий шаг — создать первую запись (это займёт минуту).\n\n"
+        "🎁 Pro‑триал начнётся автоматически после первой записи — чтобы ты оценил функции в деле."
+    ),
+}
+
 
 def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind, context: LimitsContext) -> str:
     fn = LIMITS_TEMPLATES.get((event, recipient))
@@ -140,6 +152,23 @@ def render_reminder_template(*, event: NotificationEvent, recipient: RecipientKi
         ev.debug(
             "notifications.unsupported_template",
             template="reminder",
+            event=event.value,
+            recipient=recipient.value,
+        )
+    return fn(context) if fn else ""
+
+
+def render_onboarding_template(
+    *,
+    event: NotificationEvent,
+    recipient: RecipientKind,
+    context: OnboardingContext,
+) -> str:
+    fn = ONBOARDING_TEMPLATES.get((event, recipient))
+    if fn is None:
+        ev.debug(
+            "notifications.unsupported_template",
+            template="onboarding",
             event=event.value,
             recipient=recipient.value,
         )

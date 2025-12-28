@@ -27,6 +27,7 @@ class MasterBase(BaseModel):
     notify_clients: bool = Field(default=True)
     notify_attendance: bool = Field(default=True)
     offline_client_disclaimer_shown: bool = Field(default=False)
+    onboarding_nudges_enabled: bool = Field(default=True)
 
 
 class MasterCreate(MasterBase):
@@ -47,6 +48,7 @@ class MasterUpdate(BaseModel):
     notify_clients: bool | None = None
     notify_attendance: bool | None = None
     offline_client_disclaimer_shown: bool | None = None
+    onboarding_nudges_enabled: bool | None = None
 
     model_config = ConfigDict(
         extra="ignore",
@@ -84,6 +86,7 @@ class Master(MasterBase):
             "notify_clients": bool(self.notify_clients),
             "notify_attendance": bool(self.notify_attendance),
             "offline_client_disclaimer_shown": bool(self.offline_client_disclaimer_shown),
+            "onboarding_nudges_enabled": bool(self.onboarding_nudges_enabled),
         }
 
 

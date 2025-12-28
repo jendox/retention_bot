@@ -25,3 +25,8 @@ class LimitsContext:
 class ReminderContext:
     master_name: str
     slot_str: str
+
+
+@dataclass(frozen=True)
+class OnboardingContext:
+    master_name: str

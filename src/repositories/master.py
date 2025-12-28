@@ -132,6 +132,16 @@ class MasterRepository(BaseRepository):
         result = await self._session.execute(stmt)
         return (result.rowcount or 0) > 0
 
+    async def set_onboarding_nudges_enabled(self, *, master_id: int, enabled: bool) -> bool:
+        stmt = (
+            update(MasterEntity)
+            .where(MasterEntity.id == int(master_id))
+            .values(onboarding_nudges_enabled=bool(enabled))
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return (result.rowcount or 0) > 0
+
     async def is_client_attached(self, *, master_id: int, client_id: int) -> bool:
         stmt = (
             select(func.count())

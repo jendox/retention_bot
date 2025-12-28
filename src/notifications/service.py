@@ -6,7 +6,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup
 
-from src.notifications.context import BookingContext, LimitsContext, ReminderContext
+from src.notifications.context import BookingContext, LimitsContext, OnboardingContext, ReminderContext
 from src.notifications.renderer import RenderedMessage, render
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.events import EventLogger
@@ -63,7 +63,7 @@ class NotificationService:
         event: NotificationEvent,
         recipient: RecipientKind,
         chat_id: int | None,
-        context: BookingContext | LimitsContext | ReminderContext,
+        context: BookingContext | LimitsContext | ReminderContext | OnboardingContext,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> None:
         message = render(event=event, recipient=recipient, context=context, reply_markup=reply_markup)

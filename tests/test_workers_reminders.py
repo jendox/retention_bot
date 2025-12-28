@@ -119,3 +119,39 @@ class ReminderWorkerOutboxTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result)
         notifier.maybe_send.assert_not_awaited()
+
+    async def test_send_job_master_onboarding_first_client_sends_with_keyboard(self) -> None:
+        from src.workers import reminders as w
+
+        job = SimpleNamespace(
+            id=1,
+            event=w.NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT.value,
+            recipient=w.RecipientKind.MASTER.value,
+            chat_id=10,
+            master_id=1,
+            booking_id=None,
+            booking_start_at=None,
+            sequence=2,
+        )
+
+        master = SimpleNamespace(id=1, name="M", onboarding_nudges_enabled=True)
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        with (
+            patch.object(w, "_load_master_for_notification", AsyncMock(return_value=master)),
+            patch.object(w, "_plan_is_pro", AsyncMock(return_value=False)),
+        ):
+            result = await w._send_job(
+                notifier=notifier,
+                event=w.NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT,
+                recipient=w.RecipientKind.MASTER,
+                job=job,
+                now_utc=datetime(2025, 1, 2, 12, 0, tzinfo=UTC),
+                plan_cache={},
+            )
+
+        self.assertTrue(result)
+        notifier.maybe_send.assert_awaited()
+        request = notifier.maybe_send.await_args.args[0]
+        self.assertIsNotNone(request.reply_markup)
+        cb_data = request.reply_markup.inline_keyboard[0][0].callback_data
+        self.assertTrue(cb_data.startswith("m:onb:"))

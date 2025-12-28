@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from datetime import time
+from datetime import UTC, datetime, time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -117,17 +117,23 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.outcome, StartMasterRegistrationOutcome.START_FSM)
         self.assertTrue(result.is_client)
 
-    async def test_complete_registration_created_sets_trial(self) -> None:
+    async def test_complete_registration_created_schedules_onboarding(self) -> None:
         session = object()
 
-        master_repo = SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id=123)))
-        subscription_repo = SimpleNamespace(
-            get_by_master_id=AsyncMock(return_value=None),
-            upsert_trial=AsyncMock(),
+        master_repo = SimpleNamespace(
+            create=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=123,
+                    telegram_id=1,
+                    timezone=Timezone.EUROPE_MINSK,
+                    created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+                ),
+            ),
         )
+        outbox_repo = SimpleNamespace(schedule_master_onboarding_add_first_client=AsyncMock(return_value=3))
         with (
             patch("src.use_cases.master_registration.MasterRepository", lambda _s: master_repo),
-            patch("src.use_cases.master_registration.SubscriptionRepository", lambda _s: subscription_repo),
+            patch("src.use_cases.master_registration.ScheduledNotificationRepository", lambda _s: outbox_repo),
         ):
             result = await CompleteMasterRegistration(session).execute(
                 CompleteMasterRegistrationRequest(
@@ -144,7 +150,7 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.outcome, CompleteMasterRegistrationOutcome.CREATED)
         self.assertEqual(result.master_id, 123)
-        subscription_repo.upsert_trial.assert_awaited()
+        outbox_repo.schedule_master_onboarding_add_first_client.assert_awaited()
 
     async def test_complete_registration_integrity_error_returns_already_exists(self) -> None:
         session = object()
@@ -154,15 +160,19 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         master_repo = SimpleNamespace(
             create=AsyncMock(side_effect=_raise_integrity),
-            get_by_telegram_id=AsyncMock(return_value=SimpleNamespace(id=123)),
+            get_by_telegram_id=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=123,
+                    telegram_id=1,
+                    timezone=Timezone.EUROPE_MINSK,
+                    created_at=datetime(2025, 1, 1, 12, 0, tzinfo=UTC),
+                ),
+            ),
         )
-        subscription_repo = SimpleNamespace(
-            get_by_master_id=AsyncMock(return_value=None),
-            upsert_trial=AsyncMock(),
-        )
+        outbox_repo = SimpleNamespace(schedule_master_onboarding_add_first_client=AsyncMock(return_value=0))
         with (
             patch("src.use_cases.master_registration.MasterRepository", lambda _s: master_repo),
-            patch("src.use_cases.master_registration.SubscriptionRepository", lambda _s: subscription_repo),
+            patch("src.use_cases.master_registration.ScheduledNotificationRepository", lambda _s: outbox_repo),
         ):
             result = await CompleteMasterRegistration(session).execute(
                 CompleteMasterRegistrationRequest(
@@ -179,3 +189,4 @@ class MasterRegistrationUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.outcome, CompleteMasterRegistrationOutcome.ALREADY_EXISTS)
         self.assertEqual(result.master_id, 123)
+        outbox_repo.schedule_master_onboarding_add_first_client.assert_not_awaited()

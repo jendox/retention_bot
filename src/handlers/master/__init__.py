@@ -7,6 +7,7 @@ from .edit_client import router as edit_client_router
 from .invite_client import router as invite_client_router
 from .list_clients import router as list_clients_router
 from .master_menu import router as master_menu_router
+from .onboarding_nudges import router as onboarding_nudges_router
 from .register import router as register_router
 from .reschedule import router as reschedule_router
 from .schedule import router as schedule_router
@@ -22,6 +23,7 @@ routers = [
     reschedule_router,
     booking_review_router,
     attendance_reminders_router,
+    onboarding_nudges_router,
     edit_client_router,
     settings_router,
     invite_client_router,

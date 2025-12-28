@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas import ClientCreate
 from src.use_cases.entitlements import EntitlementsService, Usage
 
@@ -55,6 +57,7 @@ class CreateClientOfflineCreateResult:
 
 class CreateClientOffline:
     def __init__(self, session: AsyncSession) -> None:
+        self._session = session
         self._client_repo = ClientRepository(session)
         self._master_repo = MasterRepository(session)
         self._entitlements = EntitlementsService(session)
@@ -102,6 +105,38 @@ class CreateClientOffline:
             show_offline_client_disclaimer=show_offline_client_disclaimer,
         )
 
+    async def _has_phone_conflict(self, *, master_id: int, phone_e164: str) -> bool:
+        try:
+            await self._client_repo.find_for_master_by_phone(
+                master_id=master_id,
+                phone=phone_e164,
+            )
+            return True
+        except ClientNotFound:
+            return False
+
+    async def _maybe_schedule_onboarding_after_first_client(self, *, master_id: int, had_clients_before: bool) -> None:
+        if had_clients_before:
+            return
+
+        master = await self._master_repo.get_by_id(master_id)
+        outbox = ScheduledNotificationRepository(self._session)
+        now_utc = datetime.now(UTC)
+        await outbox.cancel_onboarding_for_master(master_id=int(master_id))
+        if not bool(getattr(master, "onboarding_nudges_enabled", True)):
+            return
+        await outbox.schedule_master_onboarding_add_first_booking(
+            master_id=int(master.id),
+            master_telegram_id=int(master.telegram_id),
+            master_timezone=str(master.timezone.value),
+            now_utc=now_utc,
+        )
+
+    async def _near_limit_warning(self, *, master_id: int) -> tuple[bool, Usage | None]:
+        if "clients" not in await self._entitlements.near_limits(master_id=master_id):
+            return False, None
+        return True, await self._entitlements.get_usage(master_id=master_id)
+
     async def create(self, telegram_master_id: int, phone_e164: str, name: str) -> CreateClientOfflineCreateResult:
         result = await self.preflight(telegram_master_id)
         master_id = result.master_id
@@ -142,11 +177,7 @@ class CreateClientOffline:
                 clients_limit=result.clients_limit,
             )
 
-        try:
-            await self._client_repo.find_for_master_by_phone(
-                master_id=master_id,
-                phone=phone_e164,
-            )
+        if await self._has_phone_conflict(master_id=master_id, phone_e164=phone_e164):
             ev.info(
                 "client_offline.create_rejected",
                 master_id=master_id,
@@ -159,8 +190,6 @@ class CreateClientOffline:
                 error=CreateClientOfflineError.PHONE_CONFLICT,
                 error_detail="phone conflict",
             )
-        except ClientNotFound:
-            pass
 
         client = await self._client_repo.create(
             ClientCreate(
@@ -169,13 +198,14 @@ class CreateClientOffline:
                 phone=phone_e164,
             ),
         )
+        had_clients_before = (await self._master_repo.count_clients(master_id)) > 0
         await self._master_repo.attach_client(master_id, client.id)
+        await self._maybe_schedule_onboarding_after_first_client(
+            master_id=master_id,
+            had_clients_before=had_clients_before,
+        )
 
-        warn = False
-        usage: Usage | None = None
-        if "clients" in await self._entitlements.near_limits(master_id=master_id):
-            warn = True
-            usage = await self._entitlements.get_usage(master_id=master_id)
+        warn, usage = await self._near_limit_warning(master_id=master_id)
 
         ev.info(
             "client.offline_created",

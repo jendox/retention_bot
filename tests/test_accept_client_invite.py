@@ -96,6 +96,7 @@ class AcceptClientInviteTests(unittest.IsolatedAsyncioTestCase):
             is_client_attached=AsyncMock(return_value=False),
             attach_client=AsyncMock(),
             detach_client=AsyncMock(),
+            count_clients=AsyncMock(return_value=0),
         )
         uc._booking_repo = SimpleNamespace(
             reassign_client_for_master=AsyncMock(return_value=0),
@@ -112,6 +113,10 @@ class AcceptClientInviteTests(unittest.IsolatedAsyncioTestCase):
             ),
             near_limits=AsyncMock(return_value=set()),
             get_usage=AsyncMock(return_value=Usage(clients_count=0, bookings_created_this_month=0)),
+        )
+        uc._outbox = SimpleNamespace(
+            cancel_onboarding_for_master=AsyncMock(return_value=0),
+            schedule_master_onboarding_add_first_booking=AsyncMock(return_value=0),
         )
         return uc
 

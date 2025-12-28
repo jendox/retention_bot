@@ -22,6 +22,15 @@ class BookingAlreadyHandled(Exception): ...
 
 
 class BookingRepository(BaseRepository):
+    async def exists_any_for_master(self, *, master_id: int) -> bool:
+        stmt = (
+            select(func.count())
+            .select_from(BookingEntity)
+            .where(BookingEntity.master_id == int(master_id))
+        )
+        count = await self._session.scalar(stmt)
+        return int(count or 0) > 0
+
     async def get_by_id(self, booking_id: int) -> Booking:
         stmt = select(BookingEntity).where(BookingEntity.id == booking_id)
         entity = await self._session.scalar(stmt)

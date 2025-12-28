@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.observability.events import EventLogger
+from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
+from src.repositories.subscription import SubscriptionRepository
 from src.schemas import Booking, BookingCreate, Master
 from src.use_cases.entitlements import EntitlementsService, Usage
 
@@ -67,6 +70,8 @@ class CreateClientBooking:
         self._master_repo = MasterRepository(session)
         self._booking_repo = BookingRepository(session)
         self._entitlements = EntitlementsService(session)
+        self._subs_repo = SubscriptionRepository(session)
+        self._outbox = ScheduledNotificationRepository(session)
 
     class _Abort(Exception):
         def __init__(self, result: CreateClientBookingResult) -> None:
@@ -221,6 +226,7 @@ class CreateClientBooking:
             self._abort_if(self._validate_ids(request))
             start_at_utc = self._unwrap(self._normalize_start_at(request.start_at_utc))
             master = self._unwrap(await self._load_master(request.master_id))
+            first_booking = not await self._booking_repo.exists_any_for_master(master_id=int(master.id))
             self._abort_if(await self._ensure_client_exists(request.client_id))
             self._abort_if(await self._ensure_attached(master_id=request.master_id, client_id=request.client_id))
             plan_is_pro, bookings_limit, usage = self._unwrap(
@@ -262,6 +268,11 @@ class CreateClientBooking:
                 usage=usage,
                 warn_master_bookings_near_limit=warn_near_limit,
             )
+
+            await self._outbox.cancel_onboarding_for_master(master_id=int(master.id))
+            if first_booking and (await self._subs_repo.get_by_master_id(int(master.id)) is None):
+                trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
+                await self._subs_repo.upsert_trial(int(master.id), trial_until)
 
         if not result.ok:
             ev.info(

@@ -66,6 +66,143 @@ def booking_end_at_utc(*, start_at: datetime, duration_min: int) -> datetime:
 
 
 class ScheduledNotificationRepository(BaseRepository):
+    async def schedule_master_onboarding_add_first_client(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        master_timezone: str,
+        master_created_at: datetime,
+        now_utc: datetime,
+    ) -> int:
+        """
+        Schedule a small onboarding chain for a new master with 0 clients:
+        - +~55m
+        - D+1 11:00 local
+        - D+3 11:00 local
+        """
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+        if master_created_at.tzinfo is None:
+            raise ValueError("Expected tz-aware master_created_at.")
+
+        master_tz = get_timezone(str(master_timezone))
+        created_local = master_created_at.astimezone(master_tz)
+
+        due_local_1 = shift_out_of_quiet_hours(created_local + timedelta(minutes=55))
+        due_local_2 = shift_out_of_quiet_hours(
+            datetime.combine(created_local.date() + timedelta(days=1), time(11, 0), tzinfo=master_tz),
+        )
+        due_local_3 = shift_out_of_quiet_hours(
+            datetime.combine(created_local.date() + timedelta(days=3), time(11, 0), tzinfo=master_tz),
+        )
+
+        jobs = [
+            (1, due_local_1.astimezone(UTC)),
+            (2, due_local_2.astimezone(UTC)),
+            (3, due_local_3.astimezone(UTC)),
+        ]
+
+        to_insert = []
+        for sequence, due_at in jobs:
+            to_insert.append(
+                {
+                    "event": "master_onboarding_add_first_client",
+                    "recipient": "master",
+                    "chat_id": int(master_telegram_id),
+                    "master_id": int(master_id),
+                    "client_id": None,
+                    "booking_id": None,
+                    "booking_start_at": None,
+                    "status": ScheduledNotificationStatus.PENDING.value,
+                    "due_at": due_at,
+                    "sequence": int(sequence),
+                    "dedup_key": f"beautydesk:outbox:onb:first_client:{int(master_id)}:{int(sequence)}",
+                    "locked_at": None,
+                    "attempts": 0,
+                    "last_error": None,
+                    "sent_at": None,
+                    "created_at": now_utc,
+                    "updated_at": now_utc,
+                },
+            )
+
+        stmt_ins = (
+            pg_insert(ScheduledNotificationEntity)
+            .values(to_insert)
+            .on_conflict_do_nothing(index_elements=["dedup_key"])
+        )
+        result = await self._session.execute(stmt_ins)
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def schedule_master_onboarding_add_first_booking(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        master_timezone: str,
+        now_utc: datetime,
+    ) -> int:
+        """
+        Schedule a small onboarding chain after the first client was added:
+        - +~55m
+        - D+1 11:00 local
+        - D+3 11:00 local
+        """
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+
+        master_tz = get_timezone(str(master_timezone))
+        local_now = now_utc.astimezone(master_tz)
+
+        due_local_1 = shift_out_of_quiet_hours(local_now + timedelta(minutes=55))
+        due_local_2 = shift_out_of_quiet_hours(
+            datetime.combine(local_now.date() + timedelta(days=1), time(11, 0), tzinfo=master_tz),
+        )
+        due_local_3 = shift_out_of_quiet_hours(
+            datetime.combine(local_now.date() + timedelta(days=3), time(11, 0), tzinfo=master_tz),
+        )
+
+        jobs = [
+            (1, due_local_1.astimezone(UTC)),
+            (2, due_local_2.astimezone(UTC)),
+            (3, due_local_3.astimezone(UTC)),
+        ]
+
+        to_insert = []
+        for sequence, due_at in jobs:
+            to_insert.append(
+                {
+                    "event": "master_onboarding_add_first_booking",
+                    "recipient": "master",
+                    "chat_id": int(master_telegram_id),
+                    "master_id": int(master_id),
+                    "client_id": None,
+                    "booking_id": None,
+                    "booking_start_at": None,
+                    "status": ScheduledNotificationStatus.PENDING.value,
+                    "due_at": due_at,
+                    "sequence": int(sequence),
+                    "dedup_key": f"beautydesk:outbox:onb:first_booking:{int(master_id)}:{int(sequence)}",
+                    "locked_at": None,
+                    "attempts": 0,
+                    "last_error": None,
+                    "sent_at": None,
+                    "created_at": now_utc,
+                    "updated_at": now_utc,
+                },
+            )
+
+        stmt_ins = (
+            pg_insert(ScheduledNotificationEntity)
+            .values(to_insert)
+            .on_conflict_do_nothing(index_elements=["dedup_key"])
+        )
+        result = await self._session.execute(stmt_ins)
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
     async def schedule_client_booking_reminders(
         self,
         *,
@@ -403,6 +540,34 @@ class ScheduledNotificationRepository(BaseRepository):
                 ScheduledNotificationEntity.status == ScheduledNotificationStatus.PENDING.value,
             )
             .values(due_at=due_at, updated_at=func.now())
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def cancel_onboarding_for_master(self, *, master_id: int) -> int:
+        stmt = (
+            update(ScheduledNotificationEntity)
+            .where(
+                ScheduledNotificationEntity.master_id == int(master_id),
+                ScheduledNotificationEntity.event.in_(
+                    [
+                        "master_onboarding_add_first_client",
+                        "master_onboarding_add_first_booking",
+                    ],
+                ),
+                ScheduledNotificationEntity.status.in_(
+                    [
+                        ScheduledNotificationStatus.PENDING.value,
+                        ScheduledNotificationStatus.SENDING.value,
+                    ],
+                ),
+            )
+            .values(
+                status=ScheduledNotificationStatus.CANCELLED.value,
+                locked_at=None,
+                updated_at=func.now(),
+            )
         )
         result = await self._session.execute(stmt)
         await self._session.flush()

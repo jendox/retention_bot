@@ -14,6 +14,7 @@ class DenyReason(StrEnum):
     CLIENT_NOTIFICATIONS_DISABLED = "client_notifications_disabled"
     MASTER_NOTIFICATIONS_DISABLED = "master_notifications_disabled"
     MASTER_ATTENDANCE_DISABLED = "master_attendance_disabled"
+    MASTER_ONBOARDING_DISABLED = "master_onboarding_disabled"
     PRO_REQUIRED = "pro_required"
     EVENT_NOT_ALLOWED = "event_not_allowed"
     PAST_BOOKING = "past_booking"
@@ -50,6 +51,7 @@ class NotificationFacts:
     plan_is_pro: bool | None = None  # важно для client-facing событий
     master_notify_clients: bool | None = None
     master_notify_attendance: bool | None = None
+    master_onboarding_nudges_enabled: bool | None = None
     client_notifications_enabled: bool | None = None
 
     # Доп. контекст
@@ -83,6 +85,8 @@ class DefaultNotificationPolicy:
         NotificationEvent.LIMIT_CLIENTS_REACHED,
         NotificationEvent.LIMIT_BOOKINGS_REACHED,
         NotificationEvent.MASTER_ATTENDANCE_NUDGE,
+        NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT,
+        NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING,
     }
 
     MASTER_FREE_ONLY_EVENTS: set[NotificationEvent] = {
@@ -94,6 +98,11 @@ class DefaultNotificationPolicy:
 
     MASTER_EVENTS_PRO: set[NotificationEvent] = {
         NotificationEvent.MASTER_ATTENDANCE_NUDGE,
+    }
+
+    MASTER_EVENTS_ONBOARDING: set[NotificationEvent] = {
+        NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT,
+        NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING,
     }
 
     CLIENT_EVENTS_PRO: set[NotificationEvent] = {
@@ -125,17 +134,27 @@ class DefaultNotificationPolicy:
         if facts.event not in self.MASTER_ALLOWED_EVENTS:
             return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
 
+        if facts.event in self.MASTER_EVENTS_ONBOARDING:
+            return self._check_master_onboarding(facts)
         if facts.event in self.MASTER_EVENTS_PRO:
-            if not facts.plan_is_pro:
-                return PolicyDecision.deny(DenyReason.PRO_REQUIRED)
-            if facts.master_notify_attendance is False:
-                return PolicyDecision.deny(DenyReason.MASTER_ATTENDANCE_DISABLED)
-            return PolicyDecision.allow()
+            return self._check_master_pro(facts)
+        if facts.event in self.MASTER_FREE_ONLY_EVENTS:
+            return self._check_master_free_only(facts)
+        return PolicyDecision.allow()
 
-        if facts.event not in self.MASTER_FREE_ONLY_EVENTS:
-            return PolicyDecision.allow()
+    @staticmethod
+    def _check_master_onboarding(facts: NotificationFacts) -> PolicyDecision:
+        if facts.master_onboarding_nudges_enabled is False:
+            return PolicyDecision.deny(DenyReason.MASTER_ONBOARDING_DISABLED)
+        return PolicyDecision.allow()
 
-        return self._check_master_free_only(facts)
+    @staticmethod
+    def _check_master_pro(facts: NotificationFacts) -> PolicyDecision:
+        if not facts.plan_is_pro:
+            return PolicyDecision.deny(DenyReason.PRO_REQUIRED)
+        if facts.master_notify_attendance is False:
+            return PolicyDecision.deny(DenyReason.MASTER_ATTENDANCE_DISABLED)
+        return PolicyDecision.allow()
 
     def _check_master_free_only(self, facts: NotificationFacts) -> PolicyDecision:
         if facts.plan_is_pro is None:
