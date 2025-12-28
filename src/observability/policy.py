@@ -32,6 +32,7 @@ class AlertPolicy:
         for build in (
             self._security,
             self._db,
+            self._workers,
             self._app,
             self._master_reg,
             self._bot_unhandled,
@@ -73,6 +74,21 @@ class AlertPolicy:
             throttle_key=throttle_key,
             throttle_sec=10 * 60,
             text="Database query failed (connectivity).",
+        )
+
+    @staticmethod
+    def _workers(*, event: str, level: str, error_type: str, stage: str) -> AlertSpec | None:  # noqa: ARG004
+        if not event.startswith("workers.") or not event.endswith(".heartbeat_missing"):
+            return None
+        # workers.<name>.heartbeat_missing
+        parts = event.split(".")
+        min_parts = 3
+        worker = parts[1] if len(parts) >= min_parts else "unknown"
+        return AlertSpec(
+            level="ERROR",
+            throttle_key=event,
+            throttle_sec=10 * 60,
+            text=f"Worker heartbeat missing: {worker}",
         )
 
     @staticmethod

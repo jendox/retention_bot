@@ -239,6 +239,13 @@ class RescheduleMasterBooking:
         return None
 
     async def execute(self, request: RescheduleMasterBookingRequest) -> RescheduleMasterBookingResult:
+        ev.info(
+            "booking.reschedule_attempt",
+            actor="master",
+            booking_id=request.booking_id,
+            master_telegram_id=request.master_telegram_id,
+        )
+        result: RescheduleMasterBookingResult
         try:
             self._abort_if(self._validate_ids(request))
             new_start_at_utc = self._unwrap(self._normalize_start_at(request.new_start_at_utc))
@@ -259,17 +266,35 @@ class RescheduleMasterBooking:
                 ),
             )
         except self._Abort as abort:
-            return abort.result
+            result = abort.result
+        else:
+            booking = await self._booking_repo.get_for_review(request.booking_id)
+            ev.info(
+                "booking.rescheduled_by_master",
+                booking_id=request.booking_id,
+                master_id=master.id,
+            )
+            ev.info(
+                "booking.rescheduled",
+                actor="master",
+                booking_id=request.booking_id,
+                master_id=master.id,
+            )
+            result = RescheduleMasterBookingResult(
+                ok=True,
+                booking=booking,
+                master=master,
+                plan_is_pro=True,
+            )
 
-        booking = await self._booking_repo.get_for_review(request.booking_id)
-        ev.info(
-            "booking.rescheduled_by_master",
-            booking_id=request.booking_id,
-            master_id=master.id,
-        )
-        return RescheduleMasterBookingResult(
-            ok=True,
-            booking=booking,
-            master=master,
-            plan_is_pro=True,
-        )
+        if not result.ok:
+            master_id = getattr(getattr(result, "master", None), "id", None)
+            ev.info(
+                "booking.reschedule_rejected",
+                actor="master",
+                booking_id=request.booking_id,
+                master_id=int(master_id) if master_id is not None else None,
+                error=str(result.error.value) if result.error else None,
+            )
+
+        return result

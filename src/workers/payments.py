@@ -17,8 +17,9 @@ from src.models.master import Master as MasterEntity
 from src.models.payment_invoice import PaymentInvoice as PaymentInvoiceEntity
 from src.observability import setup_logging
 from src.observability.events import EventLogger
+from src.observability.heartbeat import write_worker_heartbeat
 from src.repositories.payment_invoice import PaymentInvoiceRepository
-from src.settings import AppSettings, app_settings
+from src.settings import AppSettings, app_settings, get_settings
 from src.texts import billing as billing_txt
 from src.use_cases.check_pro_payment import CheckProPayment, CheckProPaymentRequest
 from src.use_cases.entitlements import EntitlementsService
@@ -33,6 +34,14 @@ class DueInvoice:
     master_telegram_id: int
     status: str
     paid_notified_at: datetime | None
+
+
+@dataclass(frozen=True)
+class PaymentsLoopConfig:
+    pro_days: int
+    tick: timedelta
+    batch_size: int
+    min_recheck: timedelta
 
 
 def _parse_args() -> argparse.Namespace:
@@ -183,18 +192,36 @@ async def run_loop(
     *,
     bot: Bot,
     express_pay_client: ExpressPayClient,
-    pro_days: int,
-    tick: timedelta,
-    batch_size: int,
-    min_recheck: timedelta,
+    redis: Redis,
+    config: PaymentsLoopConfig,
 ) -> None:
+    last_heartbeat_log_at: datetime | None = None
     while True:
         now_utc = datetime.now(UTC)
+        obs = get_settings().observability
+        await write_worker_heartbeat(
+            redis,
+            worker="payments",
+            ttl=timedelta(seconds=int(obs.workers_heartbeat_ttl_sec)),
+            now_utc=now_utc,
+            ev=ev,
+        )
+        if (
+            last_heartbeat_log_at is None
+            or (now_utc - last_heartbeat_log_at).total_seconds() >= float(obs.workers_heartbeat_log_every_sec)
+        ):
+            ev.info(
+                "workers.payments.heartbeat",
+                ttl_sec=int(obs.workers_heartbeat_ttl_sec),
+                log_every_sec=int(obs.workers_heartbeat_log_every_sec),
+            )
+            last_heartbeat_log_at = now_utc
+
         checked = 0
         paid = 0
         notified = 0
 
-        due = await _load_due_invoices(now_utc=now_utc, batch_size=batch_size, min_recheck=min_recheck)
+        due = await _load_due_invoices(now_utc=now_utc, batch_size=config.batch_size, min_recheck=config.min_recheck)
         for item in due:
             checked += 1
             try:
@@ -203,7 +230,7 @@ async def run_loop(
                         session=session,
                         bot=bot,
                         express_pay_client=express_pay_client,
-                        pro_days=int(pro_days),
+                        pro_days=int(config.pro_days),
                         due=item,
                     )
                     paid += paid_inc
@@ -221,11 +248,11 @@ async def run_loop(
             paid=paid,
             notified=notified,
             candidates=len(due),
-            tick_sec=int(tick.total_seconds()),
-            batch_size=int(batch_size),
-            min_recheck_sec=int(min_recheck.total_seconds()),
+            tick_sec=int(config.tick.total_seconds()),
+            batch_size=int(config.batch_size),
+            min_recheck_sec=int(config.min_recheck.total_seconds()),
         )
-        await asyncio.sleep(float(tick.total_seconds()))
+        await asyncio.sleep(float(config.tick.total_seconds()))
 
 
 async def main() -> None:
@@ -259,10 +286,13 @@ async def main() -> None:
             await run_loop(
                 bot=bot,
                 express_pay_client=express_pay_client,
-                pro_days=int(settings.billing.pro_days),
-                tick=timedelta(seconds=int(args.tick_sec)),
-                batch_size=int(args.batch_size),
-                min_recheck=timedelta(seconds=int(args.min_recheck_sec)),
+                redis=redis,
+                config=PaymentsLoopConfig(
+                    pro_days=int(settings.billing.pro_days),
+                    tick=timedelta(seconds=int(args.tick_sec)),
+                    batch_size=int(args.batch_size),
+                    min_recheck=timedelta(seconds=int(args.min_recheck_sec)),
+                ),
             )
     finally:
         await redis.aclose()

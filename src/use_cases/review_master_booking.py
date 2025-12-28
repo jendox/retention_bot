@@ -142,6 +142,14 @@ class ReviewMasterBooking:
         return None
 
     async def execute(self, request: ReviewMasterBookingRequest) -> ReviewMasterBookingResult:
+        ev.info(
+            "booking.review_attempt",
+            actor="master",
+            booking_id=request.booking_id,
+            master_telegram_id=request.master_telegram_id,
+            action=str(request.action.value),
+        )
+        result: ReviewMasterBookingResult
         try:
             self._abort_if(self._validate(request))
             master = self._unwrap(await self._load_master(request.master_telegram_id))
@@ -150,11 +158,13 @@ class ReviewMasterBooking:
             new_status = self._new_status(request.action)
 
             if request.action == ReviewMasterBookingAction.CONFIRM and booking.start_at <= datetime.now(UTC):
-                return self._error(
+                self._abort_if(
+                    self._error(
                     error=ReviewMasterBookingError.PAST_BOOKING,
                     master=master,
                     booking=booking,
                     new_status=new_status,
+                    ),
                 )
 
             changed = await self._booking_repo.set_status_if_pending_for_master(
@@ -163,28 +173,51 @@ class ReviewMasterBooking:
                 status=new_status,
             )
             if not changed:
-                return self._error(
+                self._abort_if(
+                    self._error(
                     error=ReviewMasterBookingError.ALREADY_HANDLED,
                     master=master,
                     booking=booking,
                     new_status=new_status,
+                    ),
                 )
 
             plan = await self._entitlements.get_plan(master_id=master.id)
         except self._Abort as abort:
-            return abort.result
+            result = abort.result
+        else:
+            ev.info(
+                "booking.reviewed_by_master",
+                booking_id=request.booking_id,
+                master_id=master.id,
+                action=str(request.action.value),
+                new_status=str(new_status.value),
+            )
+            ev.info(
+                "booking.reviewed",
+                actor="master",
+                booking_id=request.booking_id,
+                master_id=master.id,
+                action=str(request.action.value),
+                new_status=str(new_status.value),
+            )
+            result = ReviewMasterBookingResult(
+                ok=True,
+                booking=booking,
+                master=master,
+                new_status=new_status,
+                plan_is_pro=bool(plan.is_pro),
+            )
 
-        ev.info(
-            "booking.reviewed_by_master",
-            booking_id=request.booking_id,
-            master_id=master.id,
-            action=str(request.action.value),
-            new_status=str(new_status.value),
-        )
-        return ReviewMasterBookingResult(
-            ok=True,
-            booking=booking,
-            master=master,
-            new_status=new_status,
-            plan_is_pro=bool(plan.is_pro),
-        )
+        if not result.ok:
+            master_id = getattr(getattr(result, "master", None), "id", None)
+            ev.info(
+                "booking.review_rejected",
+                actor="master",
+                booking_id=request.booking_id,
+                master_id=int(master_id) if master_id is not None else None,
+                action=str(request.action.value),
+                error=str(result.error.value) if result.error else None,
+            )
+
+        return result

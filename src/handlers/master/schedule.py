@@ -697,10 +697,23 @@ async def _handle_action_cancel_yes(
     notifier: Notifier,
     admin_alerter: AdminAlerter | None,
 ) -> None:
+    ev.info(
+        "booking.cancel_attempt",
+        actor="master",
+        booking_id=int(booking_id),
+        master_telegram_id=int(callback.from_user.id),
+    )
     try:
         master = await _fetch_master(callback.from_user.id)
         ok = await _cancel_booking(booking_id=booking_id, master_id=master.id)
     except Exception as exc:
+        ev.info(
+            "booking.cancel_rejected",
+            actor="master",
+            booking_id=int(booking_id),
+            master_telegram_id=int(callback.from_user.id),
+            error="exception",
+        )
         await ev.aexception(
             "master_schedule.cancel_failed",
             exc=exc,
@@ -711,9 +724,22 @@ async def _handle_action_cancel_yes(
         return
 
     if not ok:
+        ev.info(
+            "booking.cancel_rejected",
+            actor="master",
+            booking_id=int(booking_id),
+            master_id=int(master.id),
+            error="cannot_cancel",
+        )
         await callback.answer(txt.cancel_failed(), show_alert=True)
         return
 
+    ev.info(
+        "booking.cancelled",
+        actor="master",
+        booking_id=int(booking_id),
+        master_id=int(master.id),
+    )
     await callback.answer(txt.cancelled_ok(), show_alert=True)
 
     # Notify client (Pro-only + toggles checked by policy).

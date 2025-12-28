@@ -87,6 +87,13 @@ class ObservabilitySettings(BaseModel):
     db_slow_query_ms: int = 500
     handler_slow_ms: int = 3_000
 
+    # Workers: heartbeat + "silence" alerting (run in bot process).
+    workers_watchdog_enabled: bool = False
+    workers_heartbeat_check_sec: int = 60
+    workers_heartbeat_stale_sec: int = 5 * 60
+    workers_heartbeat_ttl_sec: int = 10 * 60
+    workers_heartbeat_log_every_sec: int = 5 * 60
+
     @staticmethod
     def _parse_kv_string(
         raw: str,

@@ -21,8 +21,9 @@ from src.notifications.policy import DefaultNotificationPolicy, NotificationFact
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability import setup_logging
 from src.observability.events import EventLogger
+from src.observability.heartbeat import write_worker_heartbeat
 from src.schemas.enums import BookingStatus
-from src.settings import AppSettings, app_settings
+from src.settings import AppSettings, app_settings, get_settings
 from src.use_cases.entitlements import EntitlementsService
 
 ev = EventLogger("workers.reminders")
@@ -154,9 +155,29 @@ async def run_loop(
 ) -> None:
     tick = timedelta(seconds=int(tick_sec))
     window = timedelta(seconds=int(window_sec))
+    last_heartbeat_log_at: datetime | None = None
 
     while True:
         now_utc = datetime.now(UTC)
+        obs = get_settings().observability
+        await write_worker_heartbeat(
+            redis,
+            worker="reminders",
+            ttl=timedelta(seconds=int(obs.workers_heartbeat_ttl_sec)),
+            now_utc=now_utc,
+            ev=ev,
+        )
+        if (
+            last_heartbeat_log_at is None
+            or (now_utc - last_heartbeat_log_at).total_seconds() >= float(obs.workers_heartbeat_log_every_sec)
+        ):
+            ev.info(
+                "workers.reminders.heartbeat",
+                ttl_sec=int(obs.workers_heartbeat_ttl_sec),
+                log_every_sec=int(obs.workers_heartbeat_log_every_sec),
+            )
+            last_heartbeat_log_at = now_utc
+
         sent = 0
         candidates = 0
         plan_cache: dict[int, bool] = {}

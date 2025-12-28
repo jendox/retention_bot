@@ -999,6 +999,12 @@ async def _cancel_booking_and_notify(
     notifier: Notifier,
     booking_id: int,
 ) -> BookingForReview | None:
+    ev.info(
+        "booking.cancel_attempt",
+        actor="client",
+        booking_id=int(booking_id),
+        client_telegram_id=int(callback.from_user.id),
+    )
     async with active_session() as session:
         client_repo = ClientRepository(session)
         booking_repo = BookingRepository(session)
@@ -1006,17 +1012,40 @@ async def _cancel_booking_and_notify(
             client = await client_repo.get_by_telegram_id(callback.from_user.id)
         except ClientNotFound:
             ev.warning("client_list_bookings.client_not_found")
+            ev.info(
+                "booking.cancel_rejected",
+                actor="client",
+                booking_id=int(booking_id),
+                client_telegram_id=int(callback.from_user.id),
+                error="client_not_found",
+            )
             await callback.answer(CLIENT_NOT_FOUND_MESSAGE, show_alert=True)
             return None
         try:
             booking = await booking_repo.get_for_review(booking_id)
         except BookingNotFound:
             ev.warning("client_list_bookings.booking_not_found", booking_id=int(booking_id))
+            ev.info(
+                "booking.cancel_rejected",
+                actor="client",
+                booking_id=int(booking_id),
+                client_id=int(client.id),
+                error="booking_not_found",
+            )
             await callback.answer(txt.booking_not_found(), show_alert=True)
             return None
 
         if booking.client.id != client.id:
             ev.warning("client_list_bookings.forbidden", booking_id=int(booking_id))
+            master_id = getattr(booking.master, "id", None)
+            ev.info(
+                "booking.cancel_rejected",
+                actor="client",
+                booking_id=int(booking_id),
+                master_id=int(master_id) if master_id is not None else None,
+                client_id=int(client.id),
+                error="forbidden",
+            )
             await callback.answer(txt.forbidden(), show_alert=True)
             return None
 
@@ -1024,6 +1053,13 @@ async def _cancel_booking_and_notify(
 
     if not cancelled:
         ev.info("client_list_bookings.cannot_cancel", booking_id=int(booking_id))
+        ev.info(
+            "booking.cancel_rejected",
+            actor="client",
+            booking_id=int(booking_id),
+            client_id=int(client.id),
+            error="cannot_cancel",
+        )
         await callback.answer(txt.cannot_cancel(), show_alert=True)
         return None
 
@@ -1045,6 +1081,13 @@ async def _cancel_booking_and_notify(
     )
 
     master_id = getattr(booking.master, "id", None)
+    ev.info(
+        "booking.cancelled",
+        actor="client",
+        booking_id=int(booking.id),
+        master_id=int(master_id) if master_id is not None else None,
+        client_id=int(client.id),
+    )
     ev.info(
         "client_list_bookings.cancelled",
         booking_id=int(booking.id),

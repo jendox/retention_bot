@@ -224,6 +224,13 @@ class CreateMasterBooking:
             )
 
     async def execute(self, request: CreateMasterBookingRequest) -> CreateMasterBookingResult:
+        ev.info(
+            "booking.create_attempt",
+            actor="master",
+            master_id=request.master_id,
+            client_id=request.client_id,
+        )
+        result: CreateMasterBookingResult
         try:
             self._abort_if(self._validate_ids(request))
             start_at_utc = self._unwrap(self._normalize_start_at(request.start_at_utc))
@@ -251,23 +258,41 @@ class CreateMasterBooking:
                 ),
             )
         except self._Abort as abort:
-            return abort.result
+            result = abort.result
+        else:
+            ev.info(
+                "booking.created_by_master",
+                booking_id=booking.id,
+                master_id=request.master_id,
+                client_id=request.client_id,
+            )
+            ev.info(
+                "booking.created",
+                actor="master",
+                booking_id=booking.id,
+                master_id=request.master_id,
+                client_id=request.client_id,
+            )
 
-        ev.info(
-            "booking.created_by_master",
-            booking_id=booking.id,
-            master_id=request.master_id,
-            client_id=request.client_id,
-        )
+            warn_near_limit = usage is not None and bookings_limit is not None and not plan_is_pro
+            result = CreateMasterBookingResult(
+                ok=True,
+                booking=booking,
+                master=master,
+                client=client,
+                plan_is_pro=plan_is_pro,
+                bookings_limit=bookings_limit,
+                usage=usage,
+                warn_master_bookings_near_limit=warn_near_limit,
+            )
 
-        warn_near_limit = usage is not None and bookings_limit is not None and not plan_is_pro
-        return CreateMasterBookingResult(
-            ok=True,
-            booking=booking,
-            master=master,
-            client=client,
-            plan_is_pro=plan_is_pro,
-            bookings_limit=bookings_limit,
-            usage=usage,
-            warn_master_bookings_near_limit=warn_near_limit,
-        )
+        if not result.ok:
+            ev.info(
+                "booking.create_rejected",
+                actor="master",
+                master_id=request.master_id,
+                client_id=request.client_id,
+                error=str(result.error.value) if result.error else None,
+            )
+
+        return result
