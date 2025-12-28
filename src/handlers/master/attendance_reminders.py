@@ -8,7 +8,7 @@ from aiogram.types import CallbackQuery
 from src.core.sa import active_session
 from src.datetime_utils import get_timezone
 from src.filters.user_role import UserRole
-from src.handlers.shared.ui import safe_edit_reply_markup
+from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.repositories import MasterRepository
@@ -45,6 +45,14 @@ async def _hide_keyboard(callback: CallbackQuery) -> None:
     )
 
 
+async def _close_message(callback: CallbackQuery) -> None:
+    if callback.message is None:
+        return
+    ok = await safe_delete(callback.message, event="attendance_reminder.delete_failed")
+    if not ok:
+        await _hide_keyboard(callback)
+
+
 async def _mark_attendance(callback: CallbackQuery, *, booking_id: int, outcome: AttendanceOutcome) -> None:
     try:
         async with active_session() as session:
@@ -65,7 +73,7 @@ async def _mark_attendance(callback: CallbackQuery, *, booking_id: int, outcome:
 
     if result.ok or (result.error and result.error.value == "already_marked"):
         await callback.answer(common_txt.saved(), show_alert=False)
-        await _hide_keyboard(callback)
+        await _close_message(callback)
         return
 
     await callback.answer(common_txt.generic_error(), show_alert=True)
@@ -87,7 +95,7 @@ async def _snooze(callback: CallbackQuery, *, booking_id: int, due_at: datetime)
         return
 
     await callback.answer(common_txt.saved(), show_alert=False)
-    await _hide_keyboard(callback)
+    await _close_message(callback)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith(f"{ATT_PREFIX}attended:"))
@@ -163,4 +171,4 @@ async def attendance_disable(callback: CallbackQuery) -> None:
         return
 
     await callback.answer(common_txt.saved(), show_alert=False)
-    await _hide_keyboard(callback)
+    await _close_message(callback)

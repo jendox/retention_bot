@@ -28,7 +28,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Start Postgres + Redis
-        run: docker compose up -d
+        run: docker compose -f docker-compose.yml up -d postgres redis
 
       - name: Wait for Postgres
         run: |
@@ -56,4 +56,3 @@ jobs:
           DATABASE__POSTGRES_URL: "postgresql+asyncpg://retention_bot:retention_bot_dev_password@localhost:5432/retention_bot"
           DATABASE__REDIS_URL: "redis://localhost:6379/0"
         run: uv run python -m unittest -v
-
