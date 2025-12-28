@@ -34,7 +34,7 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", text)
         self.assertNotIn("<b>", text)
 
-    async def test_cancel_sends_client_notification_via_notifier(self) -> None:
+    async def test_cancel_enqueues_client_notification(self) -> None:
         from src.handlers.master import schedule as h
         from src.schemas.enums import Timezone
 
@@ -62,6 +62,8 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
         class _BookingRepo:
             def __init__(self, session) -> None:
                 pass
@@ -81,14 +83,17 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(h, "_cancel_booking", AsyncMock(return_value=True)),
             patch.object(h, "_send_schedule", AsyncMock()),
             patch.object(h, "session_local", _fake_session_local),
+            patch.object(h, "active_session", _fake_active_session),
             patch.object(h, "BookingRepository", _BookingRepo),
             patch.object(h, "EntitlementsService", _Entitlements),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
         ):
             await h.master_booking_actions(callback=callback, state=SimpleNamespace(), notifier=notifier)
 
-        notifier.maybe_send.assert_awaited()
-        request = notifier.maybe_send.await_args.args[0]
-        self.assertEqual(request.event, NotificationEvent.BOOKING_CANCELLED_BY_MASTER)
+        outbox.enqueue_booking_client_notification.assert_awaited()
+        kwargs = outbox.enqueue_booking_client_notification.await_args.kwargs
+        self.assertEqual(kwargs["event"], NotificationEvent.BOOKING_CANCELLED_BY_MASTER.value)
+        self.assertEqual(kwargs["booking_id"], 7)
 
     async def test_cancel_shows_confirmation_prompt(self) -> None:
         from src.handlers.master import schedule as h

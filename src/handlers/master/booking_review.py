@@ -2,22 +2,21 @@ from datetime import UTC, datetime
 from html import escape as html_escape
 
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery
 
 from src.core.sa import active_session
 from src.datetime_utils import to_zone
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
-from src.notifications import BookingContext, NotificationEvent, RecipientKind
-from src.notifications.notifier import NotificationRequest, Notifier
-from src.notifications.policy import NotificationFacts
+from src.notifications import NotificationEvent
+from src.notifications.notifier import Notifier
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.enums import BookingStatus
 from src.texts import master_booking_review as txt
-from src.texts.buttons import btn_cancel_booking
 from src.use_cases.review_master_booking import (
     ReviewMasterBooking,
     ReviewMasterBookingAction,
@@ -27,14 +26,6 @@ from src.use_cases.review_master_booking import (
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
-
-
-def _build_client_cancel_keyboard(booking_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=btn_cancel_booking(), callback_data=f"c:bookings:cancel_ntf:{booking_id}")],
-        ],
-    )
 
 
 def _parse_review_callback(data: str) -> tuple[int, str] | None:
@@ -86,47 +77,33 @@ def _master_review_text(*, booking, new_status: BookingStatus) -> str:
 
 async def _maybe_notify_client(
     *,
-    notifier: Notifier,
     booking,
     new_status: BookingStatus,
     plan_is_pro: bool | None,
 ) -> None:
-    slot_client = to_zone(booking.start_at.astimezone(UTC), booking.client.timezone)
-    slot_client_str = slot_client.strftime("%d.%m.%Y %H:%M")
-
     event = (
         NotificationEvent.BOOKING_CONFIRMED
         if new_status == BookingStatus.CONFIRMED
         else NotificationEvent.BOOKING_DECLINED
     )
-    reply_markup = None
-    if new_status == BookingStatus.CONFIRMED and booking.start_at > datetime.now(UTC):
-        reply_markup = _build_client_cancel_keyboard(booking.id)
-
-    await notifier.maybe_send(
-        NotificationRequest(
-            event=event,
-            recipient=RecipientKind.CLIENT,
-            chat_id=booking.client.telegram_id,
-            context=BookingContext(
-                booking_id=booking.id,
-                master_name=html_escape(str(booking.master.name)),
-                client_name=html_escape(str(booking.client.name)),
-                slot_str=slot_client_str,
-                duration_min=booking.duration_min,
-            ),
-            facts=NotificationFacts(
-                event=event,
-                recipient=RecipientKind.CLIENT,
-                chat_id=booking.client.telegram_id,
-                plan_is_pro=bool(plan_is_pro),
-                master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
-                client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
-                booking_start_at_utc=booking.start_at.astimezone(UTC),
-            ),
-            reply_markup=reply_markup,
-        ),
+    client_tg = getattr(booking.client, "telegram_id", None)
+    if client_tg is None:
+        return
+    allow = (
+        bool(plan_is_pro)
+        and bool(getattr(booking.master, "notify_clients", True))
+        and bool(getattr(booking.client, "notifications_enabled", True))
     )
+    if not allow:
+        return
+    async with active_session() as session:
+        await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
+            event=str(event.value),
+            chat_id=int(client_tg),
+            booking_id=int(booking.id),
+            booking_start_at=booking.start_at,
+            now_utc=datetime.now(UTC),
+        )
 
 
 @router.callback_query(F.data.startswith("m:booking:"))
@@ -206,12 +183,7 @@ async def master_review_booking(
         )
     await callback.answer(txt.done(), show_alert=False)
 
-    await _maybe_notify_client(
-        notifier=notifier,
-        booking=booking,
-        new_status=new_status,
-        plan_is_pro=result.plan_is_pro,
-    )
+    await _maybe_notify_client(booking=booking, new_status=new_status, plan_is_pro=result.plan_is_pro)
 
     ev.info(
         "booking.reviewed",

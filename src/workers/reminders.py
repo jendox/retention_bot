@@ -26,6 +26,7 @@ from src.observability.heartbeat import write_worker_heartbeat
 from src.repositories.scheduled_notification import ScheduledNotificationJob, ScheduledNotificationRepository
 from src.schemas.enums import AttendanceOutcome, BookingStatus
 from src.settings import AppSettings, app_settings, get_settings
+from src.texts.buttons import btn_cancel_booking
 from src.use_cases.entitlements import EntitlementsService
 
 ev = EventLogger("workers.reminders")
@@ -44,6 +45,19 @@ REMINDERS: tuple[ReminderKind, ...] = (
     ReminderKind(event=NotificationEvent.REMINDER_24H, offset=timedelta(hours=24), name="24h"),
     ReminderKind(event=NotificationEvent.REMINDER_2H, offset=timedelta(hours=2), name="2h"),
 )
+
+_CLIENT_BOOKING_EVENTS: set[NotificationEvent] = {
+    NotificationEvent.BOOKING_CONFIRMED,
+    NotificationEvent.BOOKING_DECLINED,
+    NotificationEvent.BOOKING_CREATED_CONFIRMED,
+    NotificationEvent.BOOKING_CANCELLED_BY_MASTER,
+    NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
+}
+
+_CLIENT_REMINDER_EVENTS: set[NotificationEvent] = {
+    NotificationEvent.REMINDER_24H,
+    NotificationEvent.REMINDER_2H,
+}
 
 
 def dedup_key(*, booking_id: int, start_at_utc: datetime, kind: ReminderKind) -> str:
@@ -273,6 +287,100 @@ async def _send_client_reminder(
         return None
 
 
+def _client_booking_keyboard(
+    *,
+    event: NotificationEvent,
+    booking: BookingEntity,
+    now_utc: datetime,
+) -> InlineKeyboardMarkup | None:
+    rows: list[list[InlineKeyboardButton]] = []
+
+    if event in {NotificationEvent.BOOKING_CREATED_CONFIRMED, NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER}:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="💬 Написать мастеру",
+                    url=f"tg://user?id={int(booking.master.telegram_id)}",
+                ),
+            ],
+        )
+
+    if event in {
+        NotificationEvent.BOOKING_CREATED_CONFIRMED,
+        NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
+        NotificationEvent.BOOKING_CONFIRMED,
+    } and booking.start_at.astimezone(UTC) > now_utc:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=btn_cancel_booking(),
+                    callback_data=f"c:bookings:cancel_ntf:{int(booking.id)}",
+                ),
+            ],
+        )
+
+    if not rows:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_client_booking_notification(
+    *,
+    notifier: Notifier,
+    event: NotificationEvent,
+    booking: BookingEntity,
+    chat_id: int,
+    now_utc: datetime,
+    plan_is_pro: bool,
+) -> bool | None:
+    if (
+        booking.client.telegram_id is None
+        or booking.client.notifications_enabled is False
+        or booking.master.notify_clients is False
+    ):
+        return False
+
+    if event in {NotificationEvent.BOOKING_CONFIRMED, NotificationEvent.BOOKING_DECLINED}:
+        expected = (
+            BookingStatus.CONFIRMED if event == NotificationEvent.BOOKING_CONFIRMED else BookingStatus.DECLINED
+        )
+        if booking.status != expected:
+            return False
+
+    start_at_utc = booking.start_at.astimezone(UTC)
+    slot_client = to_zone(start_at_utc, booking.client.timezone)
+    slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
+
+    try:
+        return await notifier.maybe_send(
+            NotificationRequest(
+                event=event,
+                recipient=RecipientKind.CLIENT,
+                chat_id=int(chat_id),
+                context=BookingContext(
+                    booking_id=int(booking.id),
+                    master_name=str(booking.master.name),
+                    client_name=str(booking.client.name),
+                    slot_str=slot_str,
+                    duration_min=int(booking.duration_min),
+                ),
+                reply_markup=_client_booking_keyboard(event=event, booking=booking, now_utc=now_utc),
+                facts=NotificationFacts(
+                    event=event,
+                    recipient=RecipientKind.CLIENT,
+                    chat_id=int(chat_id),
+                    plan_is_pro=bool(plan_is_pro),
+                    master_notify_clients=bool(booking.master.notify_clients),
+                    client_notifications_enabled=bool(booking.client.notifications_enabled),
+                    booking_start_at_utc=start_at_utc,
+                    now_utc=now_utc,
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
 async def _send_master_attendance_nudge(
     *,
     notifier: Notifier,
@@ -361,6 +469,56 @@ async def _send_master_onboarding_nudge(
         return None
 
 
+@dataclass(frozen=True)
+class _BookingJobDispatch:
+    event: NotificationEvent
+    recipient: RecipientKind
+    chat_id: int
+
+
+async def _send_booking_job(
+    *,
+    notifier: Notifier,
+    booking: BookingEntity,
+    dispatch: _BookingJobDispatch,
+    now_utc: datetime,
+    plan_cache: dict[int, bool],
+) -> bool | None:
+    plan_is_pro = await _plan_is_pro(master_id=int(booking.master_id), cache=plan_cache)
+
+    if dispatch.recipient == RecipientKind.CLIENT:
+        result: bool | None = False
+        if dispatch.event in _CLIENT_BOOKING_EVENTS:
+            result = await _send_client_booking_notification(
+                notifier=notifier,
+                event=dispatch.event,
+                booking=booking,
+                chat_id=int(dispatch.chat_id),
+                now_utc=now_utc,
+                plan_is_pro=bool(plan_is_pro),
+            )
+        elif dispatch.event in _CLIENT_REMINDER_EVENTS:
+            result = await _send_client_reminder(
+                notifier=notifier,
+                event=dispatch.event,
+                booking=booking,
+                now_utc=now_utc,
+                plan_is_pro=bool(plan_is_pro),
+            )
+        return result
+
+    if dispatch.recipient == RecipientKind.MASTER and dispatch.event == NotificationEvent.MASTER_ATTENDANCE_NUDGE:
+        return await _send_master_attendance_nudge(
+            notifier=notifier,
+            chat_id=int(dispatch.chat_id),
+            booking=booking,
+            now_utc=now_utc,
+            plan_is_pro=bool(plan_is_pro),
+        )
+
+    return False
+
+
 async def _send_job(
     *,
     notifier: Notifier,
@@ -380,18 +538,21 @@ async def _send_job(
     booking_start_at = job.booking_start_at
     chat_id = int(job.chat_id)
 
-    if event in {
+    if (
+        event
+        in {
         NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT,
         NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING,
-    }:
-        if recipient == RecipientKind.MASTER:
-            return await _send_master_onboarding_nudge(
-                notifier=notifier,
-                event=event,
-                job=job,
-                chat_id=int(chat_id),
-                plan_cache=plan_cache,
-            )
+        }
+        and recipient == RecipientKind.MASTER
+    ):
+        return await _send_master_onboarding_nudge(
+            notifier=notifier,
+            event=event,
+            job=job,
+            chat_id=int(chat_id),
+            plan_cache=plan_cache,
+        )
 
     if booking_id is None:
         return False
@@ -399,26 +560,13 @@ async def _send_job(
     booking = await _load_booking_for_notification(booking_id=booking_id)
     if booking is None or (booking_start_at is not None and booking.start_at != booking_start_at):
         return False
-
-    plan_is_pro = await _plan_is_pro(master_id=int(booking.master_id), cache=plan_cache)
-
-    if event in {NotificationEvent.REMINDER_24H, NotificationEvent.REMINDER_2H}:
-        return await _send_client_reminder(
-            notifier=notifier,
-            event=event,
-            booking=booking,
-            now_utc=now_utc,
-            plan_is_pro=bool(plan_is_pro),
-        )
-    if event == NotificationEvent.MASTER_ATTENDANCE_NUDGE and recipient == RecipientKind.MASTER:
-        return await _send_master_attendance_nudge(
-            notifier=notifier,
-            chat_id=int(chat_id),
-            booking=booking,
-            now_utc=now_utc,
-            plan_is_pro=bool(plan_is_pro),
-        )
-    return False
+    return await _send_booking_job(
+        notifier=notifier,
+        booking=booking,
+        dispatch=_BookingJobDispatch(event=event, recipient=recipient, chat_id=int(chat_id)),
+        now_utc=now_utc,
+        plan_cache=plan_cache,
+    )
 
 
 @dataclass(frozen=True)

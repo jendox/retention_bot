@@ -120,5 +120,5 @@ def invite_master_created(*, link: str, ttl_hours: int, t: Translator = _noop_t)
         f"Привет! 👋\n\n"
         f"Это ссылка для регистрации в BeautyDesk:\n"
         f"{link}\n\n"
-        f"⏳ Ссылка действует {ttl_hours} ч."
+        f"⏳ Ссылка действует {ttl_hours} ч.",
     )

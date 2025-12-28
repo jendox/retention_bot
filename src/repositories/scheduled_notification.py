@@ -66,6 +66,58 @@ def booking_end_at_utc(*, start_at: datetime, duration_min: int) -> datetime:
 
 
 class ScheduledNotificationRepository(BaseRepository):
+    async def enqueue_booking_client_notification(
+        self,
+        *,
+        event: str,
+        chat_id: int,
+        booking_id: int,
+        booking_start_at: datetime,
+        now_utc: datetime,
+    ) -> int:
+        """
+        Enqueue an immediate client-facing booking notification to be delivered by the reminders worker.
+        Idempotent via unique `dedup_key`.
+
+        `booking_start_at` is persisted to invalidate stale jobs on reschedule (start_at mismatch).
+        """
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+        if booking_start_at.tzinfo is None:
+            raise ValueError("Expected tz-aware booking_start_at.")
+
+        start_ts = int(booking_start_at.astimezone(UTC).timestamp())
+        dedup_key = f"beautydesk:outbox:client_booking:{event}:{int(booking_id)}:{start_ts}"
+
+        stmt = (
+            pg_insert(ScheduledNotificationEntity)
+            .values(
+                {
+                    "event": str(event),
+                    "recipient": "client",
+                    "chat_id": int(chat_id),
+                    "master_id": None,
+                    "client_id": None,
+                    "booking_id": int(booking_id),
+                    "booking_start_at": booking_start_at,
+                    "status": ScheduledNotificationStatus.PENDING.value,
+                    "due_at": now_utc,
+                    "sequence": None,
+                    "dedup_key": dedup_key,
+                    "locked_at": None,
+                    "attempts": 0,
+                    "last_error": None,
+                    "sent_at": None,
+                    "created_at": now_utc,
+                    "updated_at": now_utc,
+                },
+            )
+            .on_conflict_do_nothing(index_elements=["dedup_key"])
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
     async def schedule_master_onboarding_add_first_client(
         self,
         *,

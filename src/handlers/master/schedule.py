@@ -10,13 +10,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from src.core.sa import active_session, session_local
-from src.datetime_utils import get_timezone, to_zone
+from src.datetime_utils import get_timezone
 from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_delete, safe_edit_text
-from src.notifications import BookingContext, NotificationEvent, RecipientKind
-from src.notifications.notifier import NotificationRequest, Notifier
-from src.notifications.policy import NotificationFacts
+from src.notifications import NotificationEvent
+from src.notifications.notifier import Notifier
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -24,6 +23,7 @@ from src.paywall import build_upgrade_button_with_fallback
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, AttendanceOutcome, BookingStatus, status_badge
 from src.settings import get_settings
 from src.texts import master_schedule as txt, paywall as paywall_txt
@@ -469,7 +469,6 @@ async def _send_or_edit(
 
 async def _maybe_notify_client_cancelled(
     *,
-    notifier: Notifier,
     booking,
     plan_is_pro: bool,
 ) -> None:
@@ -477,33 +476,22 @@ async def _maybe_notify_client_cancelled(
     if client_tg is None:
         return
 
-    master_name_safe = html_escape(str(getattr(booking.master, "name", "")))
-    slot_client = to_zone(booking.start_at.astimezone(UTC), booking.client.timezone)
-    slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
-    facts = NotificationFacts(
-        event=NotificationEvent.BOOKING_CANCELLED_BY_MASTER,
-        recipient=RecipientKind.CLIENT,
-        chat_id=int(client_tg),
-        plan_is_pro=bool(plan_is_pro),
-        master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
-        client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
-        booking_start_at_utc=booking.start_at.astimezone(UTC),
+    allow = (
+        bool(plan_is_pro)
+        and bool(getattr(booking.master, "notify_clients", True))
+        and bool(getattr(booking.client, "notifications_enabled", True))
     )
-    await notifier.maybe_send(
-        NotificationRequest(
-            event=NotificationEvent.BOOKING_CANCELLED_BY_MASTER,
-            recipient=RecipientKind.CLIENT,
+    if not allow:
+        return
+
+    async with active_session() as session:
+        await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
+            event=str(NotificationEvent.BOOKING_CANCELLED_BY_MASTER.value),
             chat_id=int(client_tg),
-            context=BookingContext(
-                booking_id=booking.id,
-                master_name=master_name_safe,
-                client_name=html_escape(str(getattr(booking.client, "name", ""))),
-                slot_str=slot_str,
-                duration_min=booking.duration_min,
-            ),
-            facts=facts,
-        ),
-    )
+            booking_id=int(booking.id),
+            booking_start_at=booking.start_at,
+            now_utc=datetime.now(UTC),
+        )
 
 
 # ---------- rendering ----------
@@ -749,7 +737,7 @@ async def _handle_action_cancel_yes(
             booking = await booking_repo.get_for_review(booking_id)
             entitlements = EntitlementsService(session)
             plan = await entitlements.get_plan(master_id=master.id)
-        await _maybe_notify_client_cancelled(notifier=notifier, booking=booking, plan_is_pro=plan.is_pro)
+        await _maybe_notify_client_cancelled(booking=booking, plan_is_pro=plan.is_pro)
     except Exception as exc:
         await ev.aexception(
             "master_schedule.cancel_notify_failed",

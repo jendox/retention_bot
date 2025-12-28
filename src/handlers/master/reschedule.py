@@ -12,14 +12,12 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
-from src.datetime_utils import get_timezone, to_zone
+from src.datetime_utils import get_timezone
 from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
-from src.notifications import BookingContext, NotificationEvent, RecipientKind
-from src.notifications.notifier import NotificationRequest, Notifier
-from src.notifications.policy import NotificationFacts
+from src.notifications.notifier import Notifier
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -27,10 +25,11 @@ from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
 from src.repositories import BookingNotFound, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.enums import BookingStatus, Timezone
 from src.settings import get_settings
 from src.texts import master_reschedule as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_close, btn_confirm, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_go_pro
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.use_cases.reschedule_master_booking import (
@@ -413,7 +412,6 @@ async def _apply_confirm_result(
     if meta.client_tg is not None:
         await _notify_client_about_reschedule(
             callback=callback,
-            notifier=notifier,
             booking=booking,
             new_start_at=meta.new_start_at,
             client_tg=meta.client_tg,
@@ -448,53 +446,27 @@ async def _handle_confirm_error(
 async def _notify_client_about_reschedule(
     *,
     callback: CallbackQuery,
-    notifier: Notifier,
     booking,
     new_start_at: datetime,
     client_tg: int,
     plan_is_pro: bool | None,
 ) -> None:
-    slot_client = to_zone(new_start_at.astimezone(UTC), booking.client.timezone)
-    reply_markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="💬 Написать мастеру",
-                    url=f"tg://user?id={int(booking.master.telegram_id)}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=btn_cancel_booking(),
-                    callback_data=f"c:bookings:cancel_ntf:{booking.id}",
-                ),
-            ],
-        ],
+    allow = (
+        bool(plan_is_pro)
+        and bool(getattr(booking.master, "notify_clients", True))
+        and bool(getattr(booking.client, "notifications_enabled", True))
     )
-    await notifier.maybe_send(
-        NotificationRequest(
-            event=NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
-            recipient=RecipientKind.CLIENT,
-            chat_id=client_tg,
-            context=BookingContext(
-                booking_id=booking.id,
-                master_name=booking.master.name,
-                client_name=booking.client.name,
-                slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
-                duration_min=booking.duration_min,
-            ),
-            facts=NotificationFacts(
-                event=NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
-                recipient=RecipientKind.CLIENT,
-                chat_id=client_tg,
-                plan_is_pro=bool(plan_is_pro),
-                master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
-                client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
-                booking_start_at_utc=new_start_at.astimezone(UTC),
-            ),
-            reply_markup=reply_markup,
-        ),
-    )
+    if not allow:
+        return
+
+    async with active_session() as session:
+        await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
+            event="booking_rescheduled_by_master",
+            chat_id=int(client_tg),
+            booking_id=int(booking.id),
+            booking_start_at=new_start_at,
+            now_utc=datetime.now(UTC),
+        )
 
 
 async def _return_to_schedule(callback: CallbackQuery, *, scope: str | None, page: int | None) -> None:

@@ -155,3 +155,53 @@ class ReminderWorkerOutboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(request.reply_markup)
         cb_data = request.reply_markup.inline_keyboard[0][0].callback_data
         self.assertTrue(cb_data.startswith("m:onb:"))
+
+    async def test_send_job_booking_created_confirmed_sends_with_cancel_button(self) -> None:
+        from src.schemas.enums import Timezone
+        from src.workers import reminders as w
+
+        start_at = datetime(2025, 1, 10, 12, 0, tzinfo=UTC)
+        booking = SimpleNamespace(
+            id=7,
+            master_id=1,
+            start_at=start_at,
+            duration_min=60,
+            status=w.BookingStatus.CONFIRMED,
+            master=SimpleNamespace(id=1, name="M", telegram_id=999, notify_clients=True, notify_attendance=True),
+            client=SimpleNamespace(
+                id=2,
+                name="C",
+                telegram_id=123,
+                timezone=Timezone.EUROPE_MINSK,
+                notifications_enabled=True,
+            ),
+        )
+        job = SimpleNamespace(
+            id=1,
+            event=w.NotificationEvent.BOOKING_CREATED_CONFIRMED.value,
+            recipient=w.RecipientKind.CLIENT.value,
+            chat_id=123,
+            booking_id=7,
+            booking_start_at=start_at,
+        )
+
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        with (
+            patch.object(w, "_load_booking_for_notification", AsyncMock(return_value=booking)),
+            patch.object(w, "_plan_is_pro", AsyncMock(return_value=True)),
+        ):
+            result = await w._send_job(
+                notifier=notifier,
+                event=w.NotificationEvent.BOOKING_CREATED_CONFIRMED,
+                recipient=w.RecipientKind.CLIENT,
+                job=job,
+                now_utc=datetime(2025, 1, 9, 12, 0, tzinfo=UTC),
+                plan_cache={},
+            )
+
+        self.assertTrue(result)
+        notifier.maybe_send.assert_awaited()
+        request = notifier.maybe_send.await_args.args[0]
+        self.assertIsNotNone(request.reply_markup)
+        callbacks = [b.callback_data for row in request.reply_markup.inline_keyboard for b in row if b.callback_data]
+        self.assertTrue(any(cb.startswith("c:bookings:cancel_ntf:") for cb in callbacks))

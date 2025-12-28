@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from html import escape as html_escape
 
 from aiogram import F, Router
@@ -16,7 +16,7 @@ from src.datetime_utils import get_timezone, to_zone
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
-from src.notifications import BookingContext, NotificationEvent, RecipientKind
+from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
@@ -26,11 +26,12 @@ from src.observability.events import EventLogger
 from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
 from src.repositories import MasterRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas import MasterWithClients
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import common as common_txt, master_add_booking as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_close, btn_confirm, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_go_pro
 from src.use_cases.create_master_booking import (
     CreateMasterBooking,
     CreateMasterBookingError,
@@ -439,53 +440,14 @@ async def _handle_success(
             and bool(confirm.client.get("notifications_enabled", True))
         )
         if allow_client_notifications:
-            client_tz_val = confirm.client.get("timezone")
-            client_tz_enum = Timezone(client_tz_val) if client_tz_val else None
-            slot_client = to_zone(confirm.slot_dt, client_tz_enum) if client_tz_enum else confirm.slot_dt
-
-            from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
-            reply_markup = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [
-                        InlineKeyboardButton(
-                            text="💬 Написать мастеру",
-                            url=f"tg://user?id={int(master.telegram_id)}",
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            text=btn_cancel_booking(),
-                            callback_data=f"c:bookings:cancel_ntf:{booking.id}",
-                        ),
-                    ],
-                ],
-            )
-
-            await notifier.maybe_send(
-                NotificationRequest(
-                    event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
-                    recipient=RecipientKind.CLIENT,
-                    chat_id=confirm.client["telegram_id"],
-                    context=BookingContext(
-                        booking_id=booking.id,
-                        master_name=master.name,
-                        client_name=confirm.client.get("name") or "",
-                        slot_str=slot_client.strftime("%d.%m.%Y %H:%M"),
-                        duration_min=master.slot_size_min,
-                    ),
-                    facts=NotificationFacts(
-                        event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
-                        recipient=RecipientKind.CLIENT,
-                        chat_id=confirm.client["telegram_id"],
-                        plan_is_pro=bool(result.plan_is_pro),
-                        master_notify_clients=allow_client_notifications,
-                        client_notifications_enabled=bool(confirm.client.get("notifications_enabled", True)),
-                        booking_start_at_utc=confirm.slot_dt,
-                    ),
-                    reply_markup=reply_markup,
-                ),
-            )
+            async with active_session() as session:
+                await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
+                    event=str(NotificationEvent.BOOKING_CREATED_CONFIRMED.value),
+                    chat_id=int(confirm.client["telegram_id"]),
+                    booking_id=int(booking.id),
+                    booking_start_at=confirm.slot_dt,
+                    now_utc=datetime.now(UTC),
+                )
 
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
     await state.clear()

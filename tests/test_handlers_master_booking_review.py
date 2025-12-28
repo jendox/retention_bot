@@ -15,7 +15,7 @@ async def _fake_active_session():
 
 
 class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_confirm_success_edits_text_and_notifies(self) -> None:
+    async def test_confirm_success_edits_text_and_enqueues_notification(self) -> None:
         from src.handlers.master import booking_review as h
         from src.schemas.enums import Timezone
 
@@ -54,17 +54,20 @@ class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
 
         with (
             patch.object(h, "active_session", _fake_active_session),
             patch.object(h, "ReviewMasterBooking", _UC),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
         ):
             await h.master_review_booking(callback=callback, notifier=notifier)
 
         callback.message.edit_text.assert_awaited()
         edited_text = callback.message.edit_text.await_args.kwargs["text"]
         self.assertIn("&lt;b&gt;C&lt;/b&gt;", edited_text)
-        notifier.maybe_send.assert_awaited()
+        notifier.maybe_send.assert_not_awaited()
+        outbox.enqueue_booking_client_notification.assert_awaited()
 
     async def test_already_handled_shows_alert(self) -> None:
         from src.handlers.master import booking_review as h
