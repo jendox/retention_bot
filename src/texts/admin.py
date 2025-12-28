@@ -117,5 +117,8 @@ def invite_master_bad_ttl(*, t: Translator = _noop_t) -> str:
 
 def invite_master_created(*, link: str, ttl_hours: int, t: Translator = _noop_t) -> str:
     return t(
-        f"✅ Ссылка для регистрации мастера готова.\n\n{link}\n\nСсылка действует {ttl_hours} ч.",
+        f"Привет! 👋\n\n"
+        f"Это ссылка для регистрации в BeautyDesk:\n"
+        f"{link}\n\n"
+        f"⏳ Ссылка действует {ttl_hours} ч."
     )
