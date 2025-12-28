@@ -356,13 +356,20 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _render(*, master_name: str, tz: Timezone, notify_clients: bool, notify_attendance: bool, plan_is_pro: bool) -> str:
+def _plan_label(plan) -> str:
+    source = str(getattr(plan, "source", "free"))
+    if source == "trial":
+        return "Pro (trial)"
+    if source == "paid":
+        return "Pro (paid)"
+    return "Pro" if bool(getattr(plan, "is_pro", False)) else "Free"
+
+
+def _render(*, master_name: str, tz: Timezone, plan_label: str) -> str:
     return txt.render_main(
         master_name=master_name,
+        plan_label=plan_label,
         tz_value=str(tz.value),
-        notify_clients=notify_clients,
-        notify_attendance=notify_attendance,
-        plan_is_pro=plan_is_pro,
     )
 
 
@@ -381,18 +388,22 @@ def _render_details(*, master, plan) -> str:
     phone = getattr(master, "phone", None) or common_txt.placeholder_empty()
     notify_clients = bool(getattr(master, "notify_clients", True))
     notify_attendance = bool(getattr(master, "notify_attendance", True))
+    plan_label = _plan_label(plan)
 
     return _render(
         master_name=master.name,
         tz=master.timezone,
-        notify_clients=notify_clients,
-        notify_attendance=notify_attendance,
-        plan_is_pro=plan.is_pro,
+        plan_label=plan_label,
     ) + txt.render_details(
         phone=str(phone),
         work_days=str(work_days),
         work_time=str(work_time),
         slot_size=str(slot_size),
+        pro=txt.ProFeaturesView(
+            plan_is_pro=bool(plan.is_pro),
+            notify_clients=notify_clients,
+            notify_attendance=notify_attendance,
+        ),
     )
 
 
@@ -605,7 +616,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
 
         waiting = await _load_latest_waiting_invoice(master_id=int(master.id))
         if waiting is not None:
-            msg = f"{msg}\n\n<b>Есть выставленный счёт</b>\nМожно оплатить или проверить оплату."
+            msg = f"{msg}\n\n{billing_txt.pro_waiting_invoice_notice()}"
 
         if callback.message is not None:
             primary_text: str | None = None

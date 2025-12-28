@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from src.texts.base import Translator, noop_t as _noop_t
 
 
@@ -71,37 +73,31 @@ def plan_name(*, is_pro: bool, t: Translator = _noop_t) -> str:
     return t("Pro") if is_pro else t("Free")
 
 
-def notify_line(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
-    line = t("включено ✅") if notify_clients else t("выключено 🚫")
-    if not plan_is_pro:
-        line += t(" (доступно в Pro)")
-    return line
+@dataclass(frozen=True)
+class ProFeaturesView:
+    plan_is_pro: bool
+    notify_clients: bool
+    notify_attendance: bool
 
 
-def notify_attendance_line(*, notify_attendance: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
-    line = t("включено ✅") if notify_attendance else t("выключено 🚫")
+def pro_feature_status(*, enabled: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
     if not plan_is_pro:
-        line += t(" (доступно в Pro)")
-    return line
+        return t("🔒 Pro")
+    return t("включено ✅") if enabled else t("выключено 🚫")
 
 
 def render_main(
     *,
     master_name: str,
+    plan_label: str,
     tz_value: str,
-    notify_clients: bool,
-    notify_attendance: bool,
-    plan_is_pro: bool,
     t: Translator = _noop_t,
 ) -> str:
     return t(
         f"{title(t=t)}\n\n"
         f"<b>Профиль:</b> {master_name}\n"
-        f"<b>Тариф:</b> {plan_name(is_pro=plan_is_pro, t=t)}\n"
-        f"<b>Таймзона:</b> {tz_value}\n"
-        f"<b>Уведомлять клиентов:</b> {notify_line(notify_clients=notify_clients, plan_is_pro=plan_is_pro, t=t)}\n"
-        f"<b>Напоминать отмечать явку:</b> "
-        f"{notify_attendance_line(notify_attendance=notify_attendance, plan_is_pro=plan_is_pro, t=t)}",
+        f"<b>Тариф:</b> {plan_label}\n"
+        f"<b>Таймзона:</b> {tz_value}",
     )
 
 
@@ -111,14 +107,20 @@ def render_details(
     work_days: str,
     work_time: str,
     slot_size: str,
+    pro: ProFeaturesView,
     t: Translator = _noop_t,
 ) -> str:
     return t(
         "\n\n"
-        f"<b>Телефон:</b> {phone}\n"
         f"<b>Рабочие дни:</b> {work_days}\n"
         f"<b>Время работы:</b> {work_time}\n"
-        f"<b>Длительность записи:</b> {slot_size}",
+        f"<b>Длительность записи:</b> {slot_size}\n\n"
+        f"<b>Телефон:</b> {phone}\n\n"
+        "<b>💎 Pro‑функции</b>\n"
+        f"• Уведомлять клиентов: "
+        f"{pro_feature_status(enabled=pro.notify_clients, plan_is_pro=pro.plan_is_pro, t=t)}\n"
+        f"• Напоминать отмечать явку: "
+        f"{pro_feature_status(enabled=pro.notify_attendance, plan_is_pro=pro.plan_is_pro, t=t)}",
     )
 
 

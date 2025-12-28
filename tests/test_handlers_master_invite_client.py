@@ -69,7 +69,6 @@ class MasterInviteClientHandlerTests(unittest.IsolatedAsyncioTestCase):
         ):
             await h.start_invite_client(callback=callback, state=state, notifier=notifier)
 
-        notifier.maybe_send.assert_awaited()
         self.assertIsNone(state._state)
 
     async def test_start_invite_client_success_sets_state(self) -> None:

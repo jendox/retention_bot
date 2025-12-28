@@ -13,6 +13,14 @@ def pro_invoice_created(*, days: int, price_byn: float) -> str:
     )
 
 
+def pro_create_invoice_confirm() -> str:
+    return "<b>Создать счёт на оплату подписки Pro?</b>"
+
+
+def pro_waiting_invoice_notice() -> str:
+    return "<b>Есть выставленный счёт</b>\nМожно оплатить или проверить оплату."
+
+
 def pro_config_missing() -> str:
     return "Оплата Pro пока не настроена. Напиши администратору через кнопку ниже."
 

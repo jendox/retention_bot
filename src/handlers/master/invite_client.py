@@ -19,9 +19,11 @@ from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
-from src.texts import common as common_txt, master_invite_client as txt
-from src.texts.buttons import btn_back
+from src.settings import get_settings
+from src.texts import common as common_txt, master_invite_client as txt, paywall as paywall_txt
+from src.texts.buttons import btn_back, btn_go_pro
 from src.use_cases.create_master_client_invite import (
     CreateMasterClientInvite,
     CreateMasterClientInviteOutcome,
@@ -147,6 +149,40 @@ def _build_near_limit_warning(
     return "\n\n" + warning_text if warning_text else ""
 
 
+async def _show_clients_limit_paywall(
+    callback: CallbackQuery,
+    *,
+    limit: int,
+    current: int,
+    raw_limit: int | None,
+) -> None:
+    contact = get_settings().billing.contact
+    if callback.message is not None and limit > 0:
+        await callback.answer()
+        if hasattr(callback.message, "edit_text"):
+            await safe_edit_text(
+                callback.message,
+                text=paywall_txt.clients_limit_reached(limit=limit),
+                reply_markup=build_paywall_keyboard(
+                    contact=contact,
+                    upgrade_text=btn_go_pro(),
+                    back_text=btn_back(),
+                    back_callback_data="paywall:back:clients_menu",
+                    upgrade_callback_data="billing:pro:start",
+                    force_upgrade_callback=True,
+                ),
+                parse_mode="HTML",
+                ev=ev,
+                event="master_invite_client.paywall_edit_failed",
+            )
+        return
+
+    await callback.answer(
+        txt.quota_reached(current=current, limit=raw_limit),
+        show_alert=True,
+    )
+
+
 async def start_invite_client(
     callback: CallbackQuery,
     state: FSMContext,
@@ -192,20 +228,14 @@ async def start_invite_client(
             current=result.usage.clients_count,
             limit=result.clients_limit,
         )
-        sent = await _maybe_send_limits_notification(
-            chat_id=telegram_id,
-            event=NotificationEvent.LIMIT_CLIENTS_REACHED,
-            usage=result.usage,
-            clients_limit=result.clients_limit,
-            plan_is_pro=plan_is_pro,
-            notifier=notifier,
+        limit = int(result.clients_limit or 0)
+        await _show_clients_limit_paywall(
+            callback,
+            limit=limit,
+            current=int(result.usage.clients_count),
+            raw_limit=result.clients_limit,
         )
-        if not sent:
-            await callback.answer(
-                txt.quota_reached(current=result.usage.clients_count, limit=result.clients_limit),
-                show_alert=True,
-            )
-        await _reset_invite_flow(state, callback.bot)
+        await state.clear()
         return
 
     assert result.invite_link is not None
