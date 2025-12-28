@@ -437,6 +437,13 @@ class AcceptClientInvite:
         return "clients" in close
 
     async def execute(self, request: AcceptClientInviteRequest) -> AcceptClientInviteResult:
+        ev.info(
+            "invite.accept_start",
+            telegram_id=int(request.telegram_id),
+            expected_master_id=request.expected_master_id,
+            has_name=bool(request.name),
+            has_phone=bool(request.phone_e164),
+        )
         return await self._execute_flow(_FlowState(request=request))
 
     async def _execute_flow(self, state: _FlowState) -> AcceptClientInviteResult:

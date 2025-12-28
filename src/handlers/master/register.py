@@ -351,6 +351,7 @@ async def start_master_registration(  # noqa: C901
     token = _normalize_token(token)
     telegram_id = message.from_user.id
     bind_log_context(has_token=bool(token))
+    ev.info("master_reg.start", has_token=bool(token))
 
     if rate_limiter is not None:
         settings = get_settings()
@@ -367,6 +368,7 @@ async def start_master_registration(  # noqa: C901
     settings = get_settings()
     invite_only, invite_secret_value = _get_invite_policy(settings)
     bind_log_context(invite_only=bool(invite_only))
+    ev.info("master_reg.invite_policy", invite_only=bool(invite_only))
 
     try:
         async with session_local() as session:
@@ -429,6 +431,7 @@ async def start_master_registration(  # noqa: C901
         await state.set_state(MasterRegistration.name)
         return
 
+    ev.info("master_reg.pd.consent_shown", policy_version=str(PD_POLICY_VERSION))
     await answer_tracked(
         message,
         state,
@@ -444,6 +447,7 @@ async def master_reg_pd_policy(callback: CallbackQuery, state: FSMContext) -> No
     bind_log_context(flow="master_reg", step="pd_policy")
     await callback.answer()
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    ev.info("master_reg.pd.policy_opened", policy_version=str(PD_POLICY_VERSION))
     await callback.bot.send_message(
         chat_id=callback.from_user.id,
         text=pd_txt.policy_in_progress(),
@@ -456,6 +460,7 @@ async def master_reg_pd_decline(callback: CallbackQuery, state: FSMContext) -> N
     bind_log_context(flow="master_reg", step="pd_decline")
     await callback.answer()
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    ev.info("master_reg.pd.declined", policy_version=str(PD_POLICY_VERSION))
     if callback.message is None:
         return
     await safe_edit_reply_markup(callback.message, reply_markup=None, ev=ev, event="master_reg.pd.disable_failed")
@@ -475,6 +480,7 @@ async def master_reg_pd_back(callback: CallbackQuery, state: FSMContext) -> None
     bind_log_context(flow="master_reg", step="pd_back")
     await callback.answer()
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    ev.info("master_reg.pd.back_to_consent", policy_version=str(PD_POLICY_VERSION))
     if callback.message is None:
         return
     await safe_edit_text(
@@ -495,6 +501,7 @@ async def master_reg_pd_back(callback: CallbackQuery, state: FSMContext) -> None
 async def master_reg_pd_understood(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_reg", step="pd_understood")
     await callback.answer()
+    ev.info("master_reg.pd.decline_acknowledged", policy_version=str(PD_POLICY_VERSION))
     await _reset_master_registration(state, callback.bot)
 
 
@@ -506,6 +513,7 @@ async def master_reg_pd_agree(callback: CallbackQuery, state: FSMContext) -> Non
     if callback.from_user is None:
         return
     telegram_id = callback.from_user.id
+    ev.info("master_reg.pd.accepted", policy_version=str(PD_POLICY_VERSION))
     async with active_session() as session:
         await ConsentRepository(session).upsert_consent(
             telegram_id=telegram_id,

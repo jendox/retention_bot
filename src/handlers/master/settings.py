@@ -474,6 +474,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
 
     if data == f"{SETTINGS_CB_PREFIX}delete_data":
         await callback.answer()
+        ev.info("pd.delete_prompt_shown", role="master")
         if callback.message is not None:
             await safe_edit_text(
                 callback.message,
@@ -487,6 +488,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
 
     if data == f"{SETTINGS_CB_PREFIX}delete_confirm":
         await callback.answer()
+        ev.info("pd.delete_confirmed", role="master")
         async with active_session() as session:
             deleted = await MasterRepository(session).delete_by_telegram_id(telegram_id)
             await ConsentRepository(session).delete_consent(telegram_id=telegram_id, role=str(ConsentRole.MASTER.value))
@@ -508,8 +510,10 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             await user_ctx_storage.clear_role(telegram_id)
 
         if deleted:
+            ev.info("pd.deleted", role="master", deleted=True)
             await callback.bot.send_message(chat_id=telegram_id, text=pd_txt.deleted_done(), parse_mode="HTML")
         else:
+            ev.info("pd.deleted", role="master", deleted=False)
             await callback.bot.send_message(chat_id=telegram_id, text=common_txt.context_lost(), parse_mode="HTML")
         return
 

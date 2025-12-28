@@ -466,6 +466,7 @@ async def _dispatch_without_client(  # noqa: C901, PLR0912
         return
     if action == "delete_data":
         await callback.answer()
+        ev.info("pd.delete_prompt_shown", role="client")
         if callback.message is None:
             await context_lost(callback, state, bucket=SETTINGS_MAIN_KEY, reason="missing_message_on_delete")
             return
@@ -480,6 +481,7 @@ async def _dispatch_without_client(  # noqa: C901, PLR0912
         return
     if action == "delete_confirm":
         await callback.answer()
+        ev.info("pd.delete_confirmed", role="client")
         async with active_session() as session:
             deleted = await ClientRepository(session).delete_by_telegram_id(telegram_id)
             await ConsentRepository(session).delete_consent(telegram_id=telegram_id, role=str(ConsentRole.CLIENT.value))
@@ -501,8 +503,10 @@ async def _dispatch_without_client(  # noqa: C901, PLR0912
             await user_ctx_storage.clear_role(telegram_id)
 
         if deleted:
+            ev.info("pd.deleted", role="client", deleted=True)
             await callback.bot.send_message(chat_id=telegram_id, text=pd_txt.deleted_done(), parse_mode="HTML")
         else:
+            ev.info("pd.deleted", role="client", deleted=False)
             await callback.bot.send_message(chat_id=telegram_id, text=common_txt.context_lost(), parse_mode="HTML")
         return
     await callback.answer()
