@@ -1,5 +1,6 @@
 from .booking import Booking
 from .client import Client
+from .consent import UserConsent
 from .invite import TOKEN_LENGTH, Invite
 from .master import Master, WorkdayOverride, master_clients
 from .payment_invoice import PaymentInvoice, PaymentInvoiceStatus, PaymentProvider
@@ -11,6 +12,7 @@ __all__ = (
     "Booking",
     "Invite",
     "TOKEN_LENGTH",
+    "UserConsent",
     "WorkdayOverride",
     "master_clients",
     "PaymentInvoice",

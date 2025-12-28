@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from html import escape as html_escape
 
 from aiogram import Bot, F, Router
@@ -13,7 +14,7 @@ from src.core.sa import active_session, session_local
 from src.handlers.client.client_menu import send_client_main_menu
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
-from src.handlers.shared.ui import safe_edit_reply_markup
+from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
@@ -22,13 +23,17 @@ from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
+from src.privacy import PD_POLICY_VERSION, ConsentRole
 from src.rate_limiter import RateLimiter
 from src.repositories import (
+    InviteNotFound,
+    InviteRepository,
     MasterNotFound,
     MasterRepository,
 )
-from src.texts import client_registration as txt
-from src.texts.buttons import btn_cancel, btn_confirm, btn_restart
+from src.repositories.consent import ConsentRepository
+from src.texts import client_registration as txt, personal_data as pd_txt
+from src.texts.buttons import btn_back, btn_cancel, btn_confirm, btn_restart
 from src.use_cases.accept_client_invite import AcceptClientInvite, AcceptClientInviteRequest, AcceptInviteError
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, validate_phone
@@ -42,10 +47,17 @@ CLIENT_REGISTRATION_CB = {
     "confirm": "c:registration:confirm",
     "restart": "c:registration:restart",
     "cancel": "c:registration:cancel",
+    "pd_agree": "c:pd:agree",
+    "pd_disagree": "c:pd:disagree",
+    "pd_policy": "c:pd:policy",
+    "pd_back": "c:pd:back",
+    "pd_understood": "c:pd:understood",
 }
 
 
 class ClientRegistration(StatesGroup):
+    consent = State()
+    consent_declined = State()
     name = State()
     phone = State()
     confirm = State()
@@ -82,6 +94,57 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
             ],
         ],
     )
+
+
+def _build_pd_consent_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=pd_txt.btn_agree(), callback_data=CLIENT_REGISTRATION_CB["pd_agree"]),
+                InlineKeyboardButton(text=pd_txt.btn_disagree(), callback_data=CLIENT_REGISTRATION_CB["pd_disagree"]),
+            ],
+            [
+                InlineKeyboardButton(text=pd_txt.btn_policy(), callback_data=CLIENT_REGISTRATION_CB["pd_policy"]),
+            ],
+            [
+                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_REGISTRATION_CB["cancel"]),
+            ],
+        ],
+    )
+
+
+def _build_pd_declined_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=pd_txt.btn_understood(),
+                    callback_data=CLIENT_REGISTRATION_CB["pd_understood"],
+                ),
+                InlineKeyboardButton(text=btn_back(), callback_data=CLIENT_REGISTRATION_CB["pd_back"]),
+            ],
+            [
+                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_REGISTRATION_CB["cancel"]),
+            ],
+        ],
+    )
+
+
+async def _invite_preflight(*, token: str) -> tuple[bool, int | None, AcceptInviteError | None]:
+    async with session_local() as session:
+        invites = InviteRepository(session)
+        try:
+            invite = await invites.get_by_token(token)
+        except InviteNotFound:
+            return False, None, AcceptInviteError.INVITE_NOT_FOUND
+
+        if not invite.is_invite_valid():
+            return False, invite.master_id, AcceptInviteError.INVITE_INVALID
+
+        if str(invite.type.value) != "CLIENT":
+            return False, invite.master_id, AcceptInviteError.INVITE_WRONG_TYPE
+
+        return True, invite.master_id, None
 
 
 async def _check_if_master(telegram_id: int) -> bool:
@@ -178,7 +241,7 @@ async def _send_menu_after_registration(
     await send_client_main_menu(bot, telegram_id, show_switch_role=is_master)
 
 
-async def start_client_registration(
+async def start_client_registration(  # noqa: C901, PLR0911
     message: Message,
     state: FSMContext,
     user_ctx_storage: UserContextStorage,
@@ -202,6 +265,31 @@ async def start_client_registration(
         return
 
     telegram_id = message.from_user.id
+    ok, invite_master_id, invite_error = await _invite_preflight(token=token)
+    if not ok:
+        await _send_error_message(message.bot, telegram_id, invite_error)
+        await _reset_flow(state, message.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+        return
+
+    await state.update_data(invite_master_id=invite_master_id, invite_token=token)
+
+    async with session_local() as session:
+        has_consent = await ConsentRepository(session).has_consent(
+            telegram_id=telegram_id,
+            role=str(ConsentRole.CLIENT.value),
+            policy_version=str(PD_POLICY_VERSION),
+        )
+    if not has_consent:
+        await answer_tracked(
+            message,
+            state,
+            text=pd_txt.consent_short(),
+            bucket=CLIENT_REGISTRATION_BUCKET,
+            reply_markup=_build_pd_consent_keyboard(),
+        )
+        await state.set_state(ClientRegistration.consent)
+        return
+
     try:
         async with active_session() as session:
             result = await AcceptClientInvite(session).execute(
@@ -218,8 +306,7 @@ async def start_client_registration(
             admin_alerter=admin_alerter,
         )
         await message.answer(txt.err_generic())
-        await cleanup_messages(state, message.bot, bucket=CLIENT_REGISTRATION_BUCKET)
-        await state.clear()
+        await _reset_flow(state, message.bot, bucket=CLIENT_REGISTRATION_BUCKET)
         return
 
     ev.info(
@@ -249,6 +336,127 @@ async def start_client_registration(
 
     await _send_error_message(message.bot, telegram_id, result.error)
     await _reset_flow(state, message.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+
+
+@router.callback_query(StateFilter(ClientRegistration.consent), F.data == CLIENT_REGISTRATION_CB["pd_policy"])
+async def client_reg_pd_policy(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="pd_policy")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=pd_txt.policy_in_progress(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(StateFilter(ClientRegistration.consent), F.data == CLIENT_REGISTRATION_CB["pd_disagree"])
+async def client_reg_pd_decline(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="pd_decline")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=pd_txt.consent_declined(),
+        reply_markup=_build_pd_declined_keyboard(),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_reg.pd_declined_edit_failed",
+    )
+    await state.set_state(ClientRegistration.consent_declined)
+
+
+@router.callback_query(StateFilter(ClientRegistration.consent_declined), F.data == CLIENT_REGISTRATION_CB["pd_back"])
+async def client_reg_pd_back(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="pd_back")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=pd_txt.consent_short(),
+        reply_markup=_build_pd_consent_keyboard(),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_reg.pd_back_edit_failed",
+    )
+    await state.set_state(ClientRegistration.consent)
+
+
+@router.callback_query(
+    StateFilter(ClientRegistration.consent_declined),
+    F.data == CLIENT_REGISTRATION_CB["pd_understood"],
+)
+async def client_reg_pd_understood(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_reg", step="pd_understood")
+    await callback.answer()
+    await _reset_flow(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+
+
+@router.callback_query(StateFilter(ClientRegistration.consent), F.data == CLIENT_REGISTRATION_CB["pd_agree"])
+async def client_reg_pd_agree(
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_ctx_storage: UserContextStorage,
+    admin_alerter: AdminAlerter | None = None,
+) -> None:
+    bind_log_context(flow="client_reg", step="pd_agree")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
+    if callback.from_user is None:
+        return
+    telegram_id = callback.from_user.id
+    data = await state.get_data()
+    token = data.get("invite_token")
+    if not token:
+        await context_lost(callback, state, bucket=CLIENT_REGISTRATION_BUCKET, reason="missing_invite_token_after_pd")
+        return
+
+    async with active_session() as session:
+        await ConsentRepository(session).upsert_consent(
+            telegram_id=telegram_id,
+            role=str(ConsentRole.CLIENT.value),
+            policy_version=str(PD_POLICY_VERSION),
+            consented_at=datetime.now(UTC),
+        )
+        result = await AcceptClientInvite(session).execute(
+            AcceptClientInviteRequest(
+                telegram_id=telegram_id,
+                invite_token=str(token),
+            ),
+        )
+
+    if result.ok:
+        await _reset_flow(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
+        await _send_menu_after_registration(
+            bot=callback.bot,
+            telegram_id=telegram_id,
+            user_ctx_storage=user_ctx_storage,
+            admin_alerter=admin_alerter,
+        )
+        return
+
+    if result.error == AcceptInviteError.MISSING_PHONE:
+        invite_data = InviteData(invite_master_id=result.master_id, invite_token=str(token))
+        await state.update_data(invite_data=invite_data.model_dump())
+        if callback.message is None:
+            return
+        await safe_edit_text(
+            callback.message,
+            text=txt.ask_name(),
+            reply_markup=_build_cancel_keyboard(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_reg.pd_ask_name_edit_failed",
+        )
+        await state.set_state(ClientRegistration.name)
+        return
+
+    await _send_error_message(callback.bot, telegram_id, result.error)
+    await _reset_flow(state, callback.bot, bucket=CLIENT_REGISTRATION_BUCKET)
 
 
 async def process_name_question(message: Message, state: FSMContext) -> None:

@@ -325,7 +325,7 @@ async def start_add_client(  # noqa: C901
     await answer_tracked(
         callback.message,
         state,
-        text=txt.ask_name(),
+        text=txt.ask_name(show_disclaimer=bool(getattr(result, "show_offline_client_disclaimer", False))),
         bucket=ADD_CLIENT_BUCKET,
         reply_markup=_build_cancel_keyboard(),
     )

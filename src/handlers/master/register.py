@@ -12,7 +12,7 @@ Entry point is `start_master_registration(...)`, which can be called with an opt
 Invite validation and "already a master" checks are performed in `StartMasterRegistration` use-case.
 """
 
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 
 from aiogram import Bot, F, Router
 from aiogram.filters import StateFilter
@@ -22,15 +22,17 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
-from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup
+from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup, safe_edit_text
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.privacy import PD_POLICY_VERSION, ConsentRole
 from src.rate_limiter import RateLimiter
+from src.repositories.consent import ConsentRepository
 from src.schemas.enums import Timezone
 from src.settings import get_settings
-from src.texts import common as common_txt, master_registration as txt
-from src.texts.buttons import btn_cancel, btn_close, btn_confirm, btn_restart
+from src.texts import common as common_txt, master_registration as txt, personal_data as pd_txt
+from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_restart
 from src.use_cases.master_registration import (
     CompleteMasterRegistration,
     CompleteMasterRegistrationRequest,
@@ -55,6 +57,8 @@ MASTER_REGISTRATION_BUCKET = "master_registration"
 
 
 class MasterRegistration(StatesGroup):
+    consent = State()
+    consent_declined = State()
     name = State()
     phone = State()
     work_days = State()
@@ -67,6 +71,11 @@ MASTER_REGISTRATION_CB = {
     "confirm": "m:registration:confirm",
     "restart": "m:registration:restart",
     "cancel": "m:registration:cancel",
+    "pd_agree": "m:pd:agree",
+    "pd_disagree": "m:pd:disagree",
+    "pd_policy": "m:pd:policy",
+    "pd_back": "m:pd:back",
+    "pd_understood": "m:pd:understood",
 }
 
 _DASH_TRANSLATION = str.maketrans(dict.fromkeys("‐‑‒–—−", "-"))
@@ -249,6 +258,37 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def _build_pd_consent_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=pd_txt.btn_agree(), callback_data=MASTER_REGISTRATION_CB["pd_agree"]),
+                InlineKeyboardButton(text=pd_txt.btn_disagree(), callback_data=MASTER_REGISTRATION_CB["pd_disagree"]),
+            ],
+            [
+                InlineKeyboardButton(text=pd_txt.btn_policy(), callback_data=MASTER_REGISTRATION_CB["pd_policy"]),
+            ],
+        ],
+    )
+
+
+def _build_pd_declined_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=pd_txt.btn_understood(),
+                    callback_data=MASTER_REGISTRATION_CB["pd_understood"],
+                ),
+                InlineKeyboardButton(text=btn_back(), callback_data=MASTER_REGISTRATION_CB["pd_back"]),
+            ],
+            [
+                InlineKeyboardButton(text=btn_close(), callback_data="m:close"),
+            ],
+        ],
+    )
+
+
 async def _handle_start_result(
     message: Message,
     state: FSMContext,
@@ -372,12 +412,116 @@ async def start_master_registration(  # noqa: C901
         return
 
     await state.update_data(token=token, is_client=result.is_client)
+    async with session_local() as session:
+        has_consent = await ConsentRepository(session).has_consent(
+            telegram_id=telegram_id,
+            role=str(ConsentRole.MASTER.value),
+            policy_version=str(PD_POLICY_VERSION),
+        )
+    if has_consent:
+        await answer_tracked(
+            message,
+            state,
+            text=txt.ask_name(),
+            bucket=MASTER_REGISTRATION_BUCKET,
+            reply_markup=_build_cancel_keyboard(),
+        )
+        await state.set_state(MasterRegistration.name)
+        return
+
     await answer_tracked(
         message,
         state,
-        text=txt.ask_name(),
+        text=pd_txt.consent_short(),
         bucket=MASTER_REGISTRATION_BUCKET,
+        reply_markup=_build_pd_consent_keyboard(),
+    )
+    await state.set_state(MasterRegistration.consent)
+
+
+@router.callback_query(StateFilter(MasterRegistration.consent), F.data == MASTER_REGISTRATION_CB["pd_policy"])
+async def master_reg_pd_policy(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="pd_policy")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=pd_txt.policy_in_progress(),
+        parse_mode="HTML",
+    )
+
+
+@router.callback_query(StateFilter(MasterRegistration.consent), F.data == MASTER_REGISTRATION_CB["pd_disagree"])
+async def master_reg_pd_decline(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="pd_decline")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    if callback.message is None:
+        return
+    await safe_edit_reply_markup(callback.message, reply_markup=None, ev=ev, event="master_reg.pd.disable_failed")
+    await safe_edit_text(
+        callback.message,
+        text=pd_txt.consent_declined(),
+        reply_markup=_build_pd_declined_keyboard(),
+        parse_mode="HTML",
+        ev=ev,
+        event="master_reg.pd_declined_edit_failed",
+    )
+    await state.set_state(MasterRegistration.consent_declined)
+
+
+@router.callback_query(StateFilter(MasterRegistration.consent_declined), F.data == MASTER_REGISTRATION_CB["pd_back"])
+async def master_reg_pd_back(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="pd_back")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=pd_txt.consent_short(),
+        reply_markup=_build_pd_consent_keyboard(),
+        parse_mode="HTML",
+        ev=ev,
+        event="master_reg.pd_back_edit_failed",
+    )
+    await state.set_state(MasterRegistration.consent)
+
+
+@router.callback_query(
+    StateFilter(MasterRegistration.consent_declined),
+    F.data == MASTER_REGISTRATION_CB["pd_understood"],
+)
+async def master_reg_pd_understood(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="pd_understood")
+    await callback.answer()
+    await _reset_master_registration(state, callback.bot)
+
+
+@router.callback_query(StateFilter(MasterRegistration.consent), F.data == MASTER_REGISTRATION_CB["pd_agree"])
+async def master_reg_pd_agree(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reg", step="pd_agree")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
+    if callback.from_user is None:
+        return
+    telegram_id = callback.from_user.id
+    async with active_session() as session:
+        await ConsentRepository(session).upsert_consent(
+            telegram_id=telegram_id,
+            role=str(ConsentRole.MASTER.value),
+            policy_version=str(PD_POLICY_VERSION),
+            consented_at=datetime.now(UTC),
+        )
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=txt.ask_name(),
         reply_markup=_build_cancel_keyboard(),
+        parse_mode="HTML",
+        ev=ev,
+        event="master_reg.pd_agree_edit_failed",
     )
     await state.set_state(MasterRegistration.name)
 

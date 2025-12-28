@@ -29,6 +29,7 @@ class CreateClientOfflinePreflightResult:
     plan_is_pro: bool | None = None
     clients_limit: int | None = None  # None == ∞ (Pro)
     usage: Usage | None = None
+    show_offline_client_disclaimer: bool = False
 
     # error
     error: CreateClientOfflineError | None = None
@@ -72,6 +73,11 @@ class CreateClientOffline:
                 error_detail="master not found",
             )
 
+        show_offline_client_disclaimer = False
+        if not bool(getattr(master, "offline_client_disclaimer_shown", False)):
+            show_offline_client_disclaimer = True
+            await self._master_repo.mark_offline_client_disclaimer_shown(int(master.id))
+
         plan = await self._entitlements.get_plan(master_id=master.id)
         if plan.is_pro:
             return CreateClientOfflinePreflightResult(
@@ -80,6 +86,7 @@ class CreateClientOffline:
                 plan_is_pro=True,
                 master_id=master.id,
                 clients_limit=None,
+                show_offline_client_disclaimer=show_offline_client_disclaimer,
             )
 
         usage = await self._entitlements.get_usage(master_id=master.id)
@@ -92,6 +99,7 @@ class CreateClientOffline:
             error=None if allowed else CreateClientOfflineError.QUOTA_EXCEEDED,
             usage=usage,
             clients_limit=FREE_CLIENTS_LIMIT,
+            show_offline_client_disclaimer=show_offline_client_disclaimer,
         )
 
     async def create(self, telegram_master_id: int, phone_e164: str, name: str) -> CreateClientOfflineCreateResult:

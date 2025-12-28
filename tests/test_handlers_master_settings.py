@@ -32,3 +32,14 @@ class MasterSettingsUiTests(unittest.TestCase):
                     self.assertIn("🔒", btn.text)
                     return
         raise AssertionError("notify button not found")
+
+    def test_delete_button_is_present(self) -> None:
+        from src.handlers.master import settings as h
+
+        kb = h._kb_settings(notify_clients=True, plan_is_pro=True)
+        for row in kb.inline_keyboard:
+            for btn in row:
+                if btn.callback_data == f"{h.SETTINGS_CB_PREFIX}delete_data":
+                    self.assertIn("Удалить", btn.text)
+                    return
+        raise AssertionError("delete button not found")

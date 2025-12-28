@@ -91,6 +91,12 @@ class MasterRepository(BaseRepository):
 
         return (result.rowcount or 0) > 0
 
+    async def delete_by_telegram_id(self, telegram_id: int) -> bool:
+        stmt = delete(MasterEntity).where(MasterEntity.telegram_id == int(telegram_id))
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return (result.rowcount or 0) > 0
+
     async def attach_client(self, master_id: int, client_id: int) -> None:
         stmt = (
             pg_insert(master_clients)
@@ -115,6 +121,16 @@ class MasterRepository(BaseRepository):
         stmt = select(func.count()).select_from(master_clients).where(master_clients.c.master_id == master_id)
         count = await self._session.scalar(stmt)
         return int(count or 0)
+
+    async def mark_offline_client_disclaimer_shown(self, master_id: int) -> bool:
+        stmt = (
+            update(MasterEntity)
+            .where(MasterEntity.id == int(master_id))
+            .where(MasterEntity.offline_client_disclaimer_shown.is_(False))
+            .values(offline_client_disclaimer_shown=True)
+        )
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
 
     async def is_client_attached(self, *, master_id: int, client_id: int) -> bool:
         stmt = (

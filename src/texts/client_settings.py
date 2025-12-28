@@ -15,6 +15,10 @@ def btn_notifications(*, enabled: bool, t: Translator = _noop_t) -> str:
     return t("🔔 Уведомления: включены ✅") if enabled else t("🔕 Уведомления: выключены 🚫")
 
 
+def btn_delete_data(*, t: Translator = _noop_t) -> str:
+    return t("🗑 Удалить данные")
+
+
 def render_settings(
     *,
     name: str,

@@ -48,8 +48,15 @@ def ask_phone_conflict_retry(*, t: Translator = _noop_t) -> str:
 # ----- Flow texts -----
 
 
-def ask_name(*, t: Translator = _noop_t) -> str:
-    return t("Добавим клиента ✍️\n\nКак зовут клиента?")
+def offline_client_disclaimer(*, t: Translator = _noop_t) -> str:
+    return t("Добавляя клиента, ты подтверждаешь, что имеешь право передать его телефон для записи и уведомлений.")
+
+
+def ask_name(*, show_disclaimer: bool = False, t: Translator = _noop_t) -> str:
+    base = t("Добавим клиента ✍️\n\nКак зовут клиента?")
+    if not show_disclaimer:
+        return base
+    return f"{base}\n\n{offline_client_disclaimer(t=t)}"
 
 
 def name_not_recognized(*, t: Translator = _noop_t) -> str:

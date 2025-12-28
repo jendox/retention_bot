@@ -4,13 +4,11 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 
-from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
-from src.user_context import ActiveRole
 from src.utils import cleanup_messages
 
 router = Router(name=__name__)
@@ -32,7 +30,7 @@ _MASTER_CLEANUP_BUCKETS = (
 )
 
 
-@router.callback_query(UserRole(ActiveRole.MASTER), F.data == MASTER_CLOSE_CB)
+@router.callback_query(F.data == MASTER_CLOSE_CB)
 async def master_close(
     callback: CallbackQuery,
     state: FSMContext,

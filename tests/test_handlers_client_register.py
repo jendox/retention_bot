@@ -87,8 +87,14 @@ class RegisterHandlerTests(unittest.IsolatedAsyncioTestCase):
                 return result
 
         send_menu = AsyncMock()
+
+        def consent_repo(session):  # noqa: ARG001
+            return SimpleNamespace(has_consent=AsyncMock(return_value=True))
         with (
             patch.object(reg, "track_message", AsyncMock()),
+            patch.object(reg, "_invite_preflight", AsyncMock(return_value=(True, 1, None))),
+            patch.object(reg, "ConsentRepository", consent_repo),
+            patch.object(reg, "session_local", _fake_active_session),
             patch.object(reg, "active_session", _fake_active_session),
             patch.object(reg, "AcceptClientInvite", _UC),
             patch.object(reg, "_check_if_master", AsyncMock(return_value=True)),
@@ -134,8 +140,14 @@ class RegisterHandlerTests(unittest.IsolatedAsyncioTestCase):
                 return result
 
         process_name = AsyncMock()
+
+        def consent_repo(session):  # noqa: ARG001
+            return SimpleNamespace(has_consent=AsyncMock(return_value=True))
         with (
             patch.object(reg, "track_message", AsyncMock()),
+            patch.object(reg, "_invite_preflight", AsyncMock(return_value=(True, 123, None))),
+            patch.object(reg, "ConsentRepository", consent_repo),
+            patch.object(reg, "session_local", _fake_active_session),
             patch.object(reg, "active_session", _fake_active_session),
             patch.object(reg, "AcceptClientInvite", _UC),
             patch.object(reg, "process_name_question", process_name),
@@ -175,8 +187,14 @@ class RegisterHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         send_error = AsyncMock()
         cleanup = AsyncMock()
+
+        def consent_repo(session):  # noqa: ARG001
+            return SimpleNamespace(has_consent=AsyncMock(return_value=True))
         with (
             patch.object(reg, "track_message", AsyncMock()),
+            patch.object(reg, "_invite_preflight", AsyncMock(return_value=(True, 123, None))),
+            patch.object(reg, "ConsentRepository", consent_repo),
+            patch.object(reg, "session_local", _fake_active_session),
             patch.object(reg, "active_session", _fake_active_session),
             patch.object(reg, "AcceptClientInvite", _UC),
             patch.object(reg, "_send_error_message", send_error),
@@ -191,6 +209,39 @@ class RegisterHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         send_error.assert_awaited()
         cleanup.assert_awaited()
+
+    async def test_start_client_registration_without_consent_shows_consent_screen(self) -> None:
+        from src.handlers.client import register as reg
+
+        state = MemoryState()
+        user_ctx_storage = SimpleNamespace(set_role=AsyncMock())
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(),
+            message_id=1,
+        )
+
+        answer = AsyncMock()
+
+        def consent_repo(session):  # noqa: ARG001
+            return SimpleNamespace(has_consent=AsyncMock(return_value=False))
+        with (
+            patch.object(reg, "track_message", AsyncMock()),
+            patch.object(reg, "_invite_preflight", AsyncMock(return_value=(True, 1, None))),
+            patch.object(reg, "ConsentRepository", consent_repo),
+            patch.object(reg, "session_local", _fake_active_session),
+            patch.object(reg, "answer_tracked", answer),
+        ):
+            await reg.start_client_registration(
+                message=message,
+                state=state,
+                user_ctx_storage=user_ctx_storage,
+                invite_link="c_token123",
+            )
+
+        self.assertEqual(state._state, reg.ClientRegistration.consent)
+        answer.assert_awaited()
 
     async def test_process_client_name_empty_reprompts(self) -> None:
         from src.handlers.client import register as reg

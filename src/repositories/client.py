@@ -1,4 +1,4 @@
-from sqlalchemy import select, update
+from sqlalchemy import delete, exists, select, update
 from sqlalchemy.orm import selectinload
 
 from src.models import Client as ClientEntity, master_clients
@@ -79,6 +79,19 @@ class ClientRepository(BaseRepository):
         result = await self._session.execute(stmt)
 
         return (result.rowcount or 0) > 0
+
+    async def delete_by_telegram_id(self, telegram_id: int) -> bool:
+        stmt = delete(ClientEntity).where(ClientEntity.telegram_id == int(telegram_id))
+        result = await self._session.execute(stmt)
+        return (result.rowcount or 0) > 0
+
+    async def delete_orphan_offline_clients(self) -> int:
+        stmt = delete(ClientEntity).where(
+            ClientEntity.telegram_id.is_(None),
+            ~exists().where(master_clients.c.client_id == ClientEntity.id),
+        )
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)
 
     async def find_offline_for_master_by_phone(
         self,

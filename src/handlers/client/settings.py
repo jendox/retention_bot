@@ -13,13 +13,15 @@ from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
+from src.privacy import ConsentRole
 from src.rate_limiter import RateLimiter
-from src.repositories import ClientNotFound, ClientRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
+from src.repositories.consent import ConsentRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import Timezone
-from src.texts import client_settings as txt, common as common_txt
+from src.texts import client_settings as txt, common as common_txt, personal_data as pd_txt
 from src.texts.buttons import btn_back, btn_close
-from src.user_context import ActiveRole
+from src.user_context import ActiveRole, UserContextStorage
 from src.utils import cleanup_messages, format_phone_display, track_message, validate_phone
 
 router = Router(name=__name__)
@@ -41,6 +43,17 @@ def _kb_settings(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
             [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}edit_phone")],
             [InlineKeyboardButton(text=notify_text, callback_data=f"{SETTINGS_CB_PREFIX}toggle_notify")],
+            [InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data")],
+            [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
+        ],
+    )
+
+
+def _kb_delete_confirm() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Удалить", callback_data=f"{SETTINGS_CB_PREFIX}delete_confirm")],
+            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
@@ -334,6 +347,8 @@ def _parse_action(data: str) -> tuple[str, str | None]:
         "edit_phone": "edit_phone",
         "toggle_notify": "toggle_notify",
         "back_menu": "back_menu",
+        "delete_data": "delete_data",
+        "delete_confirm": "delete_confirm",
     }
     if suffix in mapping:
         return mapping[suffix], None
@@ -348,16 +363,26 @@ def _parse_action(data: str) -> tuple[str, str | None]:
 async def settings_callbacks(
     callback: CallbackQuery,
     state: FSMContext,
+    user_ctx_storage: UserContextStorage,
     rate_limiter: RateLimiter | None = None,
 ) -> None:
     bind_log_context(flow="client_settings", step="callback")
     if not await rate_limit_callback(callback, rate_limiter, name="client_settings:callback", ttl_sec=1):
         return
 
-    await _settings_callbacks_impl(callback=callback, state=state)
+    await _settings_callbacks_impl(
+        callback=callback,
+        state=state,
+        user_ctx_storage=user_ctx_storage,
+    )
 
 
-async def _settings_callbacks_impl(*, callback: CallbackQuery, state: FSMContext) -> None:
+async def _settings_callbacks_impl(
+    *,
+    callback: CallbackQuery,
+    state: FSMContext,
+    user_ctx_storage: UserContextStorage,
+) -> None:
     telegram_id = callback.from_user.id
     data = callback.data or ""
     action, arg = _parse_action(data)
@@ -383,7 +408,13 @@ async def _settings_callbacks_impl(*, callback: CallbackQuery, state: FSMContext
         )
         return
 
-    await _dispatch_without_client(callback, state=state, telegram_id=telegram_id, action=action)
+    await _dispatch_without_client(
+        callback,
+        state=state,
+        telegram_id=telegram_id,
+        action=action,
+        user_ctx_storage=user_ctx_storage,
+    )
 
 
 async def _dispatch_with_client(
@@ -416,12 +447,13 @@ async def _dispatch_with_client(
     await callback.answer()
 
 
-async def _dispatch_without_client(
+async def _dispatch_without_client(  # noqa: C901, PLR0912
     callback: CallbackQuery,
     *,
     state: FSMContext,
     telegram_id: int,
     action: str,
+    user_ctx_storage: UserContextStorage,
 ) -> None:
     if action == "tz":
         await _handle_choose_timezone(callback, state)
@@ -431,6 +463,47 @@ async def _dispatch_without_client(
         return
     if action == "back_menu":
         await _handle_back_menu(callback, state=state, telegram_id=telegram_id)
+        return
+    if action == "delete_data":
+        await callback.answer()
+        if callback.message is None:
+            await context_lost(callback, state, bucket=SETTINGS_MAIN_KEY, reason="missing_message_on_delete")
+            return
+        await safe_edit_text(
+            callback.message,
+            text=pd_txt.delete_client_warning(),
+            reply_markup=_kb_delete_confirm(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_settings.delete_prompt_failed",
+        )
+        return
+    if action == "delete_confirm":
+        await callback.answer()
+        async with active_session() as session:
+            deleted = await ClientRepository(session).delete_by_telegram_id(telegram_id)
+            await ConsentRepository(session).delete_consent(telegram_id=telegram_id, role=str(ConsentRole.CLIENT.value))
+            master_exists = True
+            try:
+                await MasterRepository(session).get_by_telegram_id(telegram_id)
+            except MasterNotFound:
+                master_exists = False
+
+        if callback.message is not None:
+            await safe_delete(callback.message, ev=ev, event="client_settings.delete_main_failed")
+        await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+        await _clear_main_ref(state)
+        await state.clear()
+
+        if master_exists:
+            await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
+        else:
+            await user_ctx_storage.clear_role(telegram_id)
+
+        if deleted:
+            await callback.bot.send_message(chat_id=telegram_id, text=pd_txt.deleted_done(), parse_mode="HTML")
+        else:
+            await callback.bot.send_message(chat_id=telegram_id, text=common_txt.context_lost(), parse_mode="HTML")
         return
     await callback.answer()
 

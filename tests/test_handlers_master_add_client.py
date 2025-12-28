@@ -76,6 +76,43 @@ class MasterAddClientHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state._state, h.AddClientStates.name)
         answer.assert_awaited()
 
+    async def test_start_add_client_shows_disclaimer_only_when_requested(self) -> None:
+        from src.handlers.master import add_client as h
+
+        state = MemoryState()
+        bot = SimpleNamespace()
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=bot,
+            message=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=10)),
+        )
+
+        class _UC:
+            def __init__(self, session) -> None:
+                pass
+
+            async def preflight(self, telegram_master_id: int) -> CreateClientOfflinePreflightResult:
+                return CreateClientOfflinePreflightResult(
+                    ok=True,
+                    allowed=True,
+                    master_id=1,
+                    plan_is_pro=False,
+                    clients_limit=10,
+                    show_offline_client_disclaimer=True,
+                )
+
+        answer = AsyncMock()
+        with (
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "CreateClientOffline", _UC),
+            patch.object(h, "answer_tracked", answer),
+        ):
+            await h.start_add_client(callback=callback, state=state, notifier=SimpleNamespace(maybe_send=AsyncMock()))
+
+        sent_text = answer.await_args.kwargs["text"]
+        self.assertIn("Добавляя клиента", sent_text)
+
     async def test_confirm_phone_conflict_sets_state_back_to_phone(self) -> None:
         from src.handlers.master import add_client as h
 
