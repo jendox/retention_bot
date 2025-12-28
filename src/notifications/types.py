@@ -30,3 +30,5 @@ class NotificationEvent(StrEnum):
     REMINDER_24H = "reminder_24h"
     REMINDER_2H = "reminder_2h"
     FOLLOWUP_THANK_YOU = "followup_thank_you"
+
+    MASTER_ATTENDANCE_NUDGE = "master_attendance_nudge"

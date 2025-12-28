@@ -114,6 +114,23 @@ def _format_price_byn(price_byn: float) -> str:
     return f"{price_byn:.2f}"
 
 
+def _format_tariffs_message(
+    current_plan_line: str,
+    price_str: str,
+    pro_days: int,
+) -> str:
+    return (
+        "<b>Тарифы</b>\n\n"
+        f"{current_plan_line}\n\n"
+        "Что даёт <b>Pro</b>:\n"
+        "• Автонапоминания клиентам о записи (меньше no‑show и забытых визитов)\n"
+        "• Неограниченная база клиентов и записей\n"
+        "• Быстрый перенос записи без лишней переписки\n"
+        "• Напоминания отметить явку клиента\n\n"
+        f"Стоимость <b>Pro</b>: <b>{price_str} BYN</b> за <b>{pro_days}</b> дней."
+    )
+
+
 def tariffs_message(
     *,
     plan_label: str,
@@ -126,42 +143,24 @@ def tariffs_message(
     price_str = _format_price_byn(float(pro_price_byn)) if pro_price_byn is not None else None
 
     if source == "trial" and until_str and pro_days and price_str:
-        return (
-            "<b>Тарифы</b>\n\n"
+        current_plan_line = (
             f"Сейчас у тебя активен пробный <b>Pro</b> до <b>{until_str}</b>.\n"
-            "После этого можно продолжить на платной основе.\n\n"
-            "Что даёт <b>Pro</b>:\n"
-            "• Автонапоминания клиентам о записи (меньше no‑show и забытых визитов)\n"
-            "• Неограниченная база клиентов и записей\n"
-            "• Быстрый перенос записи без переписок\n\n"
-            f"Стоимость <b>Pro</b>: <b>{price_str} BYN</b> за <b>{int(pro_days)}</b> дней."
+            "После этого можно продолжить на платной основе."
         )
+        return _format_tariffs_message(current_plan_line, price_str, int(pro_days))
 
     if plan_label.lower().startswith("pro") and until_str and pro_days and price_str:
-        return (
-            "<b>Тарифы</b>\n\n"
-            f"Сейчас у тебя активен тариф <b>Pro</b> до <b>{until_str}</b>.\n"
-            "\n"
-            "Что даёт <b>Pro</b>:\n"
-            "• Автонапоминания клиентам о записи (меньше no‑show и забытых визитов)\n"
-            "• Неограниченная база клиентов и записей\n"
-            "• Быстрый перенос записи без лишней переписки\n\n"
-            f"Стоимость <b>Pro</b>: <b>{price_str} BYN</b> за <b>{int(pro_days)}</b> дней."
-        )
+        current_plan_line = f"Сейчас у тебя активен тариф <b>Pro</b> до <b>{until_str}</b>."
+        return _format_tariffs_message(current_plan_line, price_str, int(pro_days))
 
     if pro_days and price_str:
-        return (
-            "<b>Тарифы</b>\n\n"
+        current_plan_line = (
             "Сейчас у тебя активен бесплатный тариф <b>Free</b>.\n\n"
             "Что даёт <b>Free</b>:\n"
             "• Ведение клиентов и записей в одном месте\n"
-            "• Просмотр расписания в Telegram\n\n"
-            "Что даёт <b>Pro</b>:\n"
-            "• Автонапоминания клиентам о записи (меньше no‑show и забытых визитов)\n"
-            "• Неограниченная база клиентов и записей\n"
-            "• Быстрый перенос записи без лишней переписки\n\n"
-            f"Стоимость <b>Pro</b>: <b>{price_str} BYN</b> за <b>{int(pro_days)}</b> дней."
+            "• Просмотр расписания в Telegram"
         )
+        return _format_tariffs_message(current_plan_line, price_str, int(pro_days))
 
     return (
         "<b>Тарифы</b>\n\n"

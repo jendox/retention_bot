@@ -4,6 +4,7 @@ from .consent import UserConsent
 from .invite import TOKEN_LENGTH, Invite
 from .master import Master, WorkdayOverride, master_clients
 from .payment_invoice import PaymentInvoice, PaymentInvoiceStatus, PaymentProvider
+from .scheduled_notification import ScheduledNotification
 from .subscription import Subscription, SubscriptionPlan
 
 __all__ = (
@@ -18,6 +19,7 @@ __all__ = (
     "PaymentInvoice",
     "PaymentProvider",
     "PaymentInvoiceStatus",
+    "ScheduledNotification",
     "Subscription",
     "SubscriptionPlan",
 )

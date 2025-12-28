@@ -54,6 +54,12 @@ class Master(Base):
         server_default=text("true"),
         nullable=False,
     )
+    notify_attendance: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default=text("true"),
+        nullable=False,
+    )
     offline_client_disclaimer_shown: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

@@ -76,7 +76,12 @@ def _kb_settings_hub() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def _kb_settings_edit_profile(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMarkup:
+def _kb_settings_edit_profile(
+    *,
+    notify_clients: bool,
+    notify_attendance: bool,
+    plan_is_pro: bool,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=txt.btn_name(), callback_data=f"{SETTINGS_CB_PREFIX}name"),
@@ -94,6 +99,12 @@ def _kb_settings_edit_profile(*, notify_clients: bool, plan_is_pro: bool) -> Inl
         InlineKeyboardButton(
             text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
             callback_data=f"{SETTINGS_CB_PREFIX}notify",
+        ),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=txt.btn_notify_attendance(notify_attendance=notify_attendance, plan_is_pro=plan_is_pro),
+            callback_data=f"{SETTINGS_CB_PREFIX}notify_attendance",
         ),
     )
     builder.row(InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu"))
@@ -174,15 +185,16 @@ def _guide_pages(*, plan_is_pro: bool) -> list[str]:
             "<b>1) Клиенты</b>\n\n"
             "В BeautyDesk есть два типа клиентов:\n"
             "• <b>Telegram-клиент</b> — клиент пишет боту и может получать уведомления о записи.\n"
-            "• <b>Офлайн-клиент</b> — клиент без Telegram (имя/телефон). Уведомления ему не отправляются. "
-            "Отмечен значком 📵\n\n"
-            "Совет: офлайн-клиента удобно вести для истории и чтобы быстро создавать записи."
+            "• <b>Офлайн-клиент</b> — клиент без Telegram (только имя и телефон). Отмечен значком 📵\n"
+            "  Уведомления офлайн-клиентам не отправляются.\n\n"
+            "<b>Совет:</b> офлайн-клиента удобно вести для истории, быстрых записей и последующей привязки Telegram."
         ),
         (
             "<b>2) Как добавить клиента</b>\n\n"
-            "• Если клиент есть в Telegram — отправь ему приглашение (ссылку) и он зарегистрируется сам.\n"
-            "• Если клиент без Telegram — добавь офлайн-клиента (имя/телефон) и веди записи по нему.\n"
-            "  Когда клиент появится в Telegram — отправь приглашение: бот привяжет его к карточке по телефону.\n\n"
+            "• Если клиент есть в Telegram — отправь ему приглашение (ссылку), и он зарегистрируется сам.\n"
+            "• Если клиент без Telegram — добавь офлайн-клиента (имя и телефон) и веди записи по нему.\n"
+            "  Когда клиент появится в Telegram — отправь приглашение: "
+            "бот привяжет его к карточке, если номер телефона совпадёт.\n\n"
             "<b>Важно:</b> автоуведомления доступны <b>только</b> Telegram-клиентам."
         ),
         (
@@ -191,7 +203,7 @@ def _guide_pages(*, plan_is_pro: bool) -> list[str]:
             "Есть два способа:\n"
             "• <b>Главное меню → Добавить запись</b> → найти клиента → выбрать дату → выбрать время → подтвердить.\n"
             "• <b>Клиенты</b> → открыть карточку клиента → <b>Записать клиента</b>.\n"
-            "  (Можно открыть клиента из списка или через поиск.)"
+            "  (Можно выбрать клиента из списка или через поиск по имени/телефону.)"
         ),
         (
             "<b>4) Расписание</b>\n\n"
@@ -199,7 +211,8 @@ def _guide_pages(*, plan_is_pro: bool) -> list[str]:
             "• посмотреть ближайшие записи и историю;\n"
             "• отменить запись;\n"
             f"• перенести запись {pro_line};\n"
-            "• отметить явку по прошедшей записи (в течение 7 дней).\n\n"
+            "• отметить явку по прошедшей записи (в течение 7 дней).\n"
+            f"• получать напоминание отметить явку, если ты ещё не отметил {pro_line}.\n\n"
             "<b>Совет:</b> отмечать явку важно — в карточке клиента будет видно, "
             "приходил ли он на записи, и сколько было неявок."
         ),
@@ -210,7 +223,8 @@ def _guide_pages(*, plan_is_pro: bool) -> list[str]:
             "• отправлять подтверждение/перенос/отмену записи клиенту;\n"
             "• напоминать о записи за 24 часа и за 2 часа;\n"
             "• отправить «спасибо за визит» после записи.\n\n"
-            "Нажми «🧪 Демо уведомлений», чтобы увидеть примеры сообщений (они придут тебе в этот чат)."
+            "Нажми «🧪 Демо уведомлений», чтобы увидеть примеры сообщений "
+            "(они придут <b>только</b> тебе в этот чат)."
         ),
     ]
 
@@ -342,11 +356,12 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def _render(*, master_name: str, tz: Timezone, notify_clients: bool, plan_is_pro: bool) -> str:
+def _render(*, master_name: str, tz: Timezone, notify_clients: bool, notify_attendance: bool, plan_is_pro: bool) -> str:
     return txt.render_main(
         master_name=master_name,
         tz_value=str(tz.value),
         notify_clients=notify_clients,
+        notify_attendance=notify_attendance,
         plan_is_pro=plan_is_pro,
     )
 
@@ -365,11 +380,13 @@ def _render_details(*, master, plan) -> str:
     )
     phone = getattr(master, "phone", None) or common_txt.placeholder_empty()
     notify_clients = bool(getattr(master, "notify_clients", True))
+    notify_attendance = bool(getattr(master, "notify_attendance", True))
 
     return _render(
         master_name=master.name,
         tz=master.timezone,
         notify_clients=notify_clients,
+        notify_attendance=notify_attendance,
         plan_is_pro=plan.is_pro,
     ) + txt.render_details(
         phone=str(phone),
@@ -448,6 +465,7 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
     if view == VIEW_EDIT_PROFILE:
         kb = _kb_settings_edit_profile(
             notify_clients=bool(getattr(master, "notify_clients", True)),
+            notify_attendance=bool(getattr(master, "notify_attendance", True)),
             plan_is_pro=plan.is_pro,
         )
     else:
@@ -814,6 +832,21 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         async with active_session() as session:
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_clients=new_value))
+
+        await callback.answer(common_txt.saved())
+        await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}notify_attendance":
+        if not plan.is_pro:
+            await callback.answer(txt.notify_attendance_pro_only(), show_alert=True)
+            return
+
+        current = bool(getattr(master, "notify_attendance", True))
+        new_value = not current
+        async with active_session() as session:
+            master_repo = MasterRepository(session)
+            await master_repo.update_by_id(master.id, MasterUpdate(notify_attendance=new_value))
 
         await callback.answer(common_txt.saved())
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)

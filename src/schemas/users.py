@@ -25,6 +25,7 @@ class MasterBase(BaseModel):
     slot_size_min: int = Field(default=60)
     timezone: Timezone = Field(default=Timezone.EUROPE_MINSK)
     notify_clients: bool = Field(default=True)
+    notify_attendance: bool = Field(default=True)
     offline_client_disclaimer_shown: bool = Field(default=False)
 
 
@@ -44,6 +45,7 @@ class MasterUpdate(BaseModel):
     slot_size_min: int | None = None
     timezone: Timezone | None = None
     notify_clients: bool | None = None
+    notify_attendance: bool | None = None
     offline_client_disclaimer_shown: bool | None = None
 
     model_config = ConfigDict(
@@ -80,6 +82,7 @@ class Master(MasterBase):
             "slot_size_min": self.slot_size_min,
             "timezone": str(self.timezone.value),
             "notify_clients": bool(self.notify_clients),
+            "notify_attendance": bool(self.notify_attendance),
             "offline_client_disclaimer_shown": bool(self.offline_client_disclaimer_shown),
         }
 

@@ -8,21 +8,23 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from src.core.sa import Database, session_local
+from src.core.sa import Database, active_session, session_local
 from src.datetime_utils import to_zone
 from src.models import Booking as BookingEntity
-from src.notifications.context import ReminderContext
+from src.notifications.context import BookingContext, ReminderContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import DefaultNotificationPolicy, NotificationFacts
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability import setup_logging
 from src.observability.events import EventLogger
 from src.observability.heartbeat import write_worker_heartbeat
-from src.schemas.enums import BookingStatus
+from src.repositories.scheduled_notification import ScheduledNotificationJob, ScheduledNotificationRepository
+from src.schemas.enums import AttendanceOutcome, BookingStatus
 from src.settings import AppSettings, app_settings, get_settings
 from src.use_cases.entitlements import EntitlementsService
 
@@ -146,16 +148,277 @@ async def _send_reminder(  # noqa: PLR0913
     )
 
 
-async def run_loop(
+def _attendance_keyboard(*, booking_id: int) -> InlineKeyboardMarkup:
+    open_card_cb = f"m:b:{int(booking_id)}:s:history_week:p:1"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Пришёл", callback_data=f"m:att_rem:attended:{int(booking_id)}"),
+                InlineKeyboardButton(text="❌ Не пришёл", callback_data=f"m:att_rem:no_show:{int(booking_id)}"),
+            ],
+            [
+                InlineKeyboardButton(text="⏳ Через 3 часа", callback_data=f"m:att_rem:snooze3h:{int(booking_id)}"),
+                InlineKeyboardButton(
+                    text="🗓 Завтра в 10:00",
+                    callback_data=f"m:att_rem:tomorrow10:{int(booking_id)}",
+                ),
+            ],
+            [InlineKeyboardButton(text="🚫 Не напоминать", callback_data=f"m:att_rem:disable:{int(booking_id)}")],
+            [InlineKeyboardButton(text="📄 Открыть запись", callback_data=open_card_cb)],
+        ],
+    )
+
+
+async def _load_booking_for_notification(*, booking_id: int) -> BookingEntity | None:
+    async with session_local() as session:
+        stmt = (
+            select(BookingEntity)
+            .where(BookingEntity.id == int(booking_id))
+            .options(
+                selectinload(BookingEntity.master),
+                selectinload(BookingEntity.client),
+            )
+        )
+        return await session.scalar(stmt)
+
+
+async def _plan_is_pro(*, master_id: int, cache: dict[int, bool]) -> bool:
+    cached = cache.get(master_id)
+    if cached is not None:
+        return bool(cached)
+    async with session_local() as session:
+        value = bool((await EntitlementsService(session).get_plan(master_id=master_id)).is_pro)
+    cache[master_id] = value
+    return value
+
+
+async def _send_client_reminder(
     *,
-    redis: Redis,
     notifier: Notifier,
-    tick_sec: int,
-    window_sec: int,
-) -> None:
-    tick = timedelta(seconds=int(tick_sec))
-    window = timedelta(seconds=int(window_sec))
+    event: NotificationEvent,
+    booking: BookingEntity,
+    now_utc: datetime,
+    plan_is_pro: bool,
+) -> bool | None:
+    if booking.status != BookingStatus.CONFIRMED:
+        return False
+
+    client = booking.client
+    master = booking.master
+
+    if getattr(client, "telegram_id", None) is None:
+        return False
+    if not getattr(client, "notifications_enabled", True):
+        return False
+    if not getattr(master, "notify_clients", True):
+        return False
+
+    start_at_utc = booking.start_at.astimezone(UTC)
+    slot_client = to_zone(start_at_utc, client.timezone)
+    slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
+    try:
+        return await notifier.maybe_send(
+            NotificationRequest(
+                event=event,
+                recipient=RecipientKind.CLIENT,
+                chat_id=int(client.telegram_id),
+                context=ReminderContext(
+                    master_name=str(master.name),
+                    slot_str=slot_str,
+                ),
+                facts=NotificationFacts(
+                    event=event,
+                    recipient=RecipientKind.CLIENT,
+                    chat_id=int(client.telegram_id),
+                    plan_is_pro=bool(plan_is_pro),
+                    master_notify_clients=bool(getattr(master, "notify_clients", True)),
+                    client_notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
+                    booking_start_at_utc=start_at_utc,
+                    now_utc=now_utc,
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
+async def _send_master_attendance_nudge(
+    *,
+    notifier: Notifier,
+    chat_id: int,
+    booking: BookingEntity,
+    now_utc: datetime,
+    plan_is_pro: bool,
+) -> bool | None:
+    if booking.status != BookingStatus.CONFIRMED:
+        return False
+    if booking.attendance_outcome != AttendanceOutcome.UNKNOWN:
+        return False
+
+    master = booking.master
+    client = booking.client
+
+    if not getattr(master, "notify_attendance", True):
+        return False
+
+    end_at_utc = booking.start_at.astimezone(UTC) + timedelta(minutes=int(booking.duration_min))
+    if end_at_utc > now_utc:
+        return False
+
+    slot_master = to_zone(booking.start_at.astimezone(UTC), master.timezone)
+    slot_str = slot_master.strftime("%d.%m.%Y %H:%M")
+    try:
+        return await notifier.maybe_send(
+            NotificationRequest(
+                event=NotificationEvent.MASTER_ATTENDANCE_NUDGE,
+                recipient=RecipientKind.MASTER,
+                chat_id=int(chat_id),
+                context=BookingContext(
+                    booking_id=int(booking.id),
+                    master_name=str(master.name),
+                    client_name=str(getattr(client, "name", "") or ""),
+                    slot_str=slot_str,
+                    duration_min=int(booking.duration_min),
+                ),
+                reply_markup=_attendance_keyboard(booking_id=int(booking.id)),
+                facts=NotificationFacts(
+                    event=NotificationEvent.MASTER_ATTENDANCE_NUDGE,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=int(chat_id),
+                    plan_is_pro=bool(plan_is_pro),
+                    master_notify_attendance=bool(getattr(master, "notify_attendance", True)),
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
+async def _send_job(
+    *,
+    notifier: Notifier,
+    event: NotificationEvent,
+    recipient: RecipientKind,
+    job: ScheduledNotificationJob,
+    now_utc: datetime,
+    plan_cache: dict[int, bool],
+) -> bool | None:
+    """
+    Returns:
+    - True: sent
+    - False: skipped/denied (should be cancelled)
+    - None: temporary error (should be retried)
+    """
+    booking_id = job.booking_id
+    booking_start_at = job.booking_start_at
+    chat_id = int(job.chat_id)
+
+    if booking_id is None:
+        return False
+
+    booking = await _load_booking_for_notification(booking_id=booking_id)
+    if booking is None:
+        return False
+    if booking_start_at is not None and booking.start_at != booking_start_at:
+        return False
+
+    plan_is_pro = await _plan_is_pro(master_id=int(booking.master_id), cache=plan_cache)
+
+    if event in {NotificationEvent.REMINDER_24H, NotificationEvent.REMINDER_2H}:
+        return await _send_client_reminder(
+            notifier=notifier,
+            event=event,
+            booking=booking,
+            now_utc=now_utc,
+            plan_is_pro=bool(plan_is_pro),
+        )
+    if event == NotificationEvent.MASTER_ATTENDANCE_NUDGE and recipient == RecipientKind.MASTER:
+        return await _send_master_attendance_nudge(
+            notifier=notifier,
+            chat_id=int(chat_id),
+            booking=booking,
+            now_utc=now_utc,
+            plan_is_pro=bool(plan_is_pro),
+        )
+    return False
+
+
+@dataclass(frozen=True)
+class RemindersLoopConfig:
+    tick: timedelta
+    schedule_refresh: timedelta
+    schedule_lookahead: timedelta
+    attendance_lookback: timedelta
+    batch_size: int
+    retry_backoff: timedelta
+    max_attempts: int
+
+
+async def _maybe_refresh_schedule(
+    *,
+    now_utc: datetime,
+    last_refresh_at: datetime | None,
+    config: RemindersLoopConfig,
+) -> datetime:
+    if last_refresh_at is not None and (now_utc - last_refresh_at) < config.schedule_refresh:
+        return last_refresh_at
+    try:
+        async with active_session() as session:
+            repo = ScheduledNotificationRepository(session)
+            inserted_reminders = await repo.schedule_client_booking_reminders(
+                now_utc=now_utc,
+                lookahead=config.schedule_lookahead,
+            )
+            inserted_att = await repo.schedule_master_attendance_nudges(
+                now_utc=now_utc,
+                lookback=config.attendance_lookback,
+            )
+        ev.info(
+            "reminders.schedule_refresh",
+            inserted_reminders=int(inserted_reminders),
+            inserted_attendance=int(inserted_att),
+            lookahead_days=int(config.schedule_lookahead.total_seconds() // 86400),
+            lookback_days=int(config.attendance_lookback.total_seconds() // 86400),
+        )
+    except Exception as exc:
+        await ev.aexception("reminders.schedule_refresh_failed", exc=exc)
+    return now_utc
+
+
+async def _reserve_jobs(*, now_utc: datetime, batch_size: int) -> list:
+    async with active_session() as session:
+        repo = ScheduledNotificationRepository(session)
+        return await repo.reserve_due(now_utc=now_utc, limit=int(batch_size))
+
+
+async def _finalize_job(
+    *,
+    job_id: int,
+    result: bool | None,
+    now_utc: datetime,
+    config: RemindersLoopConfig,
+) -> bool:
+    async with active_session() as session:
+        repo = ScheduledNotificationRepository(session)
+        if result is True:
+            await repo.mark_sent(notification_id=int(job_id), now_utc=now_utc)
+            return True
+        if result is None:
+            await repo.reschedule_after_error(
+                notification_id=int(job_id),
+                now_utc=now_utc,
+                error="send_error",
+                backoff=config.retry_backoff,
+                max_attempts=int(config.max_attempts),
+            )
+            return False
+        await repo.cancel(notification_id=int(job_id), reason="skipped")
+        return False
+
+
+async def run_loop(*, redis: Redis, notifier: Notifier, config: RemindersLoopConfig) -> None:
     last_heartbeat_log_at: datetime | None = None
+    last_schedule_refresh_at: datetime | None = None
 
     while True:
         now_utc = datetime.now(UTC)
@@ -179,50 +442,77 @@ async def run_loop(
             last_heartbeat_log_at = now_utc
 
         sent = 0
-        candidates = 0
+        reserved = 0
         plan_cache: dict[int, bool] = {}
+        last_schedule_refresh_at = await _maybe_refresh_schedule(
+            now_utc=now_utc,
+            last_refresh_at=last_schedule_refresh_at,
+            config=config,
+        )
 
-        for kind in REMINDERS:
-            start_at, end_at = due_window(now_utc=now_utc, kind=kind, tick=window)
-            bookings = await _load_due_bookings(start_at=start_at, end_at=end_at)
-            candidates += len(bookings)
-            for booking in bookings:
-                try:
-                    ok = await _send_reminder(
-                        notifier=notifier,
-                        redis=redis,
-                        booking=booking,
-                        kind=kind,
-                        now_utc=now_utc,
-                        dedup_ttl=timedelta(days=7),
-                        plan_cache=plan_cache,
+        try:
+            jobs = await _reserve_jobs(now_utc=now_utc, batch_size=int(config.batch_size))
+            reserved = len(jobs)
+        except Exception as exc:
+            await ev.aexception("reminders.reserve_failed", exc=exc)
+            jobs = []
+
+        for job in jobs:
+            try:
+                event = NotificationEvent(job.event)
+                recipient = RecipientKind(job.recipient)
+            except Exception:
+                async with active_session() as session:
+                    await ScheduledNotificationRepository(session).cancel(
+                        notification_id=int(job.id),
+                        reason="unknown_event_or_recipient",
                     )
-                    sent += int(ok)
-                except Exception as exc:
-                    await ev.aexception(
-                        "reminders.send_failed",
-                        exc=exc,
-                        booking_id=getattr(booking, "id", None),
-                        master_id=getattr(booking, "master_id", None),
-                        client_id=getattr(booking, "client_id", None),
-                        kind=kind.name,
-                    )
+                continue
+
+            result = await _send_job(
+                notifier=notifier,
+                event=event,
+                recipient=recipient,
+                job=job,
+                now_utc=now_utc,
+                plan_cache=plan_cache,
+            )
+            try:
+                sent += int(await _finalize_job(job_id=int(job.id), result=result, now_utc=now_utc, config=config))
+            except Exception as exc:
+                await ev.aexception("reminders.update_job_failed", exc=exc, job_id=int(job.id))
 
         ev.info(
             "reminders.tick",
             sent=sent,
-            candidates=candidates,
-            tick_sec=int(tick.total_seconds()),
-            window_sec=int(window.total_seconds()),
+            reserved=reserved,
+            tick_sec=int(config.tick.total_seconds()),
         )
-        await asyncio.sleep(float(tick.total_seconds()))
+        await asyncio.sleep(float(config.tick.total_seconds()))
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BeautyDesk reminder worker (Pro-only client reminders).")
     parser.add_argument("--env-file", default=None, help="Env file path (default: ENV_FILE or .env.local)")
     parser.add_argument("--tick-sec", type=int, default=int(os.getenv("REMINDERS_TICK_SEC", "30")))
-    parser.add_argument("--window-sec", type=int, default=int(os.getenv("REMINDERS_WINDOW_SEC", "60")))
+    parser.add_argument("--batch-size", type=int, default=int(os.getenv("REMINDERS_BATCH_SIZE", "50")))
+    parser.add_argument(
+        "--schedule-refresh-sec",
+        type=int,
+        default=int(os.getenv("REMINDERS_SCHEDULE_REFRESH_SEC", "600")),
+    )
+    parser.add_argument(
+        "--schedule-lookahead-days",
+        type=int,
+        default=int(os.getenv("REMINDERS_SCHEDULE_LOOKAHEAD_DAYS", "30")),
+    )
+    parser.add_argument(
+        "--attendance-lookback-days",
+        type=int,
+        default=int(os.getenv("ATTENDANCE_NUDGES_LOOKBACK_DAYS", "7")),
+    )
+    parser.add_argument("--retry-backoff-sec", type=int, default=int(os.getenv("REMINDERS_RETRY_BACKOFF_SEC", "60")))
+    parser.add_argument("--max-attempts", type=int, default=int(os.getenv("REMINDERS_MAX_ATTEMPTS", "5")))
     return parser.parse_args()
 
 
@@ -250,11 +540,19 @@ async def main() -> None:
 
     try:
         async with Database.lifespan(url=settings.database.postgres_url):
+            config = RemindersLoopConfig(
+                tick=timedelta(seconds=int(args.tick_sec)),
+                schedule_refresh=timedelta(seconds=int(args.schedule_refresh_sec)),
+                schedule_lookahead=timedelta(days=int(args.schedule_lookahead_days)),
+                attendance_lookback=timedelta(days=int(args.attendance_lookback_days)),
+                batch_size=int(args.batch_size),
+                retry_backoff=timedelta(seconds=int(args.retry_backoff_sec)),
+                max_attempts=int(args.max_attempts),
+            )
             await run_loop(
                 redis=redis,
                 notifier=notifier,
-                tick_sec=int(args.tick_sec),
-                window_sec=int(args.window_sec),
+                config=config,
             )
     finally:
         await redis.aclose()

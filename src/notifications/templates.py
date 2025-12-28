@@ -108,6 +108,16 @@ REMINDER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[Remi
 }
 
 
+MASTER_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[BookingContext], str]] = {
+    (NotificationEvent.MASTER_ATTENDANCE_NUDGE, RecipientKind.MASTER): lambda context: (
+        "📌 Нужно отметить явку по записи.\n\n"
+        f"<b>Клиент:</b> {context.client_name}\n"
+        f"<b>Дата и время:</b> {context.slot_str}\n\n"
+        "Выбери вариант ниже:"
+    ),
+}
+
+
 def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind, context: LimitsContext) -> str:
     fn = LIMITS_TEMPLATES.get((event, recipient))
     if fn is None:
@@ -117,6 +127,8 @@ def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind
 
 def render_booking_template(*, event: NotificationEvent, recipient: RecipientKind, context: BookingContext) -> str:
     fn = BOOKING_TEMPLATES.get((event, recipient))
+    if fn is None:
+        fn = MASTER_TEMPLATES.get((event, recipient))
     if fn is None:
         ev.debug("notifications.unsupported_template", template="booking", event=event.value, recipient=recipient.value)
     return fn(context) if fn else ""

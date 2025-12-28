@@ -46,7 +46,21 @@ def btn_delete_data(*, t: Translator = _noop_t) -> str:
 def btn_notify(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
     if not plan_is_pro:
         return t("🔒 Уведомлять клиентов: Pro")
-    return t("🔔 Уведомлять клиентов: включено ✅") if notify_clients else t("🔕 Уведомлять клиентов: выключено 🚫")
+    return (
+        t("🔔 Уведомлять клиентов: включено ✅")
+        if notify_clients
+        else t("🔕 Уведомлять клиентов: выключено 🚫")
+    )
+
+
+def btn_notify_attendance(*, notify_attendance: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
+    if not plan_is_pro:
+        return t("🔒 Напоминать отмечать явку: Pro")
+    return (
+        t("🔔 Напоминать отмечать явку: включено ✅")
+        if notify_attendance
+        else t("🔕 Напоминать отмечать явку: выключено 🚫")
+    )
 
 
 def title(*, t: Translator = _noop_t) -> str:
@@ -64,11 +78,19 @@ def notify_line(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noo
     return line
 
 
+def notify_attendance_line(*, notify_attendance: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
+    line = t("включено ✅") if notify_attendance else t("выключено 🚫")
+    if not plan_is_pro:
+        line += t(" (доступно в Pro)")
+    return line
+
+
 def render_main(
     *,
     master_name: str,
     tz_value: str,
     notify_clients: bool,
+    notify_attendance: bool,
     plan_is_pro: bool,
     t: Translator = _noop_t,
 ) -> str:
@@ -77,7 +99,9 @@ def render_main(
         f"<b>Профиль:</b> {master_name}\n"
         f"<b>Тариф:</b> {plan_name(is_pro=plan_is_pro, t=t)}\n"
         f"<b>Таймзона:</b> {tz_value}\n"
-        f"<b>Уведомлять клиентов:</b> {notify_line(notify_clients=notify_clients, plan_is_pro=plan_is_pro, t=t)}",
+        f"<b>Уведомлять клиентов:</b> {notify_line(notify_clients=notify_clients, plan_is_pro=plan_is_pro, t=t)}\n"
+        f"<b>Напоминать отмечать явку:</b> "
+        f"{notify_attendance_line(notify_attendance=notify_attendance, plan_is_pro=plan_is_pro, t=t)}",
     )
 
 
@@ -124,6 +148,10 @@ def notify_pro_only(*, t: Translator = _noop_t) -> str:
 
 def notify_toggled(*, enabled: bool, t: Translator = _noop_t) -> str:
     return t("Уведомлять клиентов: включено ✅") if enabled else t("Уведомлять клиентов: выключено 🚫")
+
+
+def notify_attendance_pro_only(*, t: Translator = _noop_t) -> str:
+    return t("Напоминать отмечать явку можно в Pro.")
 
 
 def ask_new_phone(*, t: Translator = _noop_t) -> str:

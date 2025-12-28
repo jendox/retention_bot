@@ -1,5 +1,6 @@
 from .add_booking import router as add_booking_router
 from .add_client import router as add_client_router
+from .attendance_reminders import router as attendance_reminders_router
 from .booking_review import router as booking_review_router
 from .close import router as close_router
 from .edit_client import router as edit_client_router
@@ -20,6 +21,7 @@ routers = [
     workday_overrides_router,
     reschedule_router,
     booking_review_router,
+    attendance_reminders_router,
     edit_client_router,
     settings_router,
     invite_client_router,

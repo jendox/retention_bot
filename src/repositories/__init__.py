@@ -5,4 +5,5 @@ from .invite import InviteNotFound, InviteRepository
 from .master import MasterNotFound, MasterRepository
 from .override import WorkdayOverrideRepository
 from .payment_invoice import PaymentInvoiceNotFound, PaymentInvoiceRepository
+from .scheduled_notification import ScheduledNotificationRepository
 from .subscription import SubscriptionRepository

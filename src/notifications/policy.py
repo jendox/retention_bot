@@ -13,6 +13,7 @@ class DenyReason(StrEnum):
     NO_CHAT_ID = "no_chat_id"
     CLIENT_NOTIFICATIONS_DISABLED = "client_notifications_disabled"
     MASTER_NOTIFICATIONS_DISABLED = "master_notifications_disabled"
+    MASTER_ATTENDANCE_DISABLED = "master_attendance_disabled"
     PRO_REQUIRED = "pro_required"
     EVENT_NOT_ALLOWED = "event_not_allowed"
     PAST_BOOKING = "past_booking"
@@ -48,6 +49,7 @@ class NotificationFacts:
     # План/тумблеры (передаются из handlers/use-cases)
     plan_is_pro: bool | None = None  # важно для client-facing событий
     master_notify_clients: bool | None = None
+    master_notify_attendance: bool | None = None
     client_notifications_enabled: bool | None = None
 
     # Доп. контекст
@@ -80,6 +82,7 @@ class DefaultNotificationPolicy:
         NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
         NotificationEvent.LIMIT_CLIENTS_REACHED,
         NotificationEvent.LIMIT_BOOKINGS_REACHED,
+        NotificationEvent.MASTER_ATTENDANCE_NUDGE,
     }
 
     MASTER_FREE_ONLY_EVENTS: set[NotificationEvent] = {
@@ -87,6 +90,10 @@ class DefaultNotificationPolicy:
         NotificationEvent.WARNING_NEAR_BOOKINGS_LIMIT,
         NotificationEvent.LIMIT_CLIENTS_REACHED,
         NotificationEvent.LIMIT_BOOKINGS_REACHED,
+    }
+
+    MASTER_EVENTS_PRO: set[NotificationEvent] = {
+        NotificationEvent.MASTER_ATTENDANCE_NUDGE,
     }
 
     CLIENT_EVENTS_PRO: set[NotificationEvent] = {
@@ -117,6 +124,13 @@ class DefaultNotificationPolicy:
     def _check_master(self, facts: NotificationFacts) -> PolicyDecision:
         if facts.event not in self.MASTER_ALLOWED_EVENTS:
             return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail=f"event={facts.event.value}")
+
+        if facts.event in self.MASTER_EVENTS_PRO:
+            if not facts.plan_is_pro:
+                return PolicyDecision.deny(DenyReason.PRO_REQUIRED)
+            if facts.master_notify_attendance is False:
+                return PolicyDecision.deny(DenyReason.MASTER_ATTENDANCE_DISABLED)
+            return PolicyDecision.allow()
 
         if facts.event not in self.MASTER_FREE_ONLY_EVENTS:
             return PolicyDecision.allow()

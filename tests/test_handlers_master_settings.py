@@ -7,7 +7,7 @@ class MasterSettingsUiTests(unittest.TestCase):
     def test_edit_profile_first_row_has_name_phone_tz(self) -> None:
         from src.handlers.master import settings as h
 
-        kb = h._kb_settings_edit_profile(notify_clients=True, plan_is_pro=True)
+        kb = h._kb_settings_edit_profile(notify_clients=True, notify_attendance=True, plan_is_pro=True)
         self.assertGreaterEqual(len(kb.inline_keyboard), 1)
         row = kb.inline_keyboard[0]
         self.assertEqual(3, len(row))
@@ -18,8 +18,8 @@ class MasterSettingsUiTests(unittest.TestCase):
     def test_notify_button_text_pro_varies_by_state(self) -> None:
         from src.handlers.master import settings as h
 
-        kb_on = h._kb_settings_edit_profile(notify_clients=True, plan_is_pro=True)
-        kb_off = h._kb_settings_edit_profile(notify_clients=False, plan_is_pro=True)
+        kb_on = h._kb_settings_edit_profile(notify_clients=True, notify_attendance=True, plan_is_pro=True)
+        kb_off = h._kb_settings_edit_profile(notify_clients=False, notify_attendance=True, plan_is_pro=True)
 
         def _notify_text(kb) -> str:
             for row in kb.inline_keyboard:
@@ -34,7 +34,7 @@ class MasterSettingsUiTests(unittest.TestCase):
     def test_notify_button_text_free_shows_pro_lock(self) -> None:
         from src.handlers.master import settings as h
 
-        kb = h._kb_settings_edit_profile(notify_clients=True, plan_is_pro=False)
+        kb = h._kb_settings_edit_profile(notify_clients=True, notify_attendance=True, plan_is_pro=False)
 
         for row in kb.inline_keyboard:
             for btn in row:
@@ -43,6 +43,18 @@ class MasterSettingsUiTests(unittest.TestCase):
                     self.assertIn("🔒", btn.text)
                     return
         raise AssertionError("notify button not found")
+
+    def test_notify_attendance_button_text_free_shows_pro_lock(self) -> None:
+        from src.handlers.master import settings as h
+
+        kb = h._kb_settings_edit_profile(notify_clients=True, notify_attendance=True, plan_is_pro=False)
+        for row in kb.inline_keyboard:
+            for btn in row:
+                if btn.callback_data == f"{h.SETTINGS_CB_PREFIX}notify_attendance":
+                    self.assertIn("Pro", btn.text)
+                    self.assertIn("🔒", btn.text)
+                    return
+        raise AssertionError("notify_attendance button not found")
 
     def test_delete_button_is_present(self) -> None:
         from src.handlers.master import settings as h
