@@ -31,6 +31,10 @@ def too_many_requests(*, t: Translator = _noop_t) -> str:
     return t("⌛ Слишком часто. Попробуй через несколько секунд.")
 
 
+def saved(*, t: Translator = _noop_t) -> str:
+    return t("✅ Сохранено.")
+
+
 def invalid_command(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Некорректная команда.")
 

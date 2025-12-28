@@ -26,14 +26,13 @@ from src.schemas import MasterUpdate
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import billing as billing_txt, common as common_txt, master_settings as txt, personal_data as pd_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_close
+from src.texts.buttons import btn_back, btn_close
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole, UserContextStorage
-from src.utils import answer_tracked, cleanup_messages, track_message, validate_phone
+from src.utils import answer_tracked, cleanup_messages, format_work_days_label, track_message, validate_phone
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
-
 
 SETTINGS_CB_PREFIX = "m:settings:"
 _BILLING_CHECK_PREFIX = "billing:pro:check:"
@@ -44,32 +43,30 @@ _GUIDE_NOTIFICATIONS_PAGE = 3
 
 SETTINGS_BUCKET = "master_settings"
 SETTINGS_MAIN_KEY = "master_settings_main"
+SETTINGS_VIEW_KEY = "master_settings_view"
+
+VIEW_HUB = "hub"
+VIEW_EDIT_PROFILE = "edit_profile"
 
 
 class MasterSettingsStates(StatesGroup):
+    edit_name = State()
     edit_phone = State()
     edit_work_days = State()
     edit_work_time = State()
     edit_slot_size = State()
 
 
-def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMarkup:
+_NAME_MAX_LEN = 64
+
+
+def _normalize_name(raw: str | None) -> str:
+    return " ".join((raw or "").split()).strip()
+
+
+def _kb_settings_hub() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}phone"),
-        InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz"),
-    )
-    builder.row(
-        InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days"),
-        InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time"),
-    )
-    builder.row(
-        InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size"),
-        InlineKeyboardButton(
-            text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
-            callback_data=f"{SETTINGS_CB_PREFIX}notify",
-        ),
-    )
+    builder.row(InlineKeyboardButton(text=txt.btn_edit_profile(), callback_data=f"{SETTINGS_CB_PREFIX}edit_profile"))
     builder.row(
         InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs"),
         InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide"),
@@ -79,11 +76,36 @@ def _kb_settings(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMa
     return builder.as_markup()
 
 
+def _kb_settings_edit_profile(*, notify_clients: bool, plan_is_pro: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_name(), callback_data=f"{SETTINGS_CB_PREFIX}name"),
+        InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}phone"),
+        InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz"),
+    )
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_work_days(), callback_data=f"{SETTINGS_CB_PREFIX}work_days"),
+        InlineKeyboardButton(text=txt.btn_work_time(), callback_data=f"{SETTINGS_CB_PREFIX}work_time"),
+    )
+    builder.row(
+        InlineKeyboardButton(text=txt.btn_slot_size(), callback_data=f"{SETTINGS_CB_PREFIX}slot_size"),
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text=txt.btn_notify(notify_clients=notify_clients, plan_is_pro=plan_is_pro),
+            callback_data=f"{SETTINGS_CB_PREFIX}notify",
+        ),
+    )
+    builder.row(InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu"))
+    builder.row(InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back"))
+    return builder.as_markup()
+
+
 def _kb_delete_confirm() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Удалить", callback_data=f"{SETTINGS_CB_PREFIX}delete_confirm")],
-            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
+            [InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
@@ -149,29 +171,40 @@ def _guide_pages(*, plan_is_pro: bool) -> list[str]:
     return [
         (
             "<b>📘 Краткое руководство</b>\n\n"
-            "<b>1) Клиенты</b>\n"
+            "<b>1) Клиенты</b>\n\n"
             "В BeautyDesk есть два типа клиентов:\n"
             "• <b>Telegram-клиент</b> — клиент пишет боту и может получать уведомления о записи.\n"
-            "• <b>Офлайн-клиент</b> — клиент без Telegram (имя/телефон). Уведомления ему не отправляются.\n\n"
+            "• <b>Офлайн-клиент</b> — клиент без Telegram (имя/телефон). Уведомления ему не отправляются. "
+            "Отмечен значком 📵\n\n"
             "Совет: офлайн-клиента удобно вести для истории и чтобы быстро создавать записи."
         ),
         (
             "<b>2) Как добавить клиента</b>\n\n"
-            "• Если клиент в Telegram — отправь ему инвайт (ссылку) и он зарегистрируется сам.\n"
+            "• Если клиент есть в Telegram — отправь ему приглашение (ссылку) и он зарегистрируется сам.\n"
             "• Если клиент без Telegram — добавь офлайн-клиента (имя/телефон) и веди записи по нему.\n"
-            "  Когда клиент появится в Telegram — отправь инвайт: бот привяжет его к карточке по телефону.\n\n"
-            "Важно: автоуведомления доступны только Telegram-клиентам."
+            "  Когда клиент появится в Telegram — отправь приглашение: бот привяжет его к карточке по телефону.\n\n"
+            "<b>Важно:</b> автоуведомления доступны <b>только</b> Telegram-клиентам."
         ),
         (
             "<b>3) Как создать запись</b>\n\n"
-            "Открой расписание → выбери день/время → выбери клиента → подтверди.\n\n"
-            "Дальше ты сможешь:\n"
-            "• отменить запись;\n"
-            f"• перенести запись {pro_line};\n"
-            "• посмотреть ближайшие записи и историю."
+            "Создать запись можно только если у тебя есть хотя бы один клиент.\n\n"
+            "Есть два способа:\n"
+            "• <b>Главное меню → Добавить запись</b> → найти клиента → выбрать дату → выбрать время → подтвердить.\n"
+            "• <b>Клиенты</b> → открыть карточку клиента → <b>Записать клиента</b>.\n"
+            "  (Можно открыть клиента из списка или через поиск.)"
         ),
         (
-            "<b>4) Уведомления клиенту</b>\n\n"
+            "<b>4) Расписание</b>\n\n"
+            "В <b>Расписании</b> ты можешь:\n"
+            "• посмотреть ближайшие записи и историю;\n"
+            "• отменить запись;\n"
+            f"• перенести запись {pro_line};\n"
+            "• отметить явку по прошедшей записи (в течение 7 дней).\n\n"
+            "<b>Совет:</b> отмечать явку важно — в карточке клиента будет видно, "
+            "приходил ли он на записи, и сколько было неявок."
+        ),
+        (
+            "<b>5) Уведомление клиентов</b>\n\n"
             f"Автонапоминания клиентам: {pro_line}\n\n"
             "В Pro бот может:\n"
             "• отправлять подтверждение/перенос/отмену записи клиенту;\n"
@@ -305,8 +338,7 @@ def _kb_timezones() -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for tz in common:
         rows.append([InlineKeyboardButton(text=str(tz.value), callback_data=f"{SETTINGS_CB_PREFIX}set_tz:{tz.value}")])
-    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
-    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}edit_profile")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -320,7 +352,7 @@ def _render(*, master_name: str, tz: Timezone, notify_clients: bool, plan_is_pro
 
 
 def _render_details(*, master, plan) -> str:
-    work_days = ", ".join(str(d + 1) for d in getattr(master, "work_days", [])) or common_txt.placeholder_empty()
+    work_days = format_work_days_label(list(getattr(master, "work_days", []) or [])) or common_txt.placeholder_empty()
     work_time = (
         f"{master.start_time:%H:%M}–{master.end_time:%H:%M}"
         if master.start_time and master.end_time
@@ -390,10 +422,7 @@ async def open_master_settings(
 
     settings_msg = await message.answer(
         text=_render_details(master=master, plan=plan),
-        reply_markup=_kb_settings(
-            notify_clients=bool(getattr(master, "notify_clients", True)),
-            plan_is_pro=plan.is_pro,
-        ),
+        reply_markup=_kb_settings_hub(),
         parse_mode="HTML",
     )
     await state.update_data(
@@ -402,6 +431,7 @@ async def open_master_settings(
                 "chat_id": settings_msg.chat.id,
                 "message_id": settings_msg.message_id,
             },
+            SETTINGS_VIEW_KEY: VIEW_HUB,
         },
     )
 
@@ -409,20 +439,25 @@ async def open_master_settings(
 async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int) -> bool:
     data = await state.get_data()
     main = data.get(SETTINGS_MAIN_KEY) or {}
+    view = data.get(SETTINGS_VIEW_KEY) or VIEW_HUB
     chat_id = main.get("chat_id") or telegram_id
     message_id = main.get("message_id")
     if message_id is None:
         return False
     master, plan = await _load_master_and_plan(telegram_id)
+    if view == VIEW_EDIT_PROFILE:
+        kb = _kb_settings_edit_profile(
+            notify_clients=bool(getattr(master, "notify_clients", True)),
+            plan_is_pro=plan.is_pro,
+        )
+    else:
+        kb = _kb_settings_hub()
     await safe_bot_edit_message_text(
         bot,
         chat_id=int(chat_id),
         message_id=int(message_id),
         text=_render_details(master=master, plan=plan),
-        reply_markup=_kb_settings(
-            notify_clients=bool(getattr(master, "notify_clients", True)),
-            plan_is_pro=plan.is_pro,
-        ),
+        reply_markup=kb,
         parse_mode="HTML",
         event="master.settings.refresh_failed",
     )
@@ -449,6 +484,9 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
 
     if data == f"{SETTINGS_CB_PREFIX}back":
         await callback.answer()
+        await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+        await state.set_state(None)
+        await state.update_data(**{SETTINGS_MAIN_KEY: {}, SETTINGS_VIEW_KEY: VIEW_HUB})
         if callback.message is not None:
             await safe_delete(callback.message, event="master.settings.delete_failed")
         return
@@ -461,14 +499,22 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         return
 
     if data == f"{SETTINGS_CB_PREFIX}cancel_edit":
-        await callback.answer(txt.cancelled(), show_alert=True)
+        await callback.answer()
         await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
         await state.set_state(None)
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
     if data == f"{SETTINGS_CB_PREFIX}back_menu":
         await callback.answer()
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_HUB})
+        await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}edit_profile":
+        await callback.answer()
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
@@ -672,8 +718,23 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
-                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                    [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
+                ],
+            ),
+        )
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}name":
+        await callback.answer()
+        await state.set_state(MasterSettingsStates.edit_name)
+        await answer_tracked(
+            callback.message,
+            state,
+            text=txt.ask_new_name(),
+            bucket=SETTINGS_BUCKET,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
                 ],
             ),
         )
@@ -689,8 +750,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
-                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                    [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
                 ],
             ),
         )
@@ -706,8 +766,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
-                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                    [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
                 ],
             ),
         )
@@ -723,8 +782,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             bucket=SETTINGS_BUCKET,
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
-                    [InlineKeyboardButton(text=btn_cancel(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
-                    [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
+                    [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")],
                 ],
             ),
         )
@@ -742,7 +800,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(timezone=tz))
 
-        await callback.answer(text=txt.timezone_updated())
+        await callback.answer(text=common_txt.saved())
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
@@ -757,7 +815,7 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_clients=new_value))
 
-        await callback.answer(txt.notify_toggled(enabled=new_value))
+        await callback.answer(common_txt.saved())
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
 
@@ -869,6 +927,36 @@ async def save_phone(message: Message, state: FSMContext) -> None:
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
     if not updated:
         await open_master_settings(message, state)
+    await answer_tracked(message, state, text=common_txt.saved(), bucket=SETTINGS_BUCKET)
+
+
+@router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_name))
+async def save_name(message: Message, state: FSMContext) -> None:
+    bind_log_context(flow="master_settings", step="edit_name_save")
+    await track_message(state, message, bucket=SETTINGS_BUCKET)
+    telegram_id = message.from_user.id
+    name = _normalize_name(message.text)
+    if not name:
+        ev.debug("master_settings.input_invalid", field="name", reason="empty")
+        await message.answer(txt.invalid_name(), parse_mode="HTML")
+        return
+    if len(name) > _NAME_MAX_LEN:
+        ev.debug("master_settings.input_invalid", field="name", reason="too_long", len=len(name), max_len=_NAME_MAX_LEN)
+        await message.answer(txt.name_too_long(max_len=_NAME_MAX_LEN), parse_mode="HTML")
+        return
+
+    async with active_session() as session:
+        master_repo = MasterRepository(session)
+        master = await master_repo.get_by_telegram_id(telegram_id)
+        await master_repo.update_by_id(master.id, MasterUpdate(name=name))
+
+    ev.info("master_settings.name_updated")
+    await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+    await state.set_state(None)
+    updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
+    if not updated:
+        await open_master_settings(message, state)
+    await answer_tracked(message, state, text=common_txt.saved(), bucket=SETTINGS_BUCKET)
 
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_work_days))
@@ -891,6 +979,7 @@ async def save_work_days(message: Message, state: FSMContext) -> None:
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
     if not updated:
         await open_master_settings(message, state)
+    await answer_tracked(message, state, text=common_txt.saved(), bucket=SETTINGS_BUCKET)
 
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_work_time))
@@ -914,6 +1003,7 @@ async def save_work_time(message: Message, state: FSMContext) -> None:
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
     if not updated:
         await open_master_settings(message, state)
+    await answer_tracked(message, state, text=common_txt.saved(), bucket=SETTINGS_BUCKET)
 
 
 @router.message(UserRole(ActiveRole.MASTER), StateFilter(MasterSettingsStates.edit_slot_size))
@@ -936,3 +1026,4 @@ async def save_slot_size(message: Message, state: FSMContext) -> None:
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
     if not updated:
         await open_master_settings(message, state)
+    await answer_tracked(message, state, text=common_txt.saved(), bucket=SETTINGS_BUCKET)

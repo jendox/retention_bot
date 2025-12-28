@@ -2,8 +2,6 @@ from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -12,6 +10,7 @@ from aiogram.types import (
 from src.filters.user_role import UserRole
 from src.handlers.master.add_booking import start_add_booking
 from src.handlers.master.add_client import start_add_client
+from src.handlers.master.clients_menu_ui import CLIENTS_MENU_CB, build_master_clients_keyboard
 from src.handlers.master.edit_client import start_edit_client
 from src.handlers.master.invite_client import start_invite_client
 from src.handlers.master.list_clients import start_clients_entry
@@ -29,14 +28,6 @@ from src.user_context import ActiveRole, UserContextStorage
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
-
-CLIENTS_MENU_CB = {
-    "list": "m:clients:list",
-    "invite": "m:clients:invite",
-    "add": "m:clients:add",
-    "search": "m:clients:search",
-    "back": "m:clients:back",
-}
 
 
 def build_master_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
@@ -56,24 +47,6 @@ def build_master_main_keyboard(show_switch_role: bool) -> ReplyKeyboardMarkup:
         keyboard=rows,
         resize_keyboard=True,
         input_field_placeholder=common_txt.input_choose_action(),
-    )
-
-
-def build_master_clients_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=txt.CLIENTS_BTN_LIST, callback_data=CLIENTS_MENU_CB["list"]),
-                InlineKeyboardButton(text=txt.CLIENTS_BTN_ADD, callback_data=CLIENTS_MENU_CB["add"]),
-            ],
-            [
-                InlineKeyboardButton(text=txt.CLIENTS_BTN_SEARCH, callback_data=CLIENTS_MENU_CB["search"]),
-                InlineKeyboardButton(text=txt.CLIENTS_BTN_INVITE, callback_data=CLIENTS_MENU_CB["invite"]),
-            ],
-            [
-                InlineKeyboardButton(text=txt.CLIENTS_BTN_BACK, callback_data=CLIENTS_MENU_CB["back"]),
-            ],
-        ],
     )
 
 
@@ -163,7 +136,7 @@ async def master_back_to_main_menu(callback: CallbackQuery, rate_limiter: RateLi
     ev.info("master_menu.clients_back")
     if not await rate_limit_callback(callback, rate_limiter, name="master_menu:clients_back", ttl_sec=2):
         return
-    await callback.answer(txt.back_to_main_menu())
+    await callback.answer()
     if callback.message is not None:
         await safe_delete(callback.message, ev=ev, event="master_menu.delete_clients_menu_failed")
 

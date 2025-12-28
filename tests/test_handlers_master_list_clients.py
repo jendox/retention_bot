@@ -15,6 +15,13 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<b>", text)
         self.assertIn("📵", text)
 
+    def test_no_placeholder_nav_buttons_when_single_page(self) -> None:
+        from src.handlers.master import list_clients as h
+
+        keyboard = h._build_list_menu_keyboard(page=1, total_pages=1)
+        buttons = [btn for row in keyboard.inline_keyboard for btn in row]
+        self.assertNotIn("m:noop", {btn.callback_data for btn in buttons})
+
     async def test_pagination_parses_page_and_uses_global_index(self) -> None:
         from src.handlers.master import list_clients as h
 

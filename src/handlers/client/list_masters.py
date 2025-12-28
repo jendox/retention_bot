@@ -22,7 +22,7 @@ from src.texts.client_booking import booking_limit_reached, choose_date
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
-from src.utils import format_phone_display, track_message
+from src.utils import format_phone_display, format_work_days_label, track_message
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
@@ -60,19 +60,6 @@ def _total_pages(total: int) -> int:
 
 def _clamp_page(page: int, total_pages: int) -> int:
     return max(1, min(int(page), int(total_pages)))
-
-
-def _day_name(idx: int) -> str:
-    return ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"][idx % 7]
-
-
-def _work_days_label(work_days: list[int]) -> str:
-    days = sorted({int(d) for d in work_days})
-    if days == [0, 1, 2, 3, 4]:
-        return "Пн–Пт"
-    if days == [0, 1, 2, 3, 4, 5, 6]:
-        return "Ежедневно"
-    return ", ".join(_day_name(d) for d in days) if days else "—"
 
 
 def _master_line(master: dict) -> str:
@@ -202,7 +189,7 @@ def _render_master_card(master: dict) -> str:
     phone = format_phone_display(str(master.get("phone") or ""))
     phone_safe = html_escape(phone) if phone else "—"
 
-    days = _work_days_label(list(master.get("work_days") or []))
+    days = format_work_days_label(list(master.get("work_days") or []))
     start_time = str(master.get("start_time") or "").strip()
     end_time = str(master.get("end_time") or "").strip()
     work_time = f"{days}, {start_time}–{end_time}".strip(", ").strip()

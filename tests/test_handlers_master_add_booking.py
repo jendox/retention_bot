@@ -167,6 +167,122 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.answer.assert_awaited()
         callback.message.edit_text.assert_awaited()
 
+    async def test_search_no_matches_shows_cancel_button(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        await state.set_state(h.AddBookingStates.search_client)
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            text="no matches",
+            bot=SimpleNamespace(),
+        )
+
+        class _Master:
+            clients: list = []
+
+        answer_tracked = AsyncMock()
+        with (
+            patch.object(h, "track_message", AsyncMock()),
+            patch.object(h, "_load_master_with_clients", AsyncMock(return_value=_Master())),
+            patch.object(h, "answer_tracked", answer_tracked),
+        ):
+            await h.search_client(message=message, state=state)
+
+        reply_markup = answer_tracked.await_args.kwargs.get("reply_markup")
+        self.assertIsNotNone(reply_markup)
+        self.assertEqual(reply_markup.inline_keyboard[0][0].callback_data, "m:add_booking:cancel")
+
+    async def test_calendar_cancel_restores_clients_list(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        await state.update_data(
+            master_id=1,
+            master_timezone="Europe/Minsk",
+            clients=[{"id": 2, "name": "A", "phone": "+375", "telegram_id": None}],
+        )
+        await state.set_state(h.AddBookingStates.selecting_date)
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+            answer=AsyncMock(),
+        )
+        callback_data = SimpleNamespace(act=h.SimpleCalAct.cancel)
+
+        with (
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
+            patch.object(h, "safe_edit_text", AsyncMock(return_value=True)),
+        ):
+            await h.pick_date(callback=callback, callback_data=callback_data, state=state)
+
+        self.assertEqual(state._state, h.AddBookingStates.search_client)
+        callback.answer.assert_awaited()
+
+    async def test_back_from_slots_restores_calendar(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        await state.update_data(master_id=1, master_timezone="Europe/Minsk", client={"id": 2})
+        await state.set_state(h.AddBookingStates.selecting_slot)
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+            answer=AsyncMock(),
+            data=h.SLOTS_BACK_TO_CALENDAR_CB,
+        )
+
+        restore = AsyncMock()
+        with (
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "_restore_calendar", restore),
+        ):
+            await h.back_to_calendar(callback=callback, state=state)
+
+        self.assertEqual(state._state, h.AddBookingStates.selecting_date)
+        callback.answer.assert_awaited()
+        restore.assert_awaited()
+
+    async def test_back_from_confirm_restores_slots(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        slot = datetime.now(UTC) + timedelta(days=1)
+        state = MemoryState()
+        await state.update_data(
+            master_id=1,
+            master_timezone="Europe/Minsk",
+            slots=[slot.isoformat()],
+            master_day=slot.date().isoformat(),
+            selected_slot=slot.isoformat(),
+            client={"id": 2},
+            confirm_in_progress=False,
+        )
+        await state.set_state(h.AddBookingStates.confirm)
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+            message=SimpleNamespace(edit_text=AsyncMock()),
+            answer=AsyncMock(),
+            data=h.CONFIRM_BACK_TO_SLOTS_CB,
+        )
+
+        safe_edit = AsyncMock(return_value=True)
+        with (
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "safe_edit_text", safe_edit),
+        ):
+            await h.back_to_slots(callback=callback, state=state)
+
+        self.assertEqual(state._state, h.AddBookingStates.selecting_slot)
+        callback.answer.assert_awaited()
+
     async def test_confirm_quota_exceeded_resets_state(self) -> None:
         from src.handlers.master import add_booking as h
 

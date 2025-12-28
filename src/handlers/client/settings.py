@@ -53,7 +53,7 @@ def _kb_delete_confirm() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Удалить", callback_data=f"{SETTINGS_CB_PREFIX}delete_confirm")],
-            [InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
+            [InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
@@ -258,7 +258,7 @@ async def _handle_set_timezone(
         await repo.update_by_id(client_id, ClientUpdate(timezone=tz))
 
     ev.info("client_settings.timezone_updated", tz=str(tz.value))
-    await callback.answer(txt.timezone_updated())
+    await callback.answer(common_txt.saved())
     await _edit_main_or_context_lost(
         callback,
         state=state,
@@ -281,7 +281,7 @@ async def _handle_toggle_notify(
         await repo.update_by_id(client_id, ClientUpdate(notifications_enabled=new_value))
 
     ev.info("client_settings.notifications_toggled", enabled=bool(new_value))
-    await callback.answer(txt.saved())
+    await callback.answer(common_txt.saved())
     await _edit_main_or_context_lost(
         callback,
         state=state,
@@ -562,3 +562,5 @@ async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimi
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await _render_and_edit_main(state=state, bot=message.bot, telegram_id=telegram_id)
     await state.set_state(None)
+    toast = await message.answer(common_txt.saved(), parse_mode="HTML")
+    await track_message(state, toast, bucket=SETTINGS_BUCKET)

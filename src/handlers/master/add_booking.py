@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
+from aiogram_calendar.schemas import SimpleCalAct
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
@@ -29,7 +30,7 @@ from src.schemas import MasterWithClients
 from src.schemas.enums import Timezone
 from src.settings import get_settings
 from src.texts import common as common_txt, master_add_booking as txt, paywall as paywall_txt
-from src.texts.buttons import btn_cancel, btn_cancel_booking, btn_close, btn_confirm, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel, btn_cancel_booking, btn_close, btn_confirm, btn_go_pro
 from src.use_cases.create_master_booking import (
     CreateMasterBooking,
     CreateMasterBookingError,
@@ -45,6 +46,8 @@ router = Router(name=__name__)
 
 ADD_BOOKING_BUCKET = "master_add_booking"
 NO_CLIENTS_ADD_CLIENT_CB = "m:add_booking:no_clients:add_client"
+SLOTS_BACK_TO_CALENDAR_CB = "m:add_booking:slots:back"
+CONFIRM_BACK_TO_SLOTS_CB = "m:add_booking:confirm:back"
 
 
 class AddBookingStates(StatesGroup):
@@ -85,8 +88,22 @@ def _build_clients_keyboard(clients: list) -> InlineKeyboardMarkup:
         if client.telegram_id is None:
             label += txt.label_offline()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{client.id}")])
-    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")])
-    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:add_booking:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_clients_keyboard_from_state(clients: list[dict]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for raw in clients[:10]:
+        name = str(raw.get("name") or "").strip()
+        phone = str(raw.get("phone") or "").strip()
+        label = name or common_txt.label_default_client()
+        if phone:
+            label += f" ({phone})"
+        if raw.get("telegram_id") is None:
+            label += txt.label_offline()
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{int(raw['id'])}")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:add_booking:cancel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -94,19 +111,23 @@ def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for index, slot in enumerate(slots):
         rows.append([InlineKeyboardButton(text=slot.strftime("%H:%M"), callback_data=f"m:add_booking:slot:{index}")])
-    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")])
-    rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    rows.append(
+        [
+            InlineKeyboardButton(text=btn_back(), callback_data=SLOTS_BACK_TO_CALENDAR_CB),
+            InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel"),
+        ],
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _build_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=btn_confirm(), callback_data="m:add_booking:confirm")],
             [
-                InlineKeyboardButton(text=btn_confirm(), callback_data="m:add_booking:confirm"),
+                InlineKeyboardButton(text=btn_back(), callback_data=CONFIRM_BACK_TO_SLOTS_CB),
                 InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel"),
             ],
-            [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
     )
 
@@ -182,6 +203,75 @@ async def _pick_date_state(state: FSMContext) -> tuple[int, Timezone] | None:
     if master_id is None or master_timezone is None:
         return None
     return int(master_id), Timezone(master_timezone)
+
+
+async def _fetch_slots_for_picked_date(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    master_id: int,
+    master_tz_enum: Timezone,
+    picked_date: datetime,
+) -> tuple[date, list[datetime], date] | None:
+    try:
+        async with session_local() as session:
+            allowed, picked_day, today_master, max_date = await _validate_picked_day_in_horizon(
+                session,
+                master_id=master_id,
+                picked_date=picked_date,
+                master_tz_enum=master_tz_enum,
+            )
+            if not allowed:
+                await callback.answer(
+                    text=txt.date_out_of_range(today=today_master, max_date=max_date),
+                    show_alert=True,
+                )
+                await _restore_calendar(callback, state)
+                return None
+
+            result = await GetMasterFreeSlots(session).execute(
+                master_id=master_id,
+                client_day=picked_day,
+                client_tz=master_tz_enum,
+            )
+    except Exception as exc:
+        await ev.aexception("master_add_booking.pick_date_failed", stage="use_case", exc=exc)
+        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
+        return None
+
+    slots = list(result.slots_utc)
+    if not slots:
+        ev.info("master_add_booking.slots_result", outcome="no_slots", master_id=master_id, day=str(picked_day))
+        await callback.answer(text=txt.no_slots(), show_alert=True)
+        await _restore_calendar(callback, state)
+        return None
+
+    return picked_day, slots, result.master_day
+
+
+async def _handle_calendar_cancel(
+    callback: CallbackQuery,
+    callback_data: SimpleCalendarCallback,
+    state: FSMContext,
+) -> bool:
+    if getattr(callback_data, "act", None) != SimpleCalAct.cancel:
+        return False
+    data = await state.get_data()
+    clients: list[dict] = list(data.get("clients") or [])
+    await callback.answer()
+    if not clients:
+        await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
+        await state.clear()
+        return True
+    await state.update_data(client=None, selected_slot=None, slots=None, master_day=None)
+    await _edit_or_send(
+        callback,
+        state,
+        text=txt.choose_client(),
+        reply_markup=_build_clients_keyboard_from_state(clients),
+    )
+    await state.set_state(AddBookingStates.search_client)
+    return True
 
 
 async def _edit_or_send(
@@ -538,6 +628,9 @@ async def search_client(message: Message, state: FSMContext) -> None:
             state,
             text=txt.no_matches(),
             bucket=ADD_BOOKING_BUCKET,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data="m:add_booking:cancel")]],
+            ),
         )
         return
 
@@ -628,6 +721,9 @@ async def pick_date(
     if not await rate_limit_callback(callback, rate_limiter, name="master_add_booking:pick_date", ttl_sec=1):
         return
 
+    if await _handle_calendar_cancel(callback, callback_data, state):
+        return
+
     selected, picked_date = await SimpleCalendar().process_selection(callback, callback_data)
     if not selected:
         return
@@ -639,40 +735,17 @@ async def pick_date(
         return
     master_id, master_tz_enum = state_data
 
-    try:
-        async with session_local() as session:
-            allowed, picked_day, today_master, max_date = await _validate_picked_day_in_horizon(
-                session,
-                master_id=master_id,
-                picked_date=picked_date,
-                master_tz_enum=master_tz_enum,
-            )
-            if not allowed:
-                await callback.answer(
-                    text=txt.date_out_of_range(today=today_master, max_date=max_date),
-                    show_alert=True,
-                )
-                await _restore_calendar(callback, state)
-                return
-
-            result = await GetMasterFreeSlots(session).execute(
-                master_id=master_id,
-                client_day=picked_day,
-                client_tz=master_tz_enum,
-            )
-    except Exception as exc:
-        await ev.aexception("master_add_booking.pick_date_failed", stage="use_case", exc=exc)
-        await callback.answer(ASYNC_CTX_ERROR, show_alert=True)
+    slots_result = await _fetch_slots_for_picked_date(
+        callback,
+        state,
+        master_id=master_id,
+        master_tz_enum=master_tz_enum,
+        picked_date=picked_date,
+    )
+    if slots_result is None:
         return
 
-    slots = result.slots_utc
-    if not slots:
-        ev.info("master_add_booking.slots_result", outcome="no_slots", master_id=master_id, day=str(picked_day))
-        # Keep the calendar visible and notify via callback.answer to avoid chat spam.
-        await callback.answer(text=txt.no_slots(), show_alert=True)
-        await _restore_calendar(callback, state)
-        return
-
+    picked_day, slots, master_day = slots_result
     ev.info(
         "master_add_booking.slots_result",
         outcome="slots",
@@ -680,7 +753,7 @@ async def pick_date(
         day=str(picked_day),
         slots=len(slots),
     )
-    await state.update_data(slots=[dt.isoformat() for dt in slots], master_day=result.master_day.isoformat())
+    await state.update_data(slots=[dt.isoformat() for dt in slots], master_day=master_day.isoformat())
     await _edit_or_send(
         callback,
         state,
@@ -759,6 +832,58 @@ async def pick_slot(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddBookingStates.confirm)
 
 
+@router.callback_query(StateFilter(AddBookingStates.selecting_slot), F.data == SLOTS_BACK_TO_CALENDAR_CB)
+async def back_to_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_add_booking", step="back_to_calendar")
+    await track_callback_message(state, callback, bucket=ADD_BOOKING_BUCKET)
+    await callback.answer()
+    await state.update_data(selected_slot=None, slots=None, master_day=None)
+    await _restore_calendar(callback, state)
+    await state.set_state(AddBookingStates.selecting_date)
+
+
+async def _restore_slots_from_state(callback: CallbackQuery, state: FSMContext) -> bool:
+    data = await state.get_data()
+    master_timezone = data.get("master_timezone")
+    if not master_timezone:
+        return False
+    master_tz_enum = Timezone(master_timezone)
+
+    slots_iso: list[str] = list(data.get("slots") or [])
+    if not slots_iso:
+        return False
+    try:
+        slots = [datetime.fromisoformat(v) for v in slots_iso]
+    except ValueError:
+        return False
+
+    master_day = _parse_iso_date(data.get("master_day"))
+    if master_day is None:
+        # Fallback: approximate using the first slot in master's timezone.
+        master_day = to_zone(slots[0], master_tz_enum).date()
+
+    await _edit_or_send(
+        callback,
+        state,
+        text=txt.slots_title(day=master_day),
+        reply_markup=_build_slots_keyboard([to_zone(dt, master_tz_enum) for dt in slots]),
+    )
+    return True
+
+
+@router.callback_query(StateFilter(AddBookingStates.confirm), F.data == CONFIRM_BACK_TO_SLOTS_CB)
+async def back_to_slots(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_add_booking", step="back_to_slots")
+    await track_callback_message(state, callback, bucket=ADD_BOOKING_BUCKET)
+    await callback.answer()
+    await state.update_data(selected_slot=None, confirm_in_progress=False)
+    if not await _restore_slots_from_state(callback, state):
+        ev.warning("master_add_booking.state_invalid", reason="missing_slots_data")
+        await context_lost(callback, state, bucket=ADD_BOOKING_BUCKET, reason="missing_slots_data")
+        return
+    await state.set_state(AddBookingStates.selecting_slot)
+
+
 @router.callback_query(StateFilter(AddBookingStates.confirm), F.data == "m:add_booking:confirm")
 async def confirm_booking(
     callback: CallbackQuery,
@@ -831,6 +956,6 @@ async def confirm_booking(
 async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_add_booking", step="cancel")
     ev.info("master_add_booking.cancelled")
-    await callback.answer(txt.cancel_alert(), show_alert=True)
+    await callback.answer()
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
     await state.clear()

@@ -20,7 +20,7 @@ from src.paywall import build_paywall_keyboard
 from src.rate_limiter import RateLimiter
 from src.settings import get_settings
 from src.texts import common as common_txt, master_add_client as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_go_pro, btn_restart
+from src.texts.buttons import btn_back, btn_confirm, btn_go_pro, btn_restart
 from src.use_cases.create_client_offline import (
     CreateClientOffline,
     CreateClientOfflineCreateResult,
@@ -66,10 +66,7 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=btn_restart(), callback_data=CLIENT_ADD_CB["restart"]),
             ],
             [
-                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_ADD_CB["cancel"]),
-            ],
-            [
-                InlineKeyboardButton(text=btn_close(), callback_data="m:close"),
+                InlineKeyboardButton(text=btn_back(), callback_data=CLIENT_ADD_CB["cancel"]),
             ],
         ],
     )
@@ -79,10 +76,7 @@ def _build_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=btn_cancel(), callback_data=CLIENT_ADD_CB["cancel"]),
-            ],
-            [
-                InlineKeyboardButton(text=btn_close(), callback_data="m:close"),
+                InlineKeyboardButton(text=btn_back(), callback_data=CLIENT_ADD_CB["cancel"]),
             ],
         ],
     )
@@ -246,7 +240,6 @@ async def start_add_client(  # noqa: C901
     if not await rate_limit_callback(callback, rate_limiter, name="master_add_client:start", ttl_sec=2):
         return
     telegram_id = callback.from_user.id
-    await track_callback_message(state, callback, bucket=ADD_CLIENT_BUCKET)
     ev.info("master_add_client.start")
 
     try:
@@ -431,7 +424,7 @@ async def master_add_client_restart(
 async def master_add_client_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     bind_log_context(flow="master_add_client", step="cancel")
     ev.info("master_add_client.cancelled")
-    await callback.answer(txt.cancelled(), show_alert=True)
+    await callback.answer()
     await _reset_add_client(state, callback.bot)
 
 

@@ -45,6 +45,7 @@ from src.user_context import ActiveRole, UserContextStorage
 from src.utils import (
     answer_tracked,
     cleanup_messages,
+    format_work_days_label,
     track_callback_message,
     track_message,
     validate_phone,
@@ -687,7 +688,7 @@ async def process_master_slot_size(message: Message, state: FSMContext) -> None:
         text=txt.confirm(
             name=data["name"],
             phone=data["phone"],
-            work_days=", ".join(str(day + 1) for day in data["work_days"]),
+            work_days=format_work_days_label(list(data["work_days"])),
             work_time=f"{data['start_time']}–{data['end_time']}",
             slot_size_min=int(data["slot_size_min"]),
         ),

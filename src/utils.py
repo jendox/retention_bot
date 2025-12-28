@@ -13,6 +13,16 @@ from src.observability.events import EventLogger
 ev = EventLogger(__name__)
 
 _CHAT_ID_HASH_LEN = 12
+_WEEKDAY_ABBR_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+
+
+def format_work_days_label(work_days: list[int]) -> str:
+    days = sorted({int(d) for d in work_days})
+    if days == [0, 1, 2, 3, 4]:
+        return "Пн–Пт"
+    if days == [0, 1, 2, 3, 4, 5, 6]:
+        return "Ежедневно"
+    return ", ".join(_WEEKDAY_ABBR_RU[d % 7] for d in days) if days else "—"
 
 
 def _hash_chat_id(chat_id: int) -> str:

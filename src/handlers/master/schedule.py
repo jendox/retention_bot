@@ -885,7 +885,7 @@ async def master_schedule_period_callbacks(callback: CallbackQuery, rate_limiter
     data = callback.data or ""
 
     if data == SCHEDULE_CB["back_menu"]:
-        await callback.answer(txt.back_to_main_menu())
+        await callback.answer()
         if callback.message is not None:
             await safe_delete(callback.message, ev=ev, event="schedule.delete_menu_failed")
         return

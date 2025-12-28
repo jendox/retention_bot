@@ -186,12 +186,17 @@ def _nav_button(*, direction: str, mode: str, page: int, total_pages: int) -> In
 
 
 def _build_list_menu_keyboard(*, page: int, total_pages: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    nav_row: list[list[InlineKeyboardButton]] = []
+    if total_pages > 1:
+        nav_row = [
             [
                 _nav_button(direction="prev", mode="l", page=page, total_pages=total_pages),
                 _nav_button(direction="next", mode="l", page=page, total_pages=total_pages),
             ],
+        ]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            *nav_row,
             [
                 InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search"),
                 InlineKeyboardButton(text=txt.btn_select(), callback_data=f"{CLIENTS_CB_PREFIX}l:select:{page}"),
@@ -223,11 +228,14 @@ def _build_select_menu_keyboard(
     total_pages: int,
     total_items: int,
 ) -> list[list[InlineKeyboardButton]]:
-    row = [
-        _nav_button(direction="prev", mode="s", page=page, total_pages=total_pages),
-        InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search"),
-        _nav_button(direction="next", mode="s", page=page, total_pages=total_pages),
-    ]
+    if total_pages > 1:
+        row = [
+            _nav_button(direction="prev", mode="s", page=page, total_pages=total_pages),
+            InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search"),
+            _nav_button(direction="next", mode="s", page=page, total_pages=total_pages),
+        ]
+    else:
+        row = [InlineKeyboardButton(text=txt.btn_find(), callback_data="m:clients:search")]
     toggle_row: list[InlineKeyboardButton] = []
     base = (page - 1) * TEXT_LIST_PAGE_SIZE
     has_chunk2 = total_items > (base + BUTTON_SELECT_PAGE_SIZE)

@@ -21,13 +21,13 @@ from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.texts import common as common_txt, master_invite_client as txt
-from src.texts.buttons import btn_cancel, btn_close
+from src.texts.buttons import btn_back
 from src.use_cases.create_master_client_invite import (
     CreateMasterClientInvite,
     CreateMasterClientInviteOutcome,
 )
 from src.use_cases.entitlements import Usage
-from src.utils import answer_tracked, cleanup_messages, track_callback_message
+from src.utils import answer_tracked, cleanup_messages
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
@@ -68,14 +68,8 @@ def _build_invite_format_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=btn_cancel(),
+                    text=btn_back(),
                     callback_data="m:invite:cancel",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=btn_close(),
-                    callback_data="m:close",
                 ),
             ],
         ],
@@ -167,7 +161,6 @@ async def start_invite_client(
     telegram_id = callback.from_user.id
     await cleanup_messages(state, callback.bot, bucket=INVITE_CLIENT_BUCKET)
     await state.clear()
-    await track_callback_message(state, callback, bucket=INVITE_CLIENT_BUCKET)
     try:
         async with active_session() as session:
             use_case = CreateMasterClientInvite(session)
@@ -250,11 +243,8 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
     bind_log_context(flow="master_invite_client", step="choose_format")
     if callback.data == "m:invite:cancel":
         ev.info("master_invite_client.cancelled")
+        await callback.answer()
         await _reset_invite_flow(state, callback.bot)
-        await callback.answer(
-            text=txt.cancelled_hint(),
-            show_alert=True,
-        )
         return
 
     kind = _parse_invite_type(callback)

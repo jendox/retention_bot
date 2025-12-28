@@ -7,6 +7,10 @@ def btn_phone(*, t: Translator = _noop_t) -> str:
     return t("📞 Телефон")
 
 
+def btn_name(*, t: Translator = _noop_t) -> str:
+    return t("👤 Имя")
+
+
 def btn_timezone(*, t: Translator = _noop_t) -> str:
     return t("🌍 Таймзона")
 
@@ -31,14 +35,18 @@ def btn_guide(*, t: Translator = _noop_t) -> str:
     return t("📘 Руководство")
 
 
+def btn_edit_profile(*, t: Translator = _noop_t) -> str:
+    return t("✏️ Редактировать профиль")
+
+
 def btn_delete_data(*, t: Translator = _noop_t) -> str:
     return t("🗑 Удалить данные")
 
 
 def btn_notify(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
     if not plan_is_pro:
-        return t("🔒 Уведомления клиенту: Pro")
-    return t("🔔 Уведомления клиенту: включены ✅") if notify_clients else t("🔕 Уведомления клиенту: выключены 🚫")
+        return t("🔒 Уведомлять клиентов: Pro")
+    return t("🔔 Уведомлять клиентов: включено ✅") if notify_clients else t("🔕 Уведомлять клиентов: выключено 🚫")
 
 
 def title(*, t: Translator = _noop_t) -> str:
@@ -50,14 +58,10 @@ def plan_name(*, is_pro: bool, t: Translator = _noop_t) -> str:
 
 
 def notify_line(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
-    line = t("включены ✅") if notify_clients else t("выключены 🚫")
+    line = t("включено ✅") if notify_clients else t("выключено 🚫")
     if not plan_is_pro:
         line += t(" (доступно в Pro)")
     return line
-
-
-def footer_question(*, t: Translator = _noop_t) -> str:
-    return t("Что настроим?")
 
 
 def render_main(
@@ -73,8 +77,7 @@ def render_main(
         f"<b>Профиль:</b> {master_name}\n"
         f"<b>Тариф:</b> {plan_name(is_pro=plan_is_pro, t=t)}\n"
         f"<b>Таймзона:</b> {tz_value}\n"
-        f"<b>Уведомления клиенту:</b> {notify_line(notify_clients=notify_clients, plan_is_pro=plan_is_pro, t=t)}\n\n"
-        f"{footer_question(t=t)}",
+        f"<b>Уведомлять клиентов:</b> {notify_line(notify_clients=notify_clients, plan_is_pro=plan_is_pro, t=t)}",
     )
 
 
@@ -90,7 +93,7 @@ def render_details(
         "\n\n"
         f"<b>Телефон:</b> {phone}\n"
         f"<b>Рабочие дни:</b> {work_days}\n"
-        f"<b>Время:</b> {work_time}\n"
+        f"<b>Время работы:</b> {work_time}\n"
         f"<b>Длительность записи:</b> {slot_size}",
     )
 
@@ -116,15 +119,27 @@ def timezone_updated(*, t: Translator = _noop_t) -> str:
 
 
 def notify_pro_only(*, t: Translator = _noop_t) -> str:
-    return t("Уведомления клиенту доступны в Pro.")
+    return t("Уведомлять клиентов можно в Pro.")
 
 
 def notify_toggled(*, enabled: bool, t: Translator = _noop_t) -> str:
-    return t("Уведомления клиенту включены ✅") if enabled else t("Уведомления клиенту выключены 🚫")
+    return t("Уведомлять клиентов: включено ✅") if enabled else t("Уведомлять клиентов: выключено 🚫")
 
 
 def ask_new_phone(*, t: Translator = _noop_t) -> str:
     return t("Введи новый телефон (в формате <code>375291234567</code>):")
+
+
+def ask_new_name(*, t: Translator = _noop_t) -> str:
+    return t("Введи новое имя (так тебя будут видеть клиенты):")
+
+
+def invalid_name(*, t: Translator = _noop_t) -> str:
+    return t("Не получилось разобрать имя. Попробуй ещё раз.")
+
+
+def name_too_long(*, max_len: int, t: Translator = _noop_t) -> str:
+    return t(f"Имя слишком длинное (макс. {int(max_len)} символов).")
 
 
 def ask_work_days(*, t: Translator = _noop_t) -> str:
