@@ -7,8 +7,20 @@ def btn_timezone(*, t: Translator = _noop_t) -> str:
     return t("🌍 Таймзона")
 
 
+def btn_name(*, t: Translator = _noop_t) -> str:
+    return t("👤 Имя")
+
+
 def btn_phone(*, t: Translator = _noop_t) -> str:
-    return t("📞 Изменить телефон")
+    return t("📞 Телефон")
+
+
+def btn_edit_profile(*, t: Translator = _noop_t) -> str:
+    return t("✏️ Редактировать профиль")
+
+
+def btn_guide(*, t: Translator = _noop_t) -> str:
+    return t("📘 Руководство")
 
 
 def btn_notifications(*, enabled: bool, t: Translator = _noop_t) -> str:
@@ -33,8 +45,7 @@ def render_settings(
         f"<b>Профиль:</b> {name}\n"
         f"<b>Телефон:</b> {phone}\n"
         f"<b>Таймзона:</b> {tz_value}\n"
-        f"<b>Уведомления:</b> {notify_line}\n\n"
-        "Что настроим?",
+        f"<b>Уведомления:</b> {notify_line}",
     )
 
 
@@ -72,3 +83,19 @@ def phone_not_recognized(*, t: Translator = _noop_t) -> str:
 
 def phone_updated(*, t: Translator = _noop_t) -> str:
     return t("✅ Телефон обновлён.")
+
+
+def ask_new_name(*, t: Translator = _noop_t) -> str:
+    return t("Введи новое имя:")
+
+
+def invalid_name(*, t: Translator = _noop_t) -> str:
+    return t("⚠️ Имя не должно быть пустым.")
+
+
+def name_too_long(*, max_len: int, t: Translator = _noop_t) -> str:
+    return t(f"⚠️ Имя слишком длинное (максимум {max_len} символов).")
+
+
+def guide_coming_soon(*, t: Translator = _noop_t) -> str:
+    return t("📘 Руководство для клиентов скоро добавим.")

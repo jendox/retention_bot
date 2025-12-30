@@ -29,21 +29,42 @@ ev = EventLogger(__name__)
 
 SETTINGS_CB_PREFIX = "c:settings:"
 SETTINGS_MAIN_KEY = "client_settings_main"
+SETTINGS_VIEW_KEY = "client_settings_view"
 SETTINGS_BUCKET = "client_settings"
+
+VIEW_HUB = "hub"
+VIEW_EDIT_PROFILE = "edit_profile"
+
+_NAME_MAX_LEN = 64
 
 
 class ClientSettingsStates(StatesGroup):
+    edit_name = State()
     edit_phone = State()
 
 
-def _kb_settings(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
+def _kb_settings_hub() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=txt.btn_edit_profile(), callback_data=f"{SETTINGS_CB_PREFIX}edit_profile")],
+            [InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide")],
+            [InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data")],
+            [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
+        ],
+    )
+
+
+def _kb_settings_edit_profile(*, notifications_enabled: bool) -> InlineKeyboardMarkup:
     notify_text = txt.btn_notifications(enabled=notifications_enabled)
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz")],
-            [InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}edit_phone")],
+            [
+                InlineKeyboardButton(text=txt.btn_name(), callback_data=f"{SETTINGS_CB_PREFIX}name"),
+                InlineKeyboardButton(text=txt.btn_phone(), callback_data=f"{SETTINGS_CB_PREFIX}edit_phone"),
+                InlineKeyboardButton(text=txt.btn_timezone(), callback_data=f"{SETTINGS_CB_PREFIX}tz"),
+            ],
             [InlineKeyboardButton(text=notify_text, callback_data=f"{SETTINGS_CB_PREFIX}toggle_notify")],
-            [InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data")],
+            [InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
@@ -120,11 +141,18 @@ async def _render_and_edit_main(
     if ref is None:
         return False
     chat_id, message_id = ref
+    view = data.get(SETTINGS_VIEW_KEY) or VIEW_HUB
 
     try:
         client = await _load_client(telegram_id)
     except ClientNotFound:
         return False
+
+    notifications_enabled = bool(getattr(client, "notifications_enabled", True))
+    if view == VIEW_EDIT_PROFILE:
+        kb = _kb_settings_edit_profile(notifications_enabled=notifications_enabled)
+    else:
+        kb = _kb_settings_hub()
 
     return await safe_bot_edit_message_text(
         bot,
@@ -134,9 +162,9 @@ async def _render_and_edit_main(
             name=client.name,
             phone=format_phone_display(str(getattr(client, "phone", ""))),
             tz=client.timezone,
-            notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
+            notifications_enabled=notifications_enabled,
         ),
-        reply_markup=_kb_settings(notifications_enabled=bool(getattr(client, "notifications_enabled", True))),
+        reply_markup=kb,
         parse_mode="HTML",
         ev=ev,
         event="client_settings.edit_main_failed",
@@ -171,17 +199,19 @@ async def open_client_settings(
             event="client_settings.delete_prev_failed",
         )
 
+    notifications_enabled = bool(getattr(client, "notifications_enabled", True))
     settings_msg = await message.answer(
         text=_render(
             name=client.name,
             phone=format_phone_display(str(getattr(client, "phone", ""))),
             tz=client.timezone,
-            notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
+            notifications_enabled=notifications_enabled,
         ),
-        reply_markup=_kb_settings(notifications_enabled=bool(getattr(client, "notifications_enabled", True))),
+        reply_markup=_kb_settings_hub(),
         parse_mode="HTML",
     )
     await _set_main_ref(state, chat_id=settings_msg.chat.id, message_id=settings_msg.message_id)
+    await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_HUB})
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
 
@@ -292,6 +322,7 @@ async def _handle_toggle_notify(
 
 async def _handle_back_menu(callback: CallbackQuery, *, state: FSMContext, telegram_id: int) -> None:
     await callback.answer()
+    await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_HUB})
     await _edit_main_or_context_lost(
         callback,
         state=state,
@@ -302,10 +333,38 @@ async def _handle_back_menu(callback: CallbackQuery, *, state: FSMContext, teleg
     await state.set_state(None)
 
 
+def _kb_name_prompt() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")]],
+    )
+
+
 def _kb_phone_prompt() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}back_menu")]],
+        inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data=f"{SETTINGS_CB_PREFIX}cancel_edit")]],
     )
+
+
+def _normalize_name(raw: str | None) -> str:
+    return " ".join((raw or "").split()).strip()
+
+
+async def _handle_edit_name(callback: CallbackQuery, *, state: FSMContext) -> None:
+    await callback.answer()
+    await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+    ev.info("client_settings.edit_name_start")
+    ok = await safe_edit_text(
+        callback.message,
+        text=txt.ask_new_name(),
+        reply_markup=_kb_name_prompt(),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_settings.edit_name_prompt_failed",
+    )
+    if not ok:
+        await context_lost(callback, state, bucket=SETTINGS_MAIN_KEY, reason="missing_message_on_edit_name")
+        return
+    await state.set_state(ClientSettingsStates.edit_name)
 
 
 async def _handle_edit_phone(callback: CallbackQuery, *, state: FSMContext) -> None:
@@ -343,9 +402,14 @@ def _parse_action(data: str) -> tuple[str, str | None]:
     suffix = data.removeprefix(SETTINGS_CB_PREFIX)
     mapping = {
         "back": "back",
+        "edit_profile": "edit_profile",
+        "guide": "guide",
         "tz": "tz",
+        "name": "name",
         "edit_phone": "edit_phone",
+        "phone": "edit_phone",
         "toggle_notify": "toggle_notify",
+        "cancel_edit": "cancel_edit",
         "back_menu": "back_menu",
         "delete_data": "delete_data",
         "delete_confirm": "delete_confirm",
@@ -447,7 +511,7 @@ async def _dispatch_with_client(
     await callback.answer()
 
 
-async def _dispatch_without_client(  # noqa: C901, PLR0912
+async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
     callback: CallbackQuery,
     *,
     state: FSMContext,
@@ -455,8 +519,36 @@ async def _dispatch_without_client(  # noqa: C901, PLR0912
     action: str,
     user_ctx_storage: UserContextStorage,
 ) -> None:
+    if action == "edit_profile":
+        await callback.answer()
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
+        await _edit_main_or_context_lost(
+            callback,
+            state=state,
+            telegram_id=telegram_id,
+            reason="missing_main_ref_on_edit_profile",
+        )
+        return
+    if action == "guide":
+        await callback.answer(txt.guide_coming_soon())
+        return
+    if action == "cancel_edit":
+        await callback.answer()
+        await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+        await state.set_state(None)
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
+        await _edit_main_or_context_lost(
+            callback,
+            state=state,
+            telegram_id=telegram_id,
+            reason="missing_main_ref_on_cancel_edit",
+        )
+        return
     if action == "tz":
         await _handle_choose_timezone(callback, state)
+        return
+    if action == "name":
+        await _handle_edit_name(callback, state=state)
         return
     if action == "edit_phone":
         await _handle_edit_phone(callback, state=state)
@@ -512,6 +604,81 @@ async def _dispatch_without_client(  # noqa: C901, PLR0912
     await callback.answer()
 
 
+@router.message(UserRole(ActiveRole.CLIENT), StateFilter(ClientSettingsStates.edit_name))
+async def save_name(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_settings", step="edit_name_save")
+    if not await rate_limit_message(message, rate_limiter, name="client_settings:edit_name", ttl_sec=1):
+        return
+
+    await track_message(state, message, bucket=SETTINGS_BUCKET)
+    name = _normalize_name(message.text)
+    if not name:
+        ev.debug("client_settings.input_invalid", field="name", reason="empty")
+        await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+        data = await state.get_data()
+        ref = _get_main_ref(data, telegram_id=message.from_user.id)
+        if ref is None:
+            await message.answer(common_txt.context_lost())
+            await state.clear()
+            return
+        chat_id, message_id = ref
+        await safe_bot_edit_message_text(
+            message.bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=txt.invalid_name(),
+            reply_markup=_kb_name_prompt(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_settings.edit_name_invalid_failed",
+        )
+        return
+    if len(name) > _NAME_MAX_LEN:
+        ev.debug("client_settings.input_invalid", field="name", reason="too_long", len=len(name), max_len=_NAME_MAX_LEN)
+        await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+        data = await state.get_data()
+        ref = _get_main_ref(data, telegram_id=message.from_user.id)
+        if ref is None:
+            await message.answer(common_txt.context_lost())
+            await state.clear()
+            return
+        chat_id, message_id = ref
+        await safe_bot_edit_message_text(
+            message.bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=txt.name_too_long(max_len=_NAME_MAX_LEN),
+            reply_markup=_kb_name_prompt(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_settings.edit_name_too_long_failed",
+        )
+        return
+
+    telegram_id = message.from_user.id
+    try:
+        client = await _load_client(telegram_id)
+    except ClientNotFound:
+        ev.warning("client_settings.client_not_found")
+        await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+        await message.answer(txt.client_only())
+        await _clear_main_ref(state)
+        await state.set_state(None)
+        return
+
+    async with active_session() as session:
+        repo = ClientRepository(session)
+        await repo.update_by_id(client.id, ClientUpdate(name=name))
+
+    ev.info("client_settings.name_updated")
+    await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+    await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
+    await _render_and_edit_main(state=state, bot=message.bot, telegram_id=telegram_id)
+    await state.set_state(None)
+    toast = await message.answer(common_txt.saved(), parse_mode="HTML")
+    await track_message(state, toast, bucket=SETTINGS_BUCKET)
+
+
 @router.message(UserRole(ActiveRole.CLIENT), StateFilter(ClientSettingsStates.edit_phone))
 async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="client_settings", step="edit_phone_save")
@@ -560,6 +727,7 @@ async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimi
 
     ev.info("client_settings.phone_updated")
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+    await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
     await _render_and_edit_main(state=state, bot=message.bot, telegram_id=telegram_id)
     await state.set_state(None)
     toast = await message.answer(common_txt.saved(), parse_mode="HTML")

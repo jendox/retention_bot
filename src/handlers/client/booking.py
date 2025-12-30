@@ -30,10 +30,9 @@ from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import Master
 from src.schemas.enums import Timezone
 from src.settings import get_settings
-from src.texts.buttons import btn_cancel, btn_confirm, btn_decline, btn_go_pro
+from src.texts.buttons import btn_back, btn_cancel, btn_confirm, btn_decline, btn_go_pro
 from src.texts.client_booking import (
     available_dates,
-    booking_cancelled,
     booking_limit_reached,
     booking_not_saved,
     choose_date,
@@ -63,6 +62,8 @@ router = Router(name=__name__)
 ev = EventLogger(__name__)
 
 BOOKING_BUCKET = "client_booking"
+SLOTS_BACK_TO_CALENDAR_CB = "book:back:calendar"
+CONFIRM_BACK_TO_SLOTS_CB = "book:back:slots"
 
 
 class ClientBooking(StatesGroup):
@@ -106,7 +107,12 @@ def _build_slots_keyboard(slots: list[datetime]) -> InlineKeyboardMarkup:
             ],
         )
 
-    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")])
+    rows.append(
+        [
+            InlineKeyboardButton(text=btn_back(), callback_data=SLOTS_BACK_TO_CALENDAR_CB),
+            InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow"),
+        ],
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -115,6 +121,9 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=btn_confirm(), callback_data="book:confirm"),
+            ],
+            [
+                InlineKeyboardButton(text=btn_back(), callback_data=CONFIRM_BACK_TO_SLOTS_CB),
                 InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel"),
             ],
         ],
@@ -434,6 +443,94 @@ async def booking_select_slot(callback: CallbackQuery, state: FSMContext) -> Non
 
 @router.callback_query(
     UserRole(ActiveRole.CLIENT),
+    StateFilter(ClientBooking.selecting_slot),
+    F.data == SLOTS_BACK_TO_CALENDAR_CB,
+)
+async def booking_back_to_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_booking", step="back_to_date")
+    ev.info("client_booking.back_to_date")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
+
+    data = await state.get_data()
+    client_day_iso = data.get("client_day")
+
+    year_month: tuple[int, int] | None = None
+    if isinstance(client_day_iso, str):
+        try:
+            client_day = date.fromisoformat(client_day_iso)
+        except ValueError:
+            client_day = None
+        else:
+            year_month = (client_day.year, client_day.month)
+
+    calendar = SimpleCalendar()
+    if year_month is None:
+        reply_markup = await calendar.start_calendar()
+    else:
+        reply_markup = await calendar.start_calendar(year=year_month[0], month=year_month[1])
+
+    await state.update_data(
+        booking_slots_utc=[],
+        selected_slot_index=None,
+        client_day=None,
+    )
+    if callback.message is not None:
+        await safe_edit_text(
+            callback.message,
+            text=choose_date(),
+            reply_markup=reply_markup,
+            ev=ev,
+            event="client_booking.edit_calendar_restore_failed",
+        )
+    await state.set_state(ClientBooking.selecting_date)
+
+
+@router.callback_query(
+    UserRole(ActiveRole.CLIENT),
+    StateFilter(ClientBooking.confirm),
+    F.data == CONFIRM_BACK_TO_SLOTS_CB,
+)
+async def booking_back_to_slots(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="client_booking", step="back_to_slots")
+    ev.info("client_booking.back_to_slots")
+    await callback.answer()
+    await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
+
+    data = await state.get_data()
+    slots_iso: list[str] = data.get("booking_slots_utc", [])
+    client_timezone = _coerce_timezone(data.get("client_timezone"))
+    client_day_iso = data.get("client_day")
+
+    if client_timezone is None or not slots_iso or not isinstance(client_day_iso, str):
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_back_to_slots_data")
+        return
+
+    try:
+        client_day = date.fromisoformat(client_day_iso)
+    except ValueError:
+        await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="invalid_client_day")
+        return
+
+    client_tz_info = get_timezone(str(client_timezone.value))
+    slots_client: list[datetime] = []
+    for raw in slots_iso:
+        slots_client.append(datetime.fromisoformat(raw).astimezone(client_tz_info))
+
+    await state.update_data(selected_slot_index=None)
+    if callback.message is not None:
+        await safe_edit_text(
+            callback.message,
+            text=choose_time(client_day=client_day),
+            reply_markup=_build_slots_keyboard(slots_client),
+            ev=ev,
+            event="client_booking.edit_choose_time_restore_failed",
+        )
+    await state.set_state(ClientBooking.selecting_slot)
+
+
+@router.callback_query(
+    UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.confirm),
     F.data == "book:cancel",
 )
@@ -443,7 +540,6 @@ async def booking_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
-    await callback.message.answer(booking_cancelled())
 
 
 @router.callback_query(
@@ -462,8 +558,6 @@ async def booking_cancel_flow(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer(booking_not_saved())
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
-    if callback.message:
-        await callback.message.answer(booking_cancelled())
 
 
 @router.callback_query(

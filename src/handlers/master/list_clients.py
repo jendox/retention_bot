@@ -71,7 +71,7 @@ def _parse_int_suffix(prefix: str, data: str | None) -> int | None:
         return None
 
 
-def _parse_open_action(data: str | None) -> tuple[int, int] | None:
+def _parse_open_action(data: str | None) -> tuple[int, int, int] | None:
     parts = (data or "").split(":")
     # m:cl:s:open:<client_id>:p:<page>:c:<chunk>
     if len(parts) != 9:  # noqa: PLR2004
@@ -106,7 +106,7 @@ def _parse_select_page(data: str | None) -> tuple[int, int] | None:
     return page, chunk
 
 
-def _parse_card_action(action: str, data: str | None) -> tuple[int, int] | None:
+def _parse_card_action(action: str, data: str | None) -> tuple[int, int, int] | None:
     parts = (data or "").split(":")
     # m:cl:c:<action>:<client_id>:p:<page>:c:<chunk>
     if len(parts) != 9:  # noqa: PLR2004

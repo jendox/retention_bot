@@ -20,7 +20,7 @@ def choose_date(*, t: Translator = _noop_t) -> str:
 
 
 def choose_time(*, client_day: date, t: Translator = _noop_t) -> str:
-    return t(f"Свободные слоты на {client_day.strftime('%d.%m.%Y')} ⏰\nВыбери удобное время:")
+    return t(f"Свободное время для записи на {client_day.strftime('%d.%m.%Y')} ⏰\nВыбери удобное время:")
 
 
 def state_broken_alert(*, t: Translator = _noop_t) -> str:
@@ -41,11 +41,11 @@ def available_dates(
 
 
 def no_available_slots(*, t: Translator = _noop_t) -> str:
-    return t("ℹ️ На этот день свободных слотов нет 😕\nПопробуй выбрать другую дату.")
+    return t("ℹ️ На этот день свободного времени нет 😕\nПопробуй выбрать другую дату.")
 
 
 def incorrect_slot(*, t: Translator = _noop_t) -> str:
-    return t("⚠️ Некорректный слот, попробуй ещё раз.")
+    return t("⚠️ Некорректное время, попробуй ещё раз.")
 
 
 def confirm_details(*, slot_dt_client: datetime, t: Translator = _noop_t) -> str:
@@ -73,7 +73,7 @@ def booking_limit_reached(*, t: Translator = _noop_t) -> str:
 
 def slot_not_available(*, t: Translator = _noop_t) -> str:
     return t(
-        "⚠️ Упс — этот слот только что заняли 😕\nПожалуйста, выбери другое время.",
+        "⚠️ Упс — это время только что заняли 😕\nПожалуйста, выбери другое.",
     )
 
 

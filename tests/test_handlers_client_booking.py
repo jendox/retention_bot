@@ -24,6 +24,10 @@ class MemoryState:
     async def set_state(self, state) -> None:
         self._state = state
 
+    async def clear(self) -> None:
+        self._data = {}
+        self._state = None
+
 
 @asynccontextmanager
 async def _fake_session_local():
@@ -116,3 +120,106 @@ class ClientBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.answer.assert_awaited()
         safe_edit.assert_awaited()
         self.assertEqual(state._state, h.ClientBooking.selecting_date)
+
+    async def test_back_to_calendar_resets_to_date_selection(self) -> None:
+        from src.handlers.client import booking as h
+
+        state = MemoryState()
+        await state.update_data(
+            client_day="2025-12-31",
+            booking_slots_utc=["2025-12-31T07:00:00+00:00"],
+            selected_slot_index=0,
+        )
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            message=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+
+        class _Calendar:
+            async def start_calendar(self, *, year=None, month=None):  # noqa: ANN001
+                return SimpleNamespace(year=year, month=month)
+
+        safe_edit = AsyncMock()
+        with (
+            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "safe_edit_text", safe_edit),
+        ):
+            await h.booking_back_to_calendar(callback=callback, state=state)
+
+        callback.answer.assert_awaited()
+        safe_edit.assert_awaited()
+        data = await state.get_data()
+        self.assertEqual(data["booking_slots_utc"], [])
+        self.assertIsNone(data["selected_slot_index"])
+        self.assertIsNone(data["client_day"])
+        self.assertEqual(state._state, h.ClientBooking.selecting_date)
+
+    async def test_back_to_slots_restores_slot_selection(self) -> None:
+        from src.handlers.client import booking as h
+        from src.schemas.enums import Timezone
+
+        state = MemoryState()
+        await state.update_data(
+            client_day="2025-12-31",
+            booking_slots_utc=["2025-12-31T07:00:00+00:00"],
+            selected_slot_index=0,
+            client_timezone=Timezone("Europe/Minsk"),
+        )
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            message=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+
+        safe_edit = AsyncMock()
+        with (
+            patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "safe_edit_text", safe_edit),
+        ):
+            await h.booking_back_to_slots(callback=callback, state=state)
+
+        callback.answer.assert_awaited()
+        safe_edit.assert_awaited()
+        data = await state.get_data()
+        self.assertIsNone(data["selected_slot_index"])
+        self.assertEqual(state._state, h.ClientBooking.selecting_slot)
+
+    async def test_cancel_does_not_send_chat_message(self) -> None:
+        from src.handlers.client import booking as h
+
+        state = MemoryState()
+        callback_message = SimpleNamespace(answer=AsyncMock())
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            message=callback_message,
+            bot=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+
+        with patch.object(h, "cleanup_messages", AsyncMock()):
+            await h.booking_cancel(callback=callback, state=state)
+
+        callback.answer.assert_awaited()
+        callback_message.answer.assert_not_awaited()
+
+    async def test_cancel_flow_does_not_send_chat_message(self) -> None:
+        from src.handlers.client import booking as h
+
+        state = MemoryState()
+        callback_message = SimpleNamespace(answer=AsyncMock())
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            message=callback_message,
+            bot=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+
+        with patch.object(h, "cleanup_messages", AsyncMock()):
+            await h.booking_cancel_flow(callback=callback, state=state)
+
+        callback.answer.assert_awaited()
+        callback_message.answer.assert_not_awaited()
