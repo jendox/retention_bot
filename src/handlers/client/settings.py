@@ -37,6 +37,8 @@ VIEW_EDIT_PROFILE = "edit_profile"
 
 _NAME_MAX_LEN = 64
 
+_GUIDE_PAGE_PREFIX = f"{SETTINGS_CB_PREFIX}guide:"
+
 
 class ClientSettingsStates(StatesGroup):
     edit_name = State()
@@ -67,6 +69,87 @@ def _kb_settings_edit_profile(*, notifications_enabled: bool) -> InlineKeyboardM
             [InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
+    )
+
+
+def _guide_pages() -> list[str]:
+    return [
+        (
+            "<b>📘 Краткое руководство</b>\n\n"
+            "<b>1) Как записаться</b>\n\n"
+            "Открой «➕ Записаться»:\n"
+            "• выбери мастера (если их несколько);\n"
+            "• выбери дату;\n"
+            "• выбери удобное время;\n"
+            "• подтверди запись.\n\n"
+            "Запись отправится мастеру на подтверждение."
+        ),
+        (
+            "<b>2) Мои записи</b>\n\n"
+            "В разделе «📋 Мои записи» можно:\n"
+            "• посмотреть ближайшие записи;\n"
+            "• отменить запись, если планы поменялись.\n\n"
+            "<b>Совет:</b> если не получается записаться — попробуй выбрать другую дату или время."
+        ),
+        (
+            "<b>3) Уведомления</b>\n\n"
+            "Если включены уведомления, бот может присылать сообщения о записи "
+            "(например, подтверждение/перенос/отмена и напоминания). "
+            "Отправка напоминаний о записи зависит от тарифного плана мастера.\n\n"
+            "Их можно включить/выключить в «⚙️ Настройки → ✏️ Редактировать профиль»."
+        ),
+        (
+            "<b>4) Профиль</b>\n\n"
+            "В «⚙️ Настройки → ✏️ Редактировать профиль» можно изменить:\n"
+            "• имя;\n"
+            "• телефон;\n"
+            "• таймзону.\n\n"
+            "Таймзона нужна, чтобы время записи показывалось правильно."
+        ),
+        (
+            "<b>5) Если что-то пошло не так</b>\n\n"
+            "Иногда свободное время может занять другой человек прямо перед подтверждением.\n"
+            "В таком случае просто выбери другое время.\n\n"
+            "Если меню «сломалось» или пропали кнопки — открой «➕ Записаться»/«⚙️ Настройки» заново.\n"
+            "Если пропали кнопки главного меню — очисти чат и затем нажми Старт, либо просто отправь в чат "
+            "команду /start."
+        ),
+    ]
+
+
+def _kb_guide(*, page: int, total: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{_GUIDE_PAGE_PREFIX}{page - 1}"))
+    if page < total - 1:
+        nav.append(InlineKeyboardButton(text="➡️ Далее", callback_data=f"{_GUIDE_PAGE_PREFIX}{page + 1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.append([InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")])
+    rows.append([InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_guide_page(callback: CallbackQuery, *, page: int) -> None:
+    pages = _guide_pages()
+    total = len(pages)
+    if total == 0:
+        await callback.answer()
+        return
+    if page < 0 or page >= total:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=pages[page],
+        reply_markup=_kb_guide(page=page, total=total),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_settings.edit_guide_failed",
     )
 
 
@@ -420,6 +503,9 @@ def _parse_action(data: str) -> tuple[str, str | None]:
     if suffix.startswith("set_tz:"):
         return "set_tz", suffix.split(":", 1)[1]
 
+    if suffix.startswith("guide:"):
+        return "guide_page", suffix.split(":", 1)[1]
+
     return "unknown", None
 
 
@@ -477,6 +563,7 @@ async def _settings_callbacks_impl(
         state=state,
         telegram_id=telegram_id,
         action=action,
+        arg=arg,
         user_ctx_storage=user_ctx_storage,
     )
 
@@ -517,6 +604,7 @@ async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
     state: FSMContext,
     telegram_id: int,
     action: str,
+    arg: str | None,
     user_ctx_storage: UserContextStorage,
 ) -> None:
     if action == "edit_profile":
@@ -529,8 +617,19 @@ async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
             reason="missing_main_ref_on_edit_profile",
         )
         return
+    if action == "guide_page":
+        await callback.answer()
+        try:
+            page = int(arg or "")
+        except Exception:  # noqa: BLE001
+            await callback.answer("Некорректная страница.", show_alert=True)
+            return
+        await _show_guide_page(callback, page=page)
+        return
     if action == "guide":
-        await callback.answer(txt.guide_coming_soon())
+        await callback.answer()
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_HUB})
+        await _show_guide_page(callback, page=0)
         return
     if action == "cancel_edit":
         await callback.answer()
