@@ -22,7 +22,7 @@ from src.schemas.enums import Timezone
 from src.texts import client_settings as txt, common as common_txt, personal_data as pd_txt
 from src.texts.buttons import btn_back, btn_close
 from src.user_context import ActiveRole, UserContextStorage
-from src.utils import cleanup_messages, format_phone_display, track_message, validate_phone
+from src.utils import cleanup_messages, format_phone_e164, track_message, validate_phone
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
@@ -243,7 +243,7 @@ async def _render_and_edit_main(
         message_id=message_id,
         text=_render(
             name=client.name,
-            phone=format_phone_display(str(getattr(client, "phone", ""))),
+            phone=format_phone_e164(str(getattr(client, "phone", ""))) or common_txt.placeholder_empty(),
             tz=client.timezone,
             notifications_enabled=notifications_enabled,
         ),
@@ -286,7 +286,7 @@ async def open_client_settings(
     settings_msg = await message.answer(
         text=_render(
             name=client.name,
-            phone=format_phone_display(str(getattr(client, "phone", ""))),
+            phone=format_phone_e164(str(getattr(client, "phone", ""))) or common_txt.placeholder_empty(),
             tz=client.timezone,
             notifications_enabled=notifications_enabled,
         ),

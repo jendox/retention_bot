@@ -22,7 +22,7 @@ from src.texts.client_booking import booking_limit_reached, choose_date
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
-from src.utils import format_phone_display, format_work_days_label, track_message
+from src.utils import format_phone_display, format_phone_e164, format_work_days_label, track_message
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
@@ -64,7 +64,7 @@ def _clamp_page(page: int, total_pages: int) -> int:
 
 def _master_line(master: dict) -> str:
     name = html_escape(str(master.get("name") or "Мастер"))
-    phone = format_phone_display(str(master.get("phone") or ""))
+    phone = format_phone_e164(str(master.get("phone") or ""))
     phone_safe = html_escape(phone) if phone else "—"
     return f"• <b>{name}</b> · {phone_safe}"
 
@@ -186,22 +186,22 @@ def _kb_master_card(*, master_id: int, master_tg: int, page: int, chunk: int) ->
 
 def _render_master_card(master: dict) -> str:
     name = html_escape(str(master.get("name") or "Мастер"))
-    phone = format_phone_display(str(master.get("phone") or ""))
+    phone = format_phone_e164(str(master.get("phone") or ""))
     phone_safe = html_escape(phone) if phone else "—"
 
-    days = format_work_days_label(list(master.get("work_days") or []))
+    days = format_work_days_label(list(master.get("work_days") or [])).strip()
+    days_display = days if days else "—"
+
     start_time = str(master.get("start_time") or "").strip()
     end_time = str(master.get("end_time") or "").strip()
-    work_time = f"{days}, {start_time}–{end_time}".strip(", ").strip()
+    time_display = f"{start_time}–{end_time}".strip("–").strip() if (start_time and end_time) else "—"
 
-    lines = [
-        f"<b>{name}</b>",
-        "",
-        f"📞 {phone_safe}",
-    ]
-    if work_time:
-        lines.extend(["", f"⏰ Рабочее время: {html_escape(work_time)}"])
-    return "\n".join(lines).strip()
+    return (
+        f"<b>{name}</b>\n\n"
+        f"📞 {phone_safe}\n\n"
+        f"📆 Рабочие дни: {html_escape(days_display)}\n"
+        f"🕒 Время работы: {html_escape(time_display)}"
+    )
 
 
 async def _load_masters(telegram_id: int) -> list[dict] | None:

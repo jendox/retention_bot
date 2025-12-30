@@ -29,6 +29,7 @@ from src.utils import (
     answer_tracked,
     cleanup_messages,
     format_phone_display,
+    format_phone_e164,
     track_message,
     validate_phone,
 )
@@ -65,7 +66,7 @@ def _kb_results(clients: list[dict]) -> InlineKeyboardMarkup:
         label = raw.get("name") or common_txt.label_default_client()
         phone = raw.get("phone")
         if phone:
-            label += f" ({phone})"
+            label += f" ({format_phone_display(str(phone))})"
         if raw.get("telegram_id") is None:
             label += common_txt.label_offline_badge()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:edit_client:pick:{raw['id']}")])
@@ -288,7 +289,7 @@ async def _client_view_payload(
     last_visit_day = to_zone(last_visit_at, master.timezone).date() if last_visit_at is not None else None
 
     name_safe = common_txt.label_default_client() if not getattr(client, "name", None) else str(client.name)
-    phone_display = format_phone_display(str(client.phone)) if getattr(client, "phone", None) else None
+    phone_display = format_phone_e164(str(client.phone)) if getattr(client, "phone", None) else None
 
     text = render_client_view(
         name=name_safe,

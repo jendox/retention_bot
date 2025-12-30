@@ -40,7 +40,14 @@ from src.use_cases.create_master_booking import (
 )
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
-from src.utils import answer_tracked, cleanup_messages, track_callback_message, track_message, untrack_message_id
+from src.utils import (
+    answer_tracked,
+    cleanup_messages,
+    format_phone_display,
+    track_callback_message,
+    track_message,
+    untrack_message_id,
+)
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
@@ -85,7 +92,7 @@ def _build_clients_keyboard(clients: list) -> InlineKeyboardMarkup:
     for client in clients[:10]:
         label = client.name
         if client.phone:
-            label += f" ({client.phone})"
+            label += f" ({format_phone_display(str(client.phone))})"
         if client.telegram_id is None:
             label += txt.label_offline()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{client.id}")])
@@ -100,7 +107,7 @@ def _build_clients_keyboard_from_state(clients: list[dict]) -> InlineKeyboardMar
         phone = str(raw.get("phone") or "").strip()
         label = name or common_txt.label_default_client()
         if phone:
-            label += f" ({phone})"
+            label += f" ({format_phone_display(phone)})"
         if raw.get("telegram_id") is None:
             label += txt.label_offline()
         rows.append([InlineKeyboardButton(text=label, callback_data=f"m:add_booking:client:{int(raw['id'])}")])

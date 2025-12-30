@@ -247,6 +247,20 @@ def format_phone_display(value: str, region: str = "BY") -> str:
         return value
 
 
+def format_phone_e164(value: str, region: str = "BY") -> str:
+    """
+    Convert a parseable phone string to E.164 (clickable in Telegram).
+    Falls back to the input on parse/format errors.
+    """
+    try:
+        number = phonenumbers.parse(value, region)
+        if not phonenumbers.is_valid_number(number):
+            return value
+        return phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)
+    except (NumberParseException, ValueError):
+        return value
+
+
 def styled_text(text: str, color: str = None, bold: bool = False, italic: bool = False) -> str:
     """Форматирование текста с разными стилями"""
     styles = []
