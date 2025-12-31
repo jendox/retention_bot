@@ -26,6 +26,8 @@ class CreateMasterClientInviteOutcome(StrEnum):
 class CreateMasterClientInviteResult:
     outcome: CreateMasterClientInviteOutcome
 
+    master_id: int | None = None
+    invite_id: int | None = None
     invite_link: str | None = None
     master_name: str | None = None
 
@@ -69,6 +71,7 @@ class CreateMasterClientInvite:
             )
             return CreateMasterClientInviteResult(
                 outcome=CreateMasterClientInviteOutcome.QUOTA_EXCEEDED,
+                master_id=int(master.id),
                 plan=plan,
                 usage=usage,
                 clients_limit=clients_limit,
@@ -86,9 +89,13 @@ class CreateMasterClientInvite:
         ev.info(
             "invite_client.created",
             master_id=master.id,
+            invite_id=invite.id,
+            invite_type=str(invite.type.value),
         )
         return CreateMasterClientInviteResult(
             outcome=CreateMasterClientInviteOutcome.OK,
+            master_id=int(master.id),
+            invite_id=int(invite.id) if invite.id is not None else None,
             invite_link=link,
             master_name=master.name,
             plan=plan,

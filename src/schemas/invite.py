@@ -12,6 +12,7 @@ LINK_EXPIRE_MINUTES = 1440  # 24 hours
 
 
 class Invite(BaseModel):
+    id: int | None = Field(default=None)
     token: str | None = Field(default=None)
     type: InviteType
     max_uses: int | None = Field(default=1)
@@ -49,7 +50,7 @@ class Invite(BaseModel):
     def to_db_entity(self):
         from src.models import Invite as InviteEntity
 
-        return InviteEntity(**self.model_dump(exclude={"used_count"}))
+        return InviteEntity(**self.model_dump(exclude={"id", "used_count"}))
 
     def is_invite_valid(self) -> bool:
         if self.max_uses is not None and self.used_count >= self.max_uses:

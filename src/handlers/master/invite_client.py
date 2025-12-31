@@ -240,9 +240,15 @@ async def start_invite_client(
 
     assert result.invite_link is not None
     assert result.master_name is not None
-    ev.info("master_invite_client.invite_created")
+    ev.info(
+        "master_invite_client.invite_created",
+        master_id=result.master_id,
+        invite_id=result.invite_id,
+    )
 
     await state.update_data(
+        master_id=result.master_id,
+        invite_id=result.invite_id,
         invite_link=result.invite_link,
         master_name=result.master_name,
     )
@@ -286,6 +292,8 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
     data = await state.get_data()
     invite_link: str | None = data.get("invite_link")
     master_name: str | None = data.get("master_name")
+    invite_id: int | None = data.get("invite_id")
+    master_id: int | None = data.get("master_id")
 
     if not invite_link or not master_name:
         ev.warning("master_invite_client.state_invalid", reason="missing_invite_data")
@@ -308,4 +316,10 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
     else:
         await callback.bot.send_message(chat_id=callback.from_user.id, text=text, parse_mode="HTML")
     ev.info("master_invite_client.format_chosen", kind=str(kind.value))
+    ev.info(
+        "invite_link_shared",
+        master_id=master_id,
+        invite_id=invite_id,
+        kind=str(kind.value),
+    )
     await _reset_invite_flow(state, callback.bot)

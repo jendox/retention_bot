@@ -476,6 +476,14 @@ class AcceptClientInvite:
             resolved=state.resolved,
         )
 
+        if result.ok and (not state.quota.already_attached):
+            ev.info(
+                "client_added",
+                master_id=state.master_id,
+                client_id=result.client_id,
+                offline=False,
+            )
+
         warn = await self._should_warn_clients_limit(state.master_id)
         usage = await self._entitlements.get_usage(master_id=state.master_id) if warn else None
         final = replace(result, warn_master_clients_near_limit=warn, usage=usage)

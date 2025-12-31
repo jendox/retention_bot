@@ -273,6 +273,12 @@ class CreateClientBooking:
             if first_booking and (await self._subs_repo.get_by_master_id(int(master.id)) is None):
                 trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
                 await self._subs_repo.upsert_trial(int(master.id), trial_until)
+                ev.info(
+                    "trial_started",
+                    master_id=int(master.id),
+                    trial_until=trial_until,
+                    reason="first_booking",
+                )
 
         if not result.ok:
             ev.info(

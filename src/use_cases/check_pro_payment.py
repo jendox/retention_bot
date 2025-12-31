@@ -246,6 +246,19 @@ class CheckProPayment:
             status=str(updated.status.value),
             granted_pro=bool(granted_pro),
         )
+        if granted_pro:
+            ev.info(
+                "payment_success",
+                master_id=master.id,
+                invoice_id=updated.id,
+                invoice_no=updated.invoice_no,
+                paid_until=paid_until,
+            )
+            ev.info(
+                "subscription_renewed",
+                master_id=master.id,
+                paid_until=paid_until,
+            )
 
         return CheckProPaymentResult(
             ok=True,

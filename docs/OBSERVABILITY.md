@@ -15,6 +15,26 @@ For product/ops analytics we log stable domain-level events (rather than UI-spec
 - For rejected attempts, include a short `error` reason code (limits/validation/conflicts/forbidden/etc).
 - Avoid PII in fields (no phone numbers, tokens, invite secrets).
 
+### Minimal recommended analytics events
+
+If you don’t have full analytics yet, start by collecting these events (in JSON logs).
+
+- `master_registration.completed` (master registered / profile completed)
+- `master_settings.work_days_updated` / `master_settings.work_time_updated` (working hours set/updated)
+- `master_settings.slot_size_updated` (slot duration set/updated)
+- `client_added` (`offline=true/false`)
+- `invite_client.created` (invite link created)
+- `invite_link_shared` (invite link shown to master in a chosen format)
+- `invite.accepted` (client connected via invite; see fields `invite_consumed`, `invite_burned_noop`)
+- `booking.created` (with `actor`), and legacy `booking.created_by_master` / `booking.created_by_client`
+- `booking.reviewed` / `booking.cancelled` / `booking.rescheduled` (booking status changed)
+- `booking.attendance_marked` (ATTENDED/NO_SHOW)
+- `pro_features_toggled` (`master.notify_clients`, `client.notifications_enabled`, etc.)
+- `trial_started`
+- `billing.pro_invoice_created` / `billing.pro_renewal_invoice_created`
+- `billing.pro_payment_checked` + `payment_success`
+- `subscription_renewed`
+
 ### Registration / PD consent
 
 - `master_reg.*` and `client_reg.*`

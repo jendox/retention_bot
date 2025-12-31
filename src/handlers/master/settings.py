@@ -844,6 +844,13 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_clients=new_value))
 
+        ev.info(
+            "pro_features_toggled",
+            actor="master",
+            master_id=int(master.id),
+            feature="master.notify_clients",
+            enabled=bool(new_value),
+        )
         await callback.answer(common_txt.saved())
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
@@ -859,6 +866,13 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_attendance=new_value))
 
+        ev.info(
+            "pro_features_toggled",
+            actor="master",
+            master_id=int(master.id),
+            feature="master.notify_attendance",
+            enabled=bool(new_value),
+        )
         await callback.answer(common_txt.saved())
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
         return
@@ -1017,7 +1031,7 @@ async def save_work_days(message: Message, state: FSMContext) -> None:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(work_days=days))
-    ev.info("master_settings.work_days_updated", days_count=len(days))
+    ev.info("master_settings.work_days_updated", master_id=int(master.id), days_count=len(days))
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
@@ -1041,7 +1055,7 @@ async def save_work_time(message: Message, state: FSMContext) -> None:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(start_time=start_time, end_time=end_time))
-    ev.info("master_settings.work_time_updated")
+    ev.info("master_settings.work_time_updated", master_id=int(master.id))
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)
@@ -1064,7 +1078,7 @@ async def save_slot_size(message: Message, state: FSMContext) -> None:
         master_repo = MasterRepository(session)
         master = await master_repo.get_by_telegram_id(telegram_id)
         await master_repo.update_by_id(master.id, MasterUpdate(slot_size_min=slot_size))
-    ev.info("master_settings.slot_size_updated", slot_size_min=int(slot_size))
+    ev.info("master_settings.slot_size_updated", master_id=int(master.id), slot_size_min=int(slot_size))
     await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
     await state.set_state(None)
     updated = await _refresh_settings_message(state=state, bot=message.bot, telegram_id=telegram_id)

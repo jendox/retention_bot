@@ -393,7 +393,14 @@ async def _handle_toggle_notify(
         repo = ClientRepository(session)
         await repo.update_by_id(client_id, ClientUpdate(notifications_enabled=new_value))
 
-    ev.info("client_settings.notifications_toggled", enabled=bool(new_value))
+    ev.info("client_settings.notifications_toggled", client_id=int(client_id), enabled=bool(new_value))
+    ev.info(
+        "pro_features_toggled",
+        actor="client",
+        client_id=int(client_id),
+        feature="client.notifications_enabled",
+        enabled=bool(new_value),
+    )
     await callback.answer(common_txt.saved())
     await _edit_main_or_context_lost(
         callback,

@@ -208,9 +208,10 @@ class CreateClientOffline:
         warn, usage = await self._near_limit_warning(master_id=master_id)
 
         ev.info(
-            "client.offline_created",
+            "client_added",
             master_id=master_id,
             client_id=client.id,
+            offline=True,
         )
         return CreateClientOfflineCreateResult(
             ok=True,
