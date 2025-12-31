@@ -5,12 +5,19 @@ from html import escape as html_escape
 
 from aiogram.types import InlineKeyboardMarkup
 
-from src.notifications.context import BookingContext, LimitsContext, OnboardingContext, ReminderContext
+from src.notifications.context import (
+    BookingContext,
+    LimitsContext,
+    OnboardingContext,
+    ReminderContext,
+    SubscriptionContext,
+)
 from src.notifications.templates import (
     render_booking_template,
     render_limits_template,
     render_onboarding_template,
     render_reminder_template,
+    render_subscription_template,
 )
 from src.notifications.types import NotificationEvent, RecipientKind
 
@@ -27,8 +34,8 @@ def _e(value: str | None) -> str:
 
 
 def _escape_context(
-    context: BookingContext | LimitsContext | ReminderContext | OnboardingContext,
-) -> BookingContext | LimitsContext | ReminderContext | OnboardingContext:
+    context: BookingContext | LimitsContext | ReminderContext | OnboardingContext | SubscriptionContext,
+) -> BookingContext | LimitsContext | ReminderContext | OnboardingContext | SubscriptionContext:
     if isinstance(context, BookingContext):
         return replace(
             context,
@@ -47,6 +54,13 @@ def _escape_context(
             context,
             master_name=_e(context.master_name),
         )
+    if isinstance(context, SubscriptionContext):
+        return replace(
+            context,
+            master_name=_e(context.master_name),
+            plan=_e(context.plan),
+            ends_on=_e(context.ends_on),
+        )
     return context
 
 
@@ -54,7 +68,7 @@ def render(
     *,
     event: NotificationEvent,
     recipient: RecipientKind,
-    context: BookingContext | LimitsContext | ReminderContext | OnboardingContext,
+    context: BookingContext | LimitsContext | ReminderContext | OnboardingContext | SubscriptionContext,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> RenderedMessage:
     safe_context = _escape_context(context)
@@ -66,6 +80,8 @@ def render(
         text = render_reminder_template(event=event, recipient=recipient, context=safe_context)
     elif isinstance(safe_context, OnboardingContext):
         text = render_onboarding_template(event=event, recipient=recipient, context=safe_context)
+    elif isinstance(safe_context, SubscriptionContext):
+        text = render_subscription_template(event=event, recipient=recipient, context=safe_context)
     else:
         text = ""
     return RenderedMessage(text=text, parse_mode="HTML", reply_markup=reply_markup)

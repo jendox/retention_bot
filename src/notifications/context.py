@@ -30,3 +30,11 @@ class ReminderContext:
 @dataclass(frozen=True)
 class OnboardingContext:
     master_name: str
+
+
+@dataclass(frozen=True)
+class SubscriptionContext:
+    master_name: str
+    plan: str  # "trial" | "pro"
+    ends_on: str  # DD.MM.YYYY in master's timezone
+    days_left: int

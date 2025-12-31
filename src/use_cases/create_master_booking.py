@@ -7,6 +7,7 @@ from enum import StrEnum
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.datetime_utils import end_of_day_utc, to_zone
 from src.observability.audit_log import write_audit_log
 from src.observability.events import EventLogger
 from src.plans import TRIAL_DAYS
@@ -295,8 +296,18 @@ class CreateMasterBooking:
 
             await self._outbox.cancel_onboarding_for_master(master_id=int(master.id))
             if first_booking and (await self._subs_repo.get_by_master_id(int(master.id)) is None):
-                trial_until = datetime.now(UTC) + timedelta(days=TRIAL_DAYS)
+                now_utc = datetime.now(UTC)
+                local_now = to_zone(now_utc, master.timezone)
+                end_day = local_now.date() + timedelta(days=TRIAL_DAYS - 1)
+                trial_until = end_of_day_utc(day=end_day, tz=master.timezone)
                 await self._subs_repo.upsert_trial(int(master.id), trial_until)
+                await self._outbox.schedule_trial_expiry_reminders(
+                    master_id=int(master.id),
+                    master_telegram_id=int(master.telegram_id),
+                    master_timezone=str(master.timezone.value),
+                    trial_until_utc=trial_until,
+                    now_utc=now_utc,
+                )
                 ev.info(
                     "trial_started",
                     master_id=int(master.id),

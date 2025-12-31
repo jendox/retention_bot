@@ -81,12 +81,13 @@ class EntitlementsService:
         trial_active = bool(sub.trial_until and sub.trial_until > now_utc)
         paid_active = bool(sub.paid_until and sub.paid_until > now_utc)
         plan_is_pro = sub.plan == SubscriptionPlan.PRO
+        lifetime_pro = plan_is_pro and sub.paid_until is None and sub.trial_until is None
 
         if paid_active:
             return PlanInfo(plan=sub.plan, is_pro=True, source="paid", active_until=sub.paid_until)
         if trial_active:
             return PlanInfo(plan=sub.plan, is_pro=True, source="trial", active_until=sub.trial_until)
-        if plan_is_pro:
+        if lifetime_pro:
             return PlanInfo(plan=sub.plan, is_pro=True, source="pro", active_until=None)
 
         return PlanInfo(plan=sub.plan, is_pro=False, source="free", active_until=None)

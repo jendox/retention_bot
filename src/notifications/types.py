@@ -35,3 +35,12 @@ class NotificationEvent(StrEnum):
 
     MASTER_ONBOARDING_ADD_FIRST_CLIENT = "master_onboarding_add_first_client"
     MASTER_ONBOARDING_ADD_FIRST_BOOKING = "master_onboarding_add_first_booking"
+
+    TRIAL_EXPIRING_D3 = "trial_expiring_d3"
+    TRIAL_EXPIRING_D1 = "trial_expiring_d1"
+    TRIAL_EXPIRING_D0 = "trial_expiring_d0"
+
+    PRO_EXPIRING_D5 = "pro_expiring_d5"
+    PRO_EXPIRING_D2 = "pro_expiring_d2"
+    PRO_EXPIRING_D0 = "pro_expiring_d0"
+    PRO_EXPIRED_RECOVERY_D1 = "pro_expired_recovery_d1"

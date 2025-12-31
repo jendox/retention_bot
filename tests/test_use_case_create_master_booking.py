@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from sqlalchemy.exc import IntegrityError
 
+from src.schemas.enums import Timezone
 from src.use_cases.create_master_booking import (
     CreateMasterBooking,
     CreateMasterBookingError,
@@ -25,7 +26,14 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_by_id(self, master_id: int):
-                return SimpleNamespace(id=master_id, slot_size_min=60, notify_clients=True, name="M")
+                return SimpleNamespace(
+                    id=master_id,
+                    telegram_id=111,
+                    timezone=Timezone.EUROPE_MINSK,
+                    slot_size_min=60,
+                    notify_clients=True,
+                    name="M",
+                )
 
             async def is_client_attached(self, *, master_id: int, client_id: int) -> bool:
                 return True
@@ -56,7 +64,10 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         now = datetime.now(UTC) + timedelta(days=1)
         subs_repo = SimpleNamespace(get_by_master_id=AsyncMock(return_value=None), upsert_trial=AsyncMock())
-        outbox_repo = SimpleNamespace(cancel_onboarding_for_master=AsyncMock(return_value=0))
+        outbox_repo = SimpleNamespace(
+            cancel_onboarding_for_master=AsyncMock(return_value=0),
+            schedule_trial_expiry_reminders=AsyncMock(return_value=0),
+        )
         with (
             mock.patch.object(uc, "MasterRepository", _MasterRepo),
             mock.patch.object(uc, "ClientRepository", _ClientRepo),
@@ -81,7 +92,14 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_by_id(self, master_id: int):
-                return SimpleNamespace(id=master_id, slot_size_min=60, notify_clients=True, name="M")
+                return SimpleNamespace(
+                    id=master_id,
+                    telegram_id=111,
+                    timezone=Timezone.EUROPE_MINSK,
+                    slot_size_min=60,
+                    notify_clients=True,
+                    name="M",
+                )
 
             async def is_client_attached(self, *, master_id: int, client_id: int) -> bool:
                 return True
@@ -115,7 +133,10 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         now = datetime.now(UTC) + timedelta(days=1)
         subs_repo = SimpleNamespace(get_by_master_id=AsyncMock(return_value=None), upsert_trial=AsyncMock())
-        outbox_repo = SimpleNamespace(cancel_onboarding_for_master=AsyncMock(return_value=0))
+        outbox_repo = SimpleNamespace(
+            cancel_onboarding_for_master=AsyncMock(return_value=0),
+            schedule_trial_expiry_reminders=AsyncMock(return_value=0),
+        )
         with (
             mock.patch.object(uc, "MasterRepository", _MasterRepo),
             mock.patch.object(uc, "ClientRepository", _ClientRepo),
@@ -139,7 +160,14 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_by_id(self, master_id: int):
-                return SimpleNamespace(id=master_id, slot_size_min=60, notify_clients=True, name="M")
+                return SimpleNamespace(
+                    id=master_id,
+                    telegram_id=111,
+                    timezone=Timezone.EUROPE_MINSK,
+                    slot_size_min=60,
+                    notify_clients=True,
+                    name="M",
+                )
 
             async def is_client_attached(self, *, master_id: int, client_id: int) -> bool:
                 return True
@@ -172,7 +200,10 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 return SimpleNamespace(is_pro=False)
 
         subs_repo = SimpleNamespace(get_by_master_id=AsyncMock(return_value=None), upsert_trial=AsyncMock())
-        outbox_repo = SimpleNamespace(cancel_onboarding_for_master=AsyncMock(return_value=2))
+        outbox_repo = SimpleNamespace(
+            cancel_onboarding_for_master=AsyncMock(return_value=2),
+            schedule_trial_expiry_reminders=AsyncMock(return_value=0),
+        )
 
         now = datetime.now(UTC) + timedelta(days=1)
         with (
@@ -189,3 +220,4 @@ class CreateMasterBookingUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ok)
         subs_repo.upsert_trial.assert_awaited()
+        outbox_repo.schedule_trial_expiry_reminders.assert_awaited()

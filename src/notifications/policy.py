@@ -87,6 +87,13 @@ class DefaultNotificationPolicy:
         NotificationEvent.MASTER_ATTENDANCE_NUDGE,
         NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_CLIENT,
         NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING,
+        NotificationEvent.TRIAL_EXPIRING_D3,
+        NotificationEvent.TRIAL_EXPIRING_D1,
+        NotificationEvent.TRIAL_EXPIRING_D0,
+        NotificationEvent.PRO_EXPIRING_D5,
+        NotificationEvent.PRO_EXPIRING_D2,
+        NotificationEvent.PRO_EXPIRING_D0,
+        NotificationEvent.PRO_EXPIRED_RECOVERY_D1,
     }
 
     MASTER_FREE_ONLY_EVENTS: set[NotificationEvent] = {

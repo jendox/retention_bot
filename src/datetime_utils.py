@@ -36,3 +36,21 @@ def utc_range_for_master_day(*, master_day: date, master_tz: Timezone) -> UtcRan
 
 def to_zone(dt_utc: datetime, tz: Timezone) -> datetime:
     return dt_utc.astimezone(ZoneInfo(str(tz.value)))
+
+
+def end_of_day_utc(*, day: date, tz: Timezone) -> datetime:
+    """
+    Returns end-of-day timestamp (23:59:59.999999) for the given local day in the provided timezone, converted to UTC.
+    """
+    zone = ZoneInfo(str(tz.value))
+    local_end = datetime.combine(day, time(23, 59, 59, 999999), tzinfo=zone)
+    return local_end.astimezone(UTC)
+
+
+def morning_utc(*, day: date, tz: Timezone, hour: int = 11, minute: int = 0) -> datetime:
+    """
+    Returns local morning time for the given day in the provided timezone, converted to UTC.
+    """
+    zone = ZoneInfo(str(tz.value))
+    local_dt = datetime.combine(day, time(hour, minute), tzinfo=zone)
+    return local_dt.astimezone(UTC)

@@ -255,6 +255,197 @@ class ScheduledNotificationRepository(BaseRepository):
         await self._session.flush()
         return int(result.rowcount or 0)
 
+    async def upsert_subscription_reminders(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        master_timezone: str,
+        now_utc: datetime,
+        items: list[tuple[str, datetime, int]],
+        dedup_prefix: str,
+    ) -> int:
+        """
+        Upsert subscription reminder jobs.
+
+        `items`: list of (event, due_at_utc, sequence)
+        """
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+
+        to_insert: list[dict[str, object]] = []
+        for event, due_at, sequence in items:
+            key = f"beautydesk:outbox:{dedup_prefix}:{int(master_id)}:{int(sequence)}"
+            to_insert.append(
+                {
+                    "event": str(event),
+                    "recipient": "master",
+                    "chat_id": int(master_telegram_id),
+                    "master_id": int(master_id),
+                    "client_id": None,
+                    "booking_id": None,
+                    "booking_start_at": None,
+                    "status": ScheduledNotificationStatus.PENDING.value,
+                    "due_at": due_at,
+                    "sequence": int(sequence),
+                    "dedup_key": key,
+                    "locked_at": None,
+                    "attempts": 0,
+                    "last_error": None,
+                    "sent_at": None,
+                    "created_at": now_utc,
+                    "updated_at": now_utc,
+                },
+            )
+
+        ins = pg_insert(ScheduledNotificationEntity).values(to_insert)
+        stmt = ins.on_conflict_do_update(
+            index_elements=["dedup_key"],
+            set_={
+                "event": ins.excluded.event,
+                "recipient": ins.excluded.recipient,
+                "chat_id": ins.excluded.chat_id,
+                "master_id": ins.excluded.master_id,
+                "status": ScheduledNotificationStatus.PENDING.value,
+                "due_at": ins.excluded.due_at,
+                "sequence": ins.excluded.sequence,
+                "locked_at": None,
+                "attempts": 0,
+                "last_error": None,
+                "sent_at": None,
+                "updated_at": now_utc,
+            },
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def schedule_trial_expiry_reminders(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        master_timezone: str,
+        trial_until_utc: datetime,
+        now_utc: datetime,
+    ) -> int:
+        if trial_until_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware trial_until_utc.")
+        master_tz = get_timezone(str(master_timezone))
+        expiry_day = trial_until_utc.astimezone(master_tz).date()
+
+        def at_morning_utc(day):
+            local = shift_out_of_quiet_hours(datetime.combine(day, time(11, 0), tzinfo=master_tz))
+            return local.astimezone(UTC)
+
+        items = [
+            ("trial_expiring_d3", at_morning_utc(expiry_day - timedelta(days=3)), 1),
+            ("trial_expiring_d1", at_morning_utc(expiry_day - timedelta(days=1)), 2),
+            ("trial_expiring_d0", at_morning_utc(expiry_day), 3),
+        ]
+        return await self.upsert_subscription_reminders(
+            master_id=master_id,
+            master_telegram_id=master_telegram_id,
+            master_timezone=master_timezone,
+            now_utc=now_utc,
+            items=items,
+            dedup_prefix="sub:trial",
+        )
+
+    async def schedule_pro_expiry_reminders(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        master_timezone: str,
+        paid_until_utc: datetime,
+        now_utc: datetime,
+    ) -> int:
+        if paid_until_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware paid_until_utc.")
+        master_tz = get_timezone(str(master_timezone))
+        expiry_day = paid_until_utc.astimezone(master_tz).date()
+
+        def at_morning_utc(day):
+            local = shift_out_of_quiet_hours(datetime.combine(day, time(11, 0), tzinfo=master_tz))
+            return local.astimezone(UTC)
+
+        items = [
+            ("pro_expiring_d5", at_morning_utc(expiry_day - timedelta(days=5)), 1),
+            ("pro_expiring_d2", at_morning_utc(expiry_day - timedelta(days=2)), 2),
+            ("pro_expiring_d0", at_morning_utc(expiry_day), 3),
+            ("pro_expired_recovery_d1", at_morning_utc(expiry_day + timedelta(days=1)), 4),
+        ]
+        return await self.upsert_subscription_reminders(
+            master_id=master_id,
+            master_telegram_id=master_telegram_id,
+            master_timezone=master_timezone,
+            now_utc=now_utc,
+            items=items,
+            dedup_prefix="sub:pro",
+        )
+
+    async def schedule_subscription_expiry_reminders(self, *, now_utc: datetime, lookahead: timedelta) -> int:
+        """
+        Best-effort scheduler for subscription expiry reminders.
+
+        This is meant to keep reminders in sync even if the bot was down at the time
+        of trial/pro start (or after deploying new reminder rules).
+        """
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+
+        inserted = 0
+        horizon_trial = now_utc + lookahead + timedelta(days=3)
+        horizon_pro = now_utc + lookahead + timedelta(days=5)
+        pro_recent_cutoff = now_utc - timedelta(days=2)
+
+        trial_stmt = (
+            select(MasterEntity.id, MasterEntity.telegram_id, MasterEntity.timezone, SubscriptionEntity.trial_until)
+            .join(SubscriptionEntity, SubscriptionEntity.master_id == MasterEntity.id)
+            .where(
+                SubscriptionEntity.trial_until.is_not(None),
+                SubscriptionEntity.trial_until > now_utc,
+                SubscriptionEntity.trial_until <= horizon_trial,
+                # If a paid period is active, trial-expiry reminders are irrelevant.
+                or_(SubscriptionEntity.paid_until.is_(None), SubscriptionEntity.paid_until <= now_utc),
+            )
+        )
+        trial_rows = (await self._session.execute(trial_stmt)).all()
+        for master_id, telegram_id, tz, trial_until in trial_rows:
+            if trial_until is None:
+                continue
+            inserted += await self.schedule_trial_expiry_reminders(
+                master_id=int(master_id),
+                master_telegram_id=int(telegram_id),
+                master_timezone=str(tz.value),
+                trial_until_utc=trial_until,
+                now_utc=now_utc,
+            )
+
+        pro_stmt = (
+            select(MasterEntity.id, MasterEntity.telegram_id, MasterEntity.timezone, SubscriptionEntity.paid_until)
+            .join(SubscriptionEntity, SubscriptionEntity.master_id == MasterEntity.id)
+            .where(
+                SubscriptionEntity.paid_until.is_not(None),
+                SubscriptionEntity.paid_until >= pro_recent_cutoff,
+                SubscriptionEntity.paid_until <= horizon_pro,
+            )
+        )
+        pro_rows = (await self._session.execute(pro_stmt)).all()
+        for master_id, telegram_id, tz, paid_until in pro_rows:
+            if paid_until is None:
+                continue
+            inserted += await self.schedule_pro_expiry_reminders(
+                master_id=int(master_id),
+                master_telegram_id=int(telegram_id),
+                master_timezone=str(tz.value),
+                paid_until_utc=paid_until,
+                now_utc=now_utc,
+            )
+
+        return inserted
+
     async def schedule_client_booking_reminders(
         self,
         *,
@@ -270,9 +461,16 @@ class ScheduledNotificationRepository(BaseRepository):
 
         end_at = now_utc + lookahead
         pro_active = or_(
-            SubscriptionEntity.plan == SubscriptionPlan.PRO,
-            SubscriptionEntity.trial_until > now_utc,
+            # active paid access
             SubscriptionEntity.paid_until > now_utc,
+            # active trial access
+            SubscriptionEntity.trial_until > now_utc,
+            # lifetime Pro (plan==PRO and no expiry timestamps)
+            (
+                (SubscriptionEntity.plan == SubscriptionPlan.PRO)
+                & (SubscriptionEntity.paid_until.is_(None))
+                & (SubscriptionEntity.trial_until.is_(None))
+            ),
         )
 
         inserted = 0
@@ -368,9 +566,13 @@ class ScheduledNotificationRepository(BaseRepository):
             raise ValueError("Expected tz-aware datetime in UTC.")
 
         pro_active = or_(
-            SubscriptionEntity.plan == SubscriptionPlan.PRO,
             SubscriptionEntity.trial_until > now_utc,
             SubscriptionEntity.paid_until > now_utc,
+            (
+                (SubscriptionEntity.plan == SubscriptionPlan.PRO)
+                & (SubscriptionEntity.paid_until.is_(None))
+                & (SubscriptionEntity.trial_until.is_(None))
+            ),
         )
         end_at_expr = BookingEntity.start_at + (BookingEntity.duration_min * text("INTERVAL '1 minute'"))
         start_cutoff = now_utc - lookback

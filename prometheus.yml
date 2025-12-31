@@ -1,0 +1,19 @@
+global:
+    scrape_interval: 15s
+
+scrape_configs:
+  - job_name: retention_bot_reminders
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["reminders:8000"]
+
+  - job_name: retention_bot_payments
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["payments:8000"]
+
+  # Если включишь bot контейнер в compose:
+  # - job_name: retention_bot_bot
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ["bot:8000"]

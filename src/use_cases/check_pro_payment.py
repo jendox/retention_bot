@@ -6,6 +6,7 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.datetime_utils import end_of_day_utc, to_zone
 from src.integrations.expresspay import ExpressPayClient, InvoiceStatus
 from src.integrations.expresspay.exceptions import ExpressPayApiError, ExpressPayError
 from src.observability.audit_log import write_audit_log
@@ -17,6 +18,7 @@ from src.repositories import (
     PaymentInvoiceRepository,
     SubscriptionRepository,
 )
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.payment_invoice import PaymentInvoice, PaymentInvoiceStatus, PaymentInvoiceUpdate
 
 ev = EventLogger(__name__)
@@ -77,6 +79,7 @@ class CheckProPayment:
     async def _apply_provider_status(
         self,
         *,
+        master,
         master_id: int,
         provider_status: InvoiceStatus,
         now_utc: datetime,
@@ -84,16 +87,18 @@ class CheckProPayment:
         subscription,
     ) -> tuple[PaymentInvoiceUpdate, bool, datetime | None]:
         if provider_status in {InvoiceStatus.PAID, InvoiceStatus.PAID_BY_CARD}:
-            base_until = now_utc
+            local_now = to_zone(now_utc, master.timezone)
+            base_end_day = local_now.date() - timedelta(days=1)
             if subscription is not None:
                 paid_until_current = getattr(subscription, "paid_until", None)
                 trial_until_current = getattr(subscription, "trial_until", None)
-                if paid_until_current is not None and paid_until_current > base_until:
-                    base_until = paid_until_current
-                if trial_until_current is not None and trial_until_current > base_until:
-                    base_until = trial_until_current
+                if paid_until_current is not None and paid_until_current > now_utc:
+                    base_end_day = max(base_end_day, to_zone(paid_until_current, master.timezone).date())
+                if trial_until_current is not None and trial_until_current > now_utc:
+                    base_end_day = max(base_end_day, to_zone(trial_until_current, master.timezone).date())
 
-            paid_until = base_until + timedelta(days=int(request.pro_days))
+            paid_end_day = base_end_day + timedelta(days=int(request.pro_days))
+            paid_until = end_of_day_utc(day=paid_end_day, tz=master.timezone)
             await self._subs.grant_pro(master_id, paid_until=paid_until)
             return (
                 PaymentInvoiceUpdate(
@@ -137,7 +142,7 @@ class CheckProPayment:
             None,
         )
 
-    async def execute(self, request: CheckProPaymentRequest) -> CheckProPaymentResult:  # noqa: C901, PLR0911
+    async def execute(self, request: CheckProPaymentRequest) -> CheckProPaymentResult:  # noqa: C901, PLR0911, PLR0912
         invalid = self._validate(request)
         if invalid is not None:
             return invalid
@@ -228,6 +233,7 @@ class CheckProPayment:
                 )
 
         patch, granted_pro, paid_until = await self._apply_provider_status(
+            master=master,
             master_id=int(master.id),
             provider_status=provider_status,
             now_utc=now_utc,
@@ -255,6 +261,14 @@ class CheckProPayment:
                 invoice_no=updated.invoice_no,
                 paid_until=paid_until,
             )
+            if paid_until is not None and hasattr(self._session, "execute"):
+                await ScheduledNotificationRepository(self._session).schedule_pro_expiry_reminders(
+                    master_id=int(master.id),
+                    master_telegram_id=int(master.telegram_id),
+                    master_timezone=str(master.timezone.value),
+                    paid_until_utc=paid_until,
+                    now_utc=now_utc,
+                )
             write_audit_log(
                 self._session,
                 event="payment_success",

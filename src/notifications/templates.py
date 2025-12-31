@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from src.notifications.context import BookingContext, LimitsContext, OnboardingContext, ReminderContext
+from src.notifications.context import (
+    BookingContext,
+    LimitsContext,
+    OnboardingContext,
+    ReminderContext,
+    SubscriptionContext,
+)
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.events import EventLogger
 
@@ -130,6 +136,45 @@ ONBOARDING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[On
 }
 
 
+SUBSCRIPTION_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[SubscriptionContext], str]] = {
+    (NotificationEvent.TRIAL_EXPIRING_D3, RecipientKind.MASTER): lambda context: (
+        "⏳ До конца Pro‑триала осталось 3 дня.\n\n"
+        f"<b>Доступ до:</b> {context.ends_on}\n\n"
+        "Если хочешь сохранить напоминания и переносы — можно подключить Pro заранее."
+    ),
+    (NotificationEvent.TRIAL_EXPIRING_D1, RecipientKind.MASTER): lambda context: (
+        "⏳ Pro‑триал заканчивается завтра.\n\n"
+        f"<b>Доступ до:</b> {context.ends_on}\n\n"
+        "Если Pro нужен дальше — можно подключить заранее."
+    ),
+    (NotificationEvent.TRIAL_EXPIRING_D0, RecipientKind.MASTER): lambda context: (
+        "⏳ Сегодня последний день Pro‑триала.\n\n"
+        f"<b>Доступ до конца дня:</b> {context.ends_on}\n\n"
+        "Если хочешь продолжить пользоваться функциями Pro — можно подключить в любой момент."
+    ),
+    (NotificationEvent.PRO_EXPIRING_D5, RecipientKind.MASTER): lambda context: (
+        "💎 Pro скоро закончится.\n\n"
+        f"<b>Осталось:</b> {context.days_left} дн.\n"
+        f"<b>Доступ до:</b> {context.ends_on}\n\n"
+        "Чтобы продлить в спокойном режиме — можно оплатить заранее."
+    ),
+    (NotificationEvent.PRO_EXPIRING_D2, RecipientKind.MASTER): lambda context: (
+        "💎 До окончания Pro осталось 2 дня.\n\n"
+        f"<b>Доступ до:</b> {context.ends_on}\n\n"
+        "Если хочешь без перерыва — лучше продлить заранее."
+    ),
+    (NotificationEvent.PRO_EXPIRING_D0, RecipientKind.MASTER): lambda context: (
+        "💎 Сегодня заканчивается Pro.\n\n"
+        f"<b>Доступ до конца дня:</b> {context.ends_on}\n\n"
+        "Чтобы не потерять напоминания и переносы — можно продлить."
+    ),
+    (NotificationEvent.PRO_EXPIRED_RECOVERY_D1, RecipientKind.MASTER): lambda context: (
+        "Pro истёк.\n\n"
+        "Если хочешь вернуть напоминания и переносы — можно продлить Pro."
+    ),
+}
+
+
 def render_limits_template(*, event: NotificationEvent, recipient: RecipientKind, context: LimitsContext) -> str:
     fn = LIMITS_TEMPLATES.get((event, recipient))
     if fn is None:
@@ -169,6 +214,23 @@ def render_onboarding_template(
         ev.debug(
             "notifications.unsupported_template",
             template="onboarding",
+            event=event.value,
+            recipient=recipient.value,
+        )
+    return fn(context) if fn else ""
+
+
+def render_subscription_template(
+    *,
+    event: NotificationEvent,
+    recipient: RecipientKind,
+    context: SubscriptionContext,
+) -> str:
+    fn = SUBSCRIPTION_TEMPLATES.get((event, recipient))
+    if fn is None:
+        ev.debug(
+            "notifications.unsupported_template",
+            template="subscription",
             event=event.value,
             recipient=recipient.value,
         )

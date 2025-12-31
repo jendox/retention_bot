@@ -6,7 +6,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest import mock
 
+from src.datetime_utils import end_of_day_utc
 from src.integrations.expresspay import CurrencyCode, InvoiceStatus
+from src.schemas.enums import Timezone
 from src.schemas.payment_invoice import PaymentInvoiceStatus
 from src.use_cases.check_pro_payment import CheckProPayment, CheckProPaymentRequest
 from src.use_cases.create_pro_invoice import CreateProInvoice, CreateProInvoiceError, CreateProInvoiceRequest
@@ -155,7 +157,7 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_by_telegram_id(self, telegram_id: int):
-                return SimpleNamespace(id=1)
+                return SimpleNamespace(id=1, telegram_id=telegram_id, timezone=Timezone.EUROPE_MINSK)
 
         class _InvoicesRepo:
             def __init__(self, session) -> None:
@@ -214,7 +216,7 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_by_telegram_id(self, telegram_id: int):
-                return SimpleNamespace(id=1)
+                return SimpleNamespace(id=1, telegram_id=telegram_id, timezone=Timezone.EUROPE_MINSK)
 
         class _InvoicesRepo:
             def __init__(self, session) -> None:
@@ -255,7 +257,9 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ok)
         self.assertTrue(result.granted_pro)
-        self.assertEqual(result.paid_until, fixed_now + timedelta(days=40))
+        expected_end_day = (fixed_now + timedelta(days=10)).astimezone(UTC).date() + timedelta(days=30)
+        expected = end_of_day_utc(day=expected_end_day, tz=Timezone.EUROPE_MINSK)
+        self.assertEqual(result.paid_until, expected)
 
     async def test_check_pro_payment_is_idempotent_for_paid_invoice(self) -> None:
         import src.use_cases.check_pro_payment as uc
@@ -265,7 +269,7 @@ class BillingUseCaseTests(unittest.IsolatedAsyncioTestCase):
                 pass
 
             async def get_by_telegram_id(self, telegram_id: int):
-                return SimpleNamespace(id=1)
+                return SimpleNamespace(id=1, telegram_id=telegram_id, timezone=Timezone.EUROPE_MINSK)
 
         class _InvoicesRepo:
             def __init__(self, session) -> None:

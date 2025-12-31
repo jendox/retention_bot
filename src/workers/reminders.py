@@ -15,8 +15,8 @@ from sqlalchemy.orm import selectinload
 
 from src.core.sa import Database, active_session, session_local
 from src.datetime_utils import to_zone
-from src.models import Booking as BookingEntity, Master as MasterEntity
-from src.notifications.context import BookingContext, OnboardingContext, ReminderContext
+from src.models import Booking as BookingEntity, Master as MasterEntity, Subscription as SubscriptionEntity
+from src.notifications.context import BookingContext, OnboardingContext, ReminderContext, SubscriptionContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import DefaultNotificationPolicy, NotificationFacts
 from src.notifications.types import NotificationEvent, RecipientKind
@@ -58,6 +58,19 @@ _CLIENT_BOOKING_EVENTS: set[NotificationEvent] = {
 _CLIENT_REMINDER_EVENTS: set[NotificationEvent] = {
     NotificationEvent.REMINDER_24H,
     NotificationEvent.REMINDER_2H,
+}
+
+_TRIAL_SUBSCRIPTION_EVENTS: set[NotificationEvent] = {
+    NotificationEvent.TRIAL_EXPIRING_D3,
+    NotificationEvent.TRIAL_EXPIRING_D1,
+    NotificationEvent.TRIAL_EXPIRING_D0,
+}
+
+_PRO_SUBSCRIPTION_EVENTS: set[NotificationEvent] = {
+    NotificationEvent.PRO_EXPIRING_D5,
+    NotificationEvent.PRO_EXPIRING_D2,
+    NotificationEvent.PRO_EXPIRING_D0,
+    NotificationEvent.PRO_EXPIRED_RECOVERY_D1,
 }
 
 
@@ -236,6 +249,175 @@ async def _plan_is_pro(*, master_id: int, cache: dict[int, bool]) -> bool:
         value = bool((await EntitlementsService(session).get_plan(master_id=master_id)).is_pro)
     cache[master_id] = value
     return value
+
+
+async def _load_subscription_for_master(*, master_id: int) -> SubscriptionEntity | None:
+    async with session_local() as session:
+        stmt = select(SubscriptionEntity).where(SubscriptionEntity.master_id == int(master_id))
+        return await session.scalar(stmt)
+
+
+def _pro_upgrade_keyboard(*, renew: bool) -> InlineKeyboardMarkup:
+    text = "💎 Продлить Pro" if renew else "💎 Подключить Pro"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=text, callback_data="billing:pro:start")]],
+    )
+
+
+def _ends_on_str(day) -> str:
+    return day.strftime("%d.%m.%Y")
+
+
+@dataclass(frozen=True)
+class _SubscriptionSendCtx:
+    notifier: Notifier
+    master: MasterEntity
+    subscription: SubscriptionEntity
+    job: ScheduledNotificationJob
+    chat_id: int
+    now_utc: datetime
+    plan_cache: dict[int, bool]
+
+
+async def _send_trial_subscription_job(
+    ctx: _SubscriptionSendCtx,
+    event: NotificationEvent,
+) -> bool | None:
+    subscription = ctx.subscription
+    master = ctx.master
+    if subscription.trial_until is None or subscription.trial_until <= ctx.now_utc:
+        return False
+    if subscription.paid_until is not None and subscription.paid_until > ctx.now_utc:
+        return False
+
+    local_due = to_zone(ctx.job.due_at, master.timezone).date()
+    expiry_day = to_zone(subscription.trial_until, master.timezone).date()
+    expected_due_day = {
+        NotificationEvent.TRIAL_EXPIRING_D3: expiry_day - timedelta(days=3),
+        NotificationEvent.TRIAL_EXPIRING_D1: expiry_day - timedelta(days=1),
+        NotificationEvent.TRIAL_EXPIRING_D0: expiry_day,
+    }[event]
+    if local_due != expected_due_day:
+        return False
+
+    plan_is_pro = await _plan_is_pro(master_id=int(master.id), cache=ctx.plan_cache)
+    days_left = max(0, int((expiry_day - to_zone(ctx.now_utc, master.timezone).date()).days))
+
+    try:
+        return await ctx.notifier.maybe_send(
+            NotificationRequest(
+                event=event,
+                recipient=RecipientKind.MASTER,
+                chat_id=int(ctx.chat_id),
+                context=SubscriptionContext(
+                    master_name=str(master.name),
+                    plan="trial",
+                    ends_on=_ends_on_str(expiry_day),
+                    days_left=days_left,
+                ),
+                reply_markup=_pro_upgrade_keyboard(renew=False),
+                facts=NotificationFacts(
+                    event=event,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=int(ctx.chat_id),
+                    plan_is_pro=bool(plan_is_pro),
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
+async def _send_pro_subscription_job(  # noqa: C901, PLR0911
+    ctx: _SubscriptionSendCtx,
+    event: NotificationEvent,
+) -> bool | None:
+    subscription = ctx.subscription
+    master = ctx.master
+    if subscription.paid_until is None:
+        return False
+    paid_until = subscription.paid_until
+
+    local_due = to_zone(ctx.job.due_at, master.timezone).date()
+    expiry_day = to_zone(paid_until, master.timezone).date()
+    expected_due_day = {
+        NotificationEvent.PRO_EXPIRING_D5: expiry_day - timedelta(days=5),
+        NotificationEvent.PRO_EXPIRING_D2: expiry_day - timedelta(days=2),
+        NotificationEvent.PRO_EXPIRING_D0: expiry_day,
+        NotificationEvent.PRO_EXPIRED_RECOVERY_D1: expiry_day + timedelta(days=1),
+    }[event]
+    if local_due != expected_due_day:
+        return False
+
+    if event == NotificationEvent.PRO_EXPIRED_RECOVERY_D1:
+        if paid_until > ctx.now_utc:
+            return False
+        if subscription.trial_until is not None and subscription.trial_until > ctx.now_utc:
+            return False
+    elif paid_until <= ctx.now_utc:
+        return False
+
+    plan_is_pro = await _plan_is_pro(master_id=int(master.id), cache=ctx.plan_cache)
+    days_left = max(0, int((expiry_day - to_zone(ctx.now_utc, master.timezone).date()).days))
+
+    try:
+        return await ctx.notifier.maybe_send(
+            NotificationRequest(
+                event=event,
+                recipient=RecipientKind.MASTER,
+                chat_id=int(ctx.chat_id),
+                context=SubscriptionContext(
+                    master_name=str(master.name),
+                    plan="pro",
+                    ends_on=_ends_on_str(expiry_day),
+                    days_left=days_left,
+                ),
+                reply_markup=_pro_upgrade_keyboard(renew=True),
+                facts=NotificationFacts(
+                    event=event,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=int(ctx.chat_id),
+                    plan_is_pro=bool(plan_is_pro),
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
+async def _send_subscription_job(
+    *,
+    notifier: Notifier,
+    event: NotificationEvent,
+    job: ScheduledNotificationJob,
+    chat_id: int,
+    now_utc: datetime,
+    plan_cache: dict[int, bool],
+) -> bool | None:
+    if job.master_id is None:
+        return False
+    master = await _load_master_for_notification(master_id=int(job.master_id))
+    if master is None:
+        return False
+    subscription = await _load_subscription_for_master(master_id=int(master.id))
+    if subscription is None:
+        return False
+
+    ctx = _SubscriptionSendCtx(
+        notifier=notifier,
+        master=master,
+        subscription=subscription,
+        job=job,
+        chat_id=chat_id,
+        now_utc=now_utc,
+        plan_cache=plan_cache,
+    )
+    if event in _TRIAL_SUBSCRIPTION_EVENTS:
+        return await _send_trial_subscription_job(ctx, event)
+    if event in _PRO_SUBSCRIPTION_EVENTS:
+        return await _send_pro_subscription_job(ctx, event)
+
+    return False
 
 
 async def _send_client_reminder(
@@ -556,6 +738,15 @@ async def _send_job(
         )
 
     if booking_id is None:
+        if recipient == RecipientKind.MASTER and event in (_TRIAL_SUBSCRIPTION_EVENTS | _PRO_SUBSCRIPTION_EVENTS):
+            return await _send_subscription_job(
+                notifier=notifier,
+                event=event,
+                job=job,
+                chat_id=chat_id,
+                now_utc=now_utc,
+                plan_cache=plan_cache,
+            )
         return False
 
     booking = await _load_booking_for_notification(booking_id=booking_id)
@@ -600,10 +791,15 @@ async def _maybe_refresh_schedule(
                 now_utc=now_utc,
                 lookback=config.attendance_lookback,
             )
+            inserted_subs = await repo.schedule_subscription_expiry_reminders(
+                now_utc=now_utc,
+                lookahead=config.schedule_lookahead,
+            )
         ev.info(
             "reminders.schedule_refresh",
             inserted_reminders=int(inserted_reminders),
             inserted_attendance=int(inserted_att),
+            inserted_subscription=int(inserted_subs),
             lookahead_days=int(config.schedule_lookahead.total_seconds() // 86400),
             lookback_days=int(config.attendance_lookback.total_seconds() // 86400),
         )

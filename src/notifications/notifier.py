@@ -5,7 +5,7 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup
 
 from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
-from src.notifications.context import LimitsContext, OnboardingContext, ReminderContext
+from src.notifications.context import LimitsContext, OnboardingContext, ReminderContext, SubscriptionContext
 from src.notifications.policy import NotificationFacts, NotificationPolicy
 
 
@@ -14,7 +14,7 @@ class NotificationRequest:
     event: NotificationEvent
     recipient: RecipientKind
     chat_id: int | None
-    context: BookingContext | LimitsContext | ReminderContext | OnboardingContext
+    context: BookingContext | LimitsContext | ReminderContext | OnboardingContext | SubscriptionContext
     reply_markup: InlineKeyboardMarkup | None = None
     facts: NotificationFacts | None = None
     meta: dict[str, Any] | None = None
