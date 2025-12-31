@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
 from src.observability.events import EventLogger
+from src.observability.metrics import inc, observe
 from src.settings import get_settings
 
 __all__ = (
@@ -123,7 +124,11 @@ def _setup_query_observability(engine: AsyncEngine) -> None:
         started = getattr(context, "_query_started_at", None)
         if started is None:
             return
-        duration_ms = int((time.perf_counter() - started) * 1000)
+        duration = time.perf_counter() - started
+        duration_ms = int(duration * 1000)
+        kind = _stmt_kind(statement)
+        observe("db_query_duration_seconds", duration, labels={"kind": kind})
+        inc("db_queries_total", labels={"kind": kind})
         slow_ms = get_settings().observability.db_slow_query_ms
         if duration_ms >= int(slow_ms):
             ev.warning(
@@ -136,6 +141,11 @@ def _setup_query_observability(engine: AsyncEngine) -> None:
     def _handle_error(exception_context):  # noqa: ANN001
         # Called for DBAPI-level exceptions.
         err = exception_context.original_exception
+        kind = _stmt_kind(exception_context.statement)
+        inc(
+            "db_query_errors_total",
+            labels={"kind": kind, "error_type": type(err).__name__ if err is not None else "UnknownError"},
+        )
         ev.error(
             "db.query_failed",
             error_type=type(err).__name__ if err is not None else None,
@@ -150,3 +160,12 @@ def _short_stmt(statement: str | None, *, limit: int = 400) -> str | None:
     if len(text) > limit:
         return text[:limit] + "…"
     return text
+
+
+def _stmt_kind(statement: str | None) -> str:
+    if not statement:
+        return "unknown"
+    first = str(statement).strip().split(None, 1)
+    if not first:
+        return "unknown"
+    return first[0].lower()

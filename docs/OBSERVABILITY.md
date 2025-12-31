@@ -111,6 +111,23 @@ Settings:
 Optional diagnostic alert (only matters if you allowlist it):
 - `workers.watchdog.redis_error`
 
+## Metrics (Prometheus)
+
+The service can expose a minimal Prometheus-compatible `/metrics` endpoint (no extra dependencies).
+
+Settings (nested env vars):
+- `METRICS__ENABLED=true|false` (default `false`)
+- `METRICS__EXPORTER=prometheus|both` (default `prometheus`)
+- `METRICS__HOST=0.0.0.0` (default)
+- `METRICS__PORT=8000` (default)
+- `METRICS__PATH=/metrics` (default)
+
+Minimal exported metrics include:
+- `bot_handler_duration_seconds` (histogram)
+- `bot_handler_ok_total`, `bot_handler_exceptions_total`, `bot_unhandled_exceptions_total` (counters)
+- `db_query_duration_seconds`, `db_queries_total`, `db_query_errors_total` (counters/histogram)
+- `external_http_duration_seconds`, `external_http_requests_total`, `external_http_errors_total` (counters/histogram)
+
 ### Recommended minimal allowlist for production
 
 Start with this list to keep noise low, but still be paged on real problems:

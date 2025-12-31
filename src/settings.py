@@ -185,6 +185,14 @@ class ObservabilitySettings(BaseModel):
         return cls._parse_kv_map(value, item_sep=",", value_cast=float)
 
 
+class MetricsSettings(BaseModel):
+    enabled: bool = False
+    exporter: str = "prometheus"  # prometheus|statsd|both
+    host: str = "0.0.0.0"
+    port: int = 8000
+    path: str = "/metrics"
+
+
 class AppSettings(BaseSettings):
     debug: bool = False
 
@@ -195,6 +203,7 @@ class AppSettings(BaseSettings):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     express_pay: ExpressPaySettings | None = None
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    metrics: MetricsSettings = Field(default_factory=MetricsSettings)
 
     model_config = SettingsConfigDict(
         env_nested_delimiter="__",
@@ -217,7 +226,7 @@ class AppSettings(BaseSettings):
         for nested models, which would crash during parsing.
         """
 
-        top_level = {"telegram", "database", "admin", "billing", "security", "express_pay", "observability"}
+        top_level = {"telegram", "database", "admin", "billing", "security", "express_pay", "observability", "metrics"}
 
         def filtered_dotenv():
             env_vars = getattr(dotenv_settings, "env_vars", None)
@@ -235,7 +244,16 @@ class AppSettings(BaseSettings):
         # pydantic-settings treats top-level nested models as "complex" values and will attempt to JSON-decode
         # env vars like OBSERVABILITY/SECURITY/TELEGRAM if they are present. An empty value would crash JSON
         # decoding, so we proactively ignore empty top-level blobs.
-        for key in ("TELEGRAM", "DATABASE", "ADMIN", "BILLING", "SECURITY", "EXPRESS_PAY", "OBSERVABILITY"):
+        for key in (
+            "TELEGRAM",
+            "DATABASE",
+            "ADMIN",
+            "BILLING",
+            "SECURITY",
+            "EXPRESS_PAY",
+            "OBSERVABILITY",
+            "METRICS",
+        ):
             if key in os.environ and not os.environ[key].strip():
                 os.environ.pop(key, None)
         file_values = _read_env_file(env_file)

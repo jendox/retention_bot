@@ -9,6 +9,7 @@ from aiogram.types import TelegramObject
 
 from src.observability.context import bind_log_context, new_trace_id, reset_log_context, set_log_context
 from src.observability.events import EventLogger
+from src.observability.metrics import inc, time_histogram
 from src.rate_limiter import RateLimiter
 from src.user_context import UserContextStorage
 
@@ -95,6 +96,8 @@ class LoggingMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
+        handler_name = f"{getattr(handler, '__module__', '')}.{getattr(handler, '__name__', '')}".strip(".")
+        timer = time_histogram("bot_handler_duration_seconds", labels={"handler": handler_name})
         started = time.perf_counter()
         try:
             result = await handler(event, data)
@@ -106,9 +109,16 @@ class LoggingMiddleware(BaseMiddleware):
                 duration_ms=duration_ms,
                 error_type=type(exc).__name__,
             )
+            inc(
+                "bot_handler_exceptions_total",
+                labels={"handler": handler_name, "error_type": type(exc).__name__},
+            )
+            timer.observe()
             raise
 
         duration_ms = int((time.perf_counter() - started) * 1000)
+        inc("bot_handler_ok_total", labels={"handler": handler_name})
+        timer.observe()
         if duration_ms >= self._slow_threshold_ms:
             ev.warning("handler.slow", duration_ms=duration_ms)
         else:

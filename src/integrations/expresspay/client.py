@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Self
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+
+from src.observability.metrics import inc, observe
 
 from .exceptions import (
     ExpressPayApiError,
@@ -207,15 +210,54 @@ class ExpressPayClient:
         query: dict[str, str] | None = None,
         data: dict[str, str] | None = None,
     ) -> Any:
+        started = time.perf_counter()
         try:
             response = await self._http.request(method, url, params=query, data=data)
         except httpx.HTTPError as e:
+            observe(
+                "external_http_duration_seconds",
+                time.perf_counter() - started,
+                labels={"service": "expresspay", "method": method.upper(), "path": url},
+            )
+            inc(
+                "external_http_errors_total",
+                labels={"service": "expresspay", "method": method.upper(), "path": url, "error_type": type(e).__name__},
+            )
             raise ExpressPayTransportError(f"HTTP transport error: {e!r}") from e
+
+        observe(
+            "external_http_duration_seconds",
+            time.perf_counter() - started,
+            labels={
+                "service": "expresspay",
+                "method": method.upper(),
+                "path": url,
+                "status": str(response.status_code),
+            },
+        )
+        inc(
+            "external_http_requests_total",
+            labels={
+                "service": "expresspay",
+                "method": method.upper(),
+                "path": url,
+                "status": str(response.status_code),
+            },
+        )
 
         # ExpressPay отвечает JSON’ом в любом случае (успех/ошибка).
         try:
             payload = response.json()
         except ValueError as e:
+            inc(
+                "external_http_errors_total",
+                labels={
+                    "service": "expresspay",
+                    "method": method.upper(),
+                    "path": url,
+                    "error_type": "NonJsonResponse",
+                },
+            )
             raise ExpressPayTransportError(f"Non-JSON response, status={response.status_code}") from e
 
         env = TypeAdapter(Envelope).validate_python(payload)

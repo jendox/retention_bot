@@ -25,6 +25,7 @@ from src.observability.alerts import AdminAlerter
 from src.observability.errors import global_error_handler
 from src.observability.events import EventLogger
 from src.observability.heartbeat import heartbeat_key
+from src.observability.metrics_server import start_metrics_server
 from src.rate_limiter import RateLimiter
 from src.settings import AppSettings, app_settings, get_settings
 from src.texts import admin as admin_txt
@@ -209,6 +210,7 @@ async def main():
         env=os.getenv("APP_ENV") or ("dev" if debug else "prod"),
         version="0.1.0",
     )
+    start_metrics_server()
     redis: Redis | None = None
     admin_alerter: AdminAlerter | None = None
     watchdog_task: asyncio.Task[None] | None = None

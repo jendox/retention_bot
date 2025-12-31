@@ -18,6 +18,7 @@ from src.models.payment_invoice import PaymentInvoice as PaymentInvoiceEntity
 from src.observability import setup_logging
 from src.observability.events import EventLogger
 from src.observability.heartbeat import write_worker_heartbeat
+from src.observability.metrics_server import start_metrics_server
 from src.repositories.payment_invoice import PaymentInvoiceRepository
 from src.settings import AppSettings, app_settings, get_settings
 from src.texts import billing as billing_txt
@@ -266,6 +267,7 @@ async def main() -> None:
         env=os.getenv("APP_ENV") or ("dev" if settings.debug else "prod"),
         version="0.1.0",
     )
+    start_metrics_server()
 
     if settings.express_pay is None:
         raise RuntimeError("ExpressPay is not configured.")

@@ -7,6 +7,7 @@ from aiogram.types import ErrorEvent
 
 from src.observability.alerts import AdminAlerter
 from src.observability.events import EventLogger
+from src.observability.metrics import inc
 
 ev = EventLogger(__name__)
 
@@ -41,6 +42,7 @@ async def global_error_handler(event: ErrorEvent, admin_alerter: AdminAlerter | 
     exc = event.exception
     extra = _extract_update_context(event)
     extra["error_type"] = type(exc).__name__
+    inc("bot_unhandled_exceptions_total", labels={"error_type": type(exc).__name__})
 
     # One structured error log per unhandled exception (handler middleware may log separately).
     await ev.aexception("bot.unhandled_exception", exc=exc, admin_alerter=admin_alerter, **extra)

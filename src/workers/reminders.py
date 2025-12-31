@@ -23,6 +23,7 @@ from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability import setup_logging
 from src.observability.events import EventLogger
 from src.observability.heartbeat import write_worker_heartbeat
+from src.observability.metrics_server import start_metrics_server
 from src.repositories.scheduled_notification import ScheduledNotificationJob, ScheduledNotificationRepository
 from src.schemas.enums import AttendanceOutcome, BookingStatus
 from src.settings import AppSettings, app_settings, get_settings
@@ -753,6 +754,7 @@ async def main() -> None:
         env=os.getenv("APP_ENV") or ("dev" if settings.debug else "prod"),
         version="0.1.0",
     )
+    start_metrics_server()
 
     redis = Redis.from_url(settings.database.redis_url)
     bot = Bot(
