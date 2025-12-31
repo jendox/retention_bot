@@ -1,3 +1,4 @@
+from .audit_log import AuditLog
 from .booking import Booking
 from .client import Client
 from .consent import UserConsent
@@ -11,6 +12,7 @@ __all__ = (
     "Master",
     "Client",
     "Booking",
+    "AuditLog",
     "Invite",
     "TOKEN_LENGTH",
     "UserConsent",

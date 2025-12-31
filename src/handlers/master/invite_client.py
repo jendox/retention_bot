@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from src.core.sa import active_session
+from src.core.sa import Database, active_session
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_text
@@ -17,6 +17,7 @@ from src.notifications.policy import NotificationFacts
 from src.notifications.renderer import render as render_notification
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.alerts import AdminAlerter
+from src.observability.audit_log import write_audit_log
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.paywall import build_paywall_keyboard
@@ -322,4 +323,21 @@ async def master_invite_choose_format(callback: CallbackQuery, state: FSMContext
         invite_id=invite_id,
         kind=str(kind.value),
     )
+    if Database.session_maker is not None:
+        try:
+            async with active_session() as session:
+                write_audit_log(
+                    session,
+                    event="invite_link_shared",
+                    actor="master",
+                    master_id=int(master_id) if master_id is not None else None,
+                    invite_id=int(invite_id) if invite_id is not None else None,
+                    metadata={"kind": str(kind.value)},
+                )
+        except Exception as exc:
+            ev.warning(
+                "audit_log.write_failed",
+                audit_event="invite_link_shared",
+                error_type=type(exc).__name__,
+            )
     await _reset_invite_flow(state, callback.bot)

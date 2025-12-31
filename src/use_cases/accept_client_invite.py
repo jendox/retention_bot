@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.audit_log import write_audit_log
 from src.observability.events import EventLogger
 from src.repositories import (
     BookingRepository,
@@ -482,6 +483,15 @@ class AcceptClientInvite:
                 master_id=state.master_id,
                 client_id=result.client_id,
                 offline=False,
+            )
+            write_audit_log(
+                self._session,
+                event="client_added",
+                actor="client",
+                actor_id=int(state.request.telegram_id),
+                master_id=int(state.master_id),
+                client_id=int(result.client_id) if result.client_id is not None else None,
+                metadata={"offline": False},
             )
 
         warn = await self._should_warn_clients_limit(state.master_id)

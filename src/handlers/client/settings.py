@@ -11,6 +11,7 @@ from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
+from src.observability.audit_log import write_audit_log
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.privacy import ConsentRole
@@ -392,6 +393,13 @@ async def _handle_toggle_notify(
     async with active_session() as session:
         repo = ClientRepository(session)
         await repo.update_by_id(client_id, ClientUpdate(notifications_enabled=new_value))
+        write_audit_log(
+            session,
+            event="pro_features_toggled",
+            actor="client",
+            client_id=int(client_id),
+            metadata={"feature": "client.notifications_enabled", "enabled": bool(new_value)},
+        )
 
     ev.info("client_settings.notifications_toggled", client_id=int(client_id), enabled=bool(new_value))
     ev.info(

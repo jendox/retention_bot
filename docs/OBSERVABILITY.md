@@ -15,6 +15,11 @@ For product/ops analytics we log stable domain-level events (rather than UI-spec
 - For rejected attempts, include a short `error` reason code (limits/validation/conflicts/forbidden/etc).
 - Avoid PII in fields (no phone numbers, tokens, invite secrets).
 
+### Audit log (DB)
+
+In addition to JSON logs, selected business events are written to Postgres in `audit_logs` (append-only).
+This is meant for reliable funnels/cohorts without requiring a log pipeline.
+
 ### Minimal recommended analytics events
 
 If you don’t have full analytics yet, start by collecting these events (in JSON logs).

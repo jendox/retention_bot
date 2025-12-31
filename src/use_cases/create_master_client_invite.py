@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.audit_log import write_audit_log
 from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import InviteRepository, MasterNotFound, MasterRepository
@@ -46,6 +47,7 @@ class CreateMasterClientInvite:
     """
 
     def __init__(self, session: AsyncSession) -> None:
+        self._session = session
         self._master_repo = MasterRepository(session)
         self._invite_repo = InviteRepository(session)
         self._entitlements = EntitlementsService(session)
@@ -91,6 +93,14 @@ class CreateMasterClientInvite:
             master_id=master.id,
             invite_id=invite.id,
             invite_type=str(invite.type.value),
+        )
+        write_audit_log(
+            self._session,
+            event="invite_client.created",
+            actor="master",
+            master_id=int(master.id),
+            invite_id=int(invite.id) if invite.id is not None else None,
+            metadata={"invite_type": str(invite.type.value)},
         )
         return CreateMasterClientInviteResult(
             outcome=CreateMasterClientInviteOutcome.OK,

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.integrations.expresspay import ExpressPayClient, InvoiceStatus
 from src.integrations.expresspay.exceptions import ExpressPayApiError, ExpressPayError
+from src.observability.audit_log import write_audit_log
 from src.observability.events import EventLogger
 from src.repositories import (
     MasterNotFound,
@@ -254,10 +255,26 @@ class CheckProPayment:
                 invoice_no=updated.invoice_no,
                 paid_until=paid_until,
             )
+            write_audit_log(
+                self._session,
+                event="payment_success",
+                actor="master",
+                actor_id=int(request.master_telegram_id),
+                master_id=int(master.id),
+                invoice_id=int(updated.id),
+                metadata={"invoice_no": int(updated.invoice_no), "paid_until": paid_until},
+            )
             ev.info(
                 "subscription_renewed",
                 master_id=master.id,
                 paid_until=paid_until,
+            )
+            write_audit_log(
+                self._session,
+                event="subscription_renewed",
+                actor="system",
+                master_id=int(master.id),
+                metadata={"paid_until": paid_until},
             )
 
         return CheckProPaymentResult(

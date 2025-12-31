@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.audit_log import write_audit_log
 from src.observability.events import EventLogger
 from src.plans import FREE_CLIENTS_LIMIT
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
@@ -212,6 +213,14 @@ class CreateClientOffline:
             master_id=master_id,
             client_id=client.id,
             offline=True,
+        )
+        write_audit_log(
+            self._session,
+            event="client_added",
+            actor="master",
+            master_id=int(master_id),
+            client_id=int(client.id),
+            metadata={"offline": True},
         )
         return CreateClientOfflineCreateResult(
             ok=True,

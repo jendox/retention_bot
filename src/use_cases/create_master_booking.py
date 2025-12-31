@@ -7,6 +7,7 @@ from enum import StrEnum
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.observability.audit_log import write_audit_log
 from src.observability.events import EventLogger
 from src.plans import TRIAL_DAYS
 from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
@@ -301,6 +302,13 @@ class CreateMasterBooking:
                     master_id=int(master.id),
                     trial_until=trial_until,
                     reason="first_booking",
+                )
+                write_audit_log(
+                    self._session,
+                    event="trial_started",
+                    actor="system",
+                    master_id=int(master.id),
+                    metadata={"trial_until": trial_until, "reason": "first_booking"},
                 )
 
         if not result.ok:

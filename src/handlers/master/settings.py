@@ -14,6 +14,7 @@ from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_messag
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import BookingContext, ReminderContext
 from src.notifications.renderer import render
+from src.observability.audit_log import write_audit_log
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.paywall import build_upgrade_button_with_fallback
@@ -843,6 +844,13 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         async with active_session() as session:
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_clients=new_value))
+            write_audit_log(
+                session,
+                event="pro_features_toggled",
+                actor="master",
+                master_id=int(master.id),
+                metadata={"feature": "master.notify_clients", "enabled": bool(new_value)},
+            )
 
         ev.info(
             "pro_features_toggled",
@@ -865,6 +873,13 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         async with active_session() as session:
             master_repo = MasterRepository(session)
             await master_repo.update_by_id(master.id, MasterUpdate(notify_attendance=new_value))
+            write_audit_log(
+                session,
+                event="pro_features_toggled",
+                actor="master",
+                master_id=int(master.id),
+                metadata={"feature": "master.notify_attendance", "enabled": bool(new_value)},
+            )
 
         ev.info(
             "pro_features_toggled",

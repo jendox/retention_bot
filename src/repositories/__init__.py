@@ -1,3 +1,4 @@
+from .audit_log import AuditLogRepository
 from .booking import BookingAlreadyHandled, BookingForbidden, BookingNotFound, BookingRepository
 from .client import ClientNotFound, ClientRepository
 from .consent import ConsentRepository
