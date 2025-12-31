@@ -38,3 +38,8 @@ class SubscriptionContext:
     plan: str  # "trial" | "pro"
     ends_on: str  # DD.MM.YYYY in master's timezone
     days_left: int
+
+
+@dataclass(frozen=True)
+class BillingContext:
+    master_name: str

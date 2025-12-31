@@ -14,6 +14,7 @@ class NotificationTemplatesCoverageTests(unittest.TestCase):
 
         all_template_keys: set[tuple[object, object]] = set()
         for mapping in (
+            t.BILLING_TEMPLATES,
             t.LIMITS_TEMPLATES,
             t.BOOKING_TEMPLATES,
             t.MASTER_TEMPLATES,
@@ -30,6 +31,7 @@ class NotificationTemplatesCoverageTests(unittest.TestCase):
     def test_all_templates_render_non_empty_text(self) -> None:
         from src.notifications import templates as t
         from src.notifications.context import (
+            BillingContext,
             BookingContext,
             LimitsContext,
             OnboardingContext,
@@ -53,7 +55,10 @@ class NotificationTemplatesCoverageTests(unittest.TestCase):
             bookings_limit=20,
         )
         subscription_ctx = SubscriptionContext(master_name="Master", plan="pro", ends_on="01.01.2025", days_left=3)
+        billing_ctx = BillingContext(master_name="Master")
 
+        for fn in t.BILLING_TEMPLATES.values():
+            self.assertTrue(str(fn(billing_ctx)).strip())
         for fn in t.LIMITS_TEMPLATES.values():
             self.assertTrue(str(fn(limits_ctx)).strip())
         for fn in t.BOOKING_TEMPLATES.values():
@@ -154,6 +159,37 @@ class SubscriptionSchedulingTests(unittest.IsolatedAsyncioTestCase):
         expected_due = [datetime.combine(day, time(11, 0), tzinfo=zone).astimezone(UTC) for day in expected_days]
         actual_due = [due for _, due, __ in items]
         self.assertEqual(actual_due, expected_due)
+
+    async def test_schedule_pro_invoice_payment_reminder_uses_next_day_morning(self) -> None:
+        from src.repositories.scheduled_notification import ScheduledNotificationRepository
+        from src.schemas.enums import Timezone
+
+        session = AsyncMock()
+        repo = ScheduledNotificationRepository(session)
+
+        captured: dict[str, object] = {}
+
+        async def _capture(**kwargs) -> int:
+            captured.update(kwargs)
+            return 1
+
+        repo.upsert_invoice_payment_reminder = AsyncMock(side_effect=_capture)  # type: ignore[method-assign]
+
+        tz = Timezone.EUROPE_MINSK
+        now_utc = datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+        await repo.schedule_pro_invoice_payment_reminder(
+            master_id=1,
+            master_telegram_id=10,
+            master_timezone=str(tz.value),
+            invoice_id=99,
+            now_utc=now_utc,
+        )
+
+        due_at = captured["due_at_utc"]
+        self.assertIsInstance(due_at, datetime)
+        self.assertEqual(due_at.astimezone(ZoneInfo(str(tz.value))).date(), date(2025, 1, 2))
+        self.assertEqual(due_at.astimezone(ZoneInfo(str(tz.value))).hour, 11)
+        self.assertEqual(captured["dedup_key"], "beautydesk:outbox:billing:pro_invoice_reminder:99")
 
 
 class SubscriptionWorkerSendTests(unittest.IsolatedAsyncioTestCase):
@@ -298,3 +334,79 @@ class SubscriptionWorkerSendTests(unittest.IsolatedAsyncioTestCase):
         notifier.maybe_send.assert_awaited_once()
         request = notifier.maybe_send.await_args.args[0]
         self.assertEqual(request.reply_markup.inline_keyboard[0][0].callback_data, "billing:pro:start")
+
+
+class BillingReminderWorkerSendTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_pro_invoice_reminder_sends_payment_button(self) -> None:
+        from src.schemas.enums import Timezone
+        from src.workers import reminders as w
+
+        master = SimpleNamespace(id=1, name="M", timezone=Timezone.EUROPE_MINSK)
+        invoice = SimpleNamespace(id=99, master_id=1, status="waiting", expires_at=datetime(2025, 1, 3, tzinfo=UTC))
+        latest = SimpleNamespace(id=99)
+        job = SimpleNamespace(
+            master_id=1,
+            invoice_id=99,
+            chat_id=10,
+            booking_id=None,
+            booking_start_at=None,
+            due_at=datetime(2025, 1, 2, tzinfo=UTC),
+        )
+
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        with (
+            patch.object(w, "_load_master_for_notification", AsyncMock(return_value=master)),
+            patch.object(w, "_plan_is_pro", AsyncMock(return_value=False)),
+            patch.object(w, "_load_invoice_for_notification", AsyncMock(return_value=invoice)),
+            patch.object(w, "_load_latest_waiting_invoice_for_master", AsyncMock(return_value=latest)),
+        ):
+            result = await w._send_job(
+                notifier=notifier,
+                event=w.NotificationEvent.PRO_INVOICE_REMINDER,
+                recipient=w.RecipientKind.MASTER,
+                job=job,
+                now_utc=datetime(2025, 1, 2, 12, 0, tzinfo=UTC),
+                plan_cache={},
+            )
+
+        self.assertTrue(result)
+        notifier.maybe_send.assert_awaited_once()
+        request = notifier.maybe_send.await_args.args[0]
+        self.assertEqual(request.event, w.NotificationEvent.PRO_INVOICE_REMINDER)
+        self.assertEqual(request.reply_markup.inline_keyboard[0][0].callback_data, "billing:pro:start")
+        self.assertEqual(request.reply_markup.inline_keyboard[0][0].text, "💳 Перейти к оплате")
+
+    async def test_send_pro_invoice_reminder_skips_when_invoice_not_latest(self) -> None:
+        from src.schemas.enums import Timezone
+        from src.workers import reminders as w
+
+        master = SimpleNamespace(id=1, name="M", timezone=Timezone.EUROPE_MINSK)
+        invoice = SimpleNamespace(id=99, master_id=1, status="waiting", expires_at=datetime(2025, 1, 3, tzinfo=UTC))
+        latest = SimpleNamespace(id=100)
+        job = SimpleNamespace(
+            master_id=1,
+            invoice_id=99,
+            chat_id=10,
+            booking_id=None,
+            booking_start_at=None,
+            due_at=datetime(2025, 1, 2, tzinfo=UTC),
+        )
+
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        with (
+            patch.object(w, "_load_master_for_notification", AsyncMock(return_value=master)),
+            patch.object(w, "_plan_is_pro", AsyncMock(return_value=False)),
+            patch.object(w, "_load_invoice_for_notification", AsyncMock(return_value=invoice)),
+            patch.object(w, "_load_latest_waiting_invoice_for_master", AsyncMock(return_value=latest)),
+        ):
+            result = await w._send_job(
+                notifier=notifier,
+                event=w.NotificationEvent.PRO_INVOICE_REMINDER,
+                recipient=w.RecipientKind.MASTER,
+                job=job,
+                now_utc=datetime(2025, 1, 2, 12, 0, tzinfo=UTC),
+                plan_cache={},
+            )
+
+        self.assertFalse(result)
+        notifier.maybe_send.assert_not_awaited()

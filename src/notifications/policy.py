@@ -94,6 +94,7 @@ class DefaultNotificationPolicy:
         NotificationEvent.PRO_EXPIRING_D2,
         NotificationEvent.PRO_EXPIRING_D0,
         NotificationEvent.PRO_EXPIRED_RECOVERY_D1,
+        NotificationEvent.PRO_INVOICE_REMINDER,
     }
 
     MASTER_FREE_ONLY_EVENTS: set[NotificationEvent] = {

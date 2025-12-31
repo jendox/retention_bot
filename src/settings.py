@@ -49,7 +49,7 @@ class BillingSettings(BaseModel):
     contact: str = "@admin"
     pro_price_byn: Decimal | None = None
     pro_days: int | None = None
-    pro_invoice_lifetime_sec: int = 60 * 30  # 30 min
+    pro_invoice_lifetime_sec: int = 60 * 60 * 48  # 48h
     pro_description: str = "BeautyDesk Pro"
 
 

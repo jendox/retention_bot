@@ -37,6 +37,7 @@ class ScheduledNotificationJob:
     booking_id: int | None
     master_id: int | None
     client_id: int | None
+    invoice_id: int | None
     booking_start_at: datetime | None
     sequence: int | None
     due_at: datetime
@@ -66,6 +67,90 @@ def booking_end_at_utc(*, start_at: datetime, duration_min: int) -> datetime:
 
 
 class ScheduledNotificationRepository(BaseRepository):
+    async def upsert_invoice_payment_reminder(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        invoice_id: int,
+        due_at_utc: datetime,
+        now_utc: datetime,
+        dedup_key: str,
+    ) -> int:
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+        if due_at_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware due_at_utc in UTC.")
+
+        ins = pg_insert(ScheduledNotificationEntity).values(
+            {
+                "event": "pro_invoice_reminder",
+                "recipient": "master",
+                "chat_id": int(master_telegram_id),
+                "master_id": int(master_id),
+                "client_id": None,
+                "booking_id": None,
+                "invoice_id": int(invoice_id),
+                "booking_start_at": None,
+                "status": ScheduledNotificationStatus.PENDING.value,
+                "due_at": due_at_utc,
+                "sequence": None,
+                "dedup_key": str(dedup_key),
+                "locked_at": None,
+                "attempts": 0,
+                "last_error": None,
+                "sent_at": None,
+                "created_at": now_utc,
+                "updated_at": now_utc,
+            },
+        )
+        stmt = ins.on_conflict_do_update(
+            index_elements=["dedup_key"],
+            set_={
+                "chat_id": ins.excluded.chat_id,
+                "master_id": ins.excluded.master_id,
+                "invoice_id": ins.excluded.invoice_id,
+                "status": ScheduledNotificationStatus.PENDING.value,
+                "due_at": ins.excluded.due_at,
+                "locked_at": None,
+                "attempts": 0,
+                "last_error": None,
+                "sent_at": None,
+                "updated_at": now_utc,
+            },
+            where=ScheduledNotificationEntity.status != ScheduledNotificationStatus.SENT.value,
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return int(result.rowcount or 0)
+
+    async def schedule_pro_invoice_payment_reminder(
+        self,
+        *,
+        master_id: int,
+        master_telegram_id: int,
+        master_timezone: str,
+        invoice_id: int,
+        now_utc: datetime,
+    ) -> int:
+        if now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware datetime in UTC.")
+        master_tz = get_timezone(str(master_timezone))
+        local_now = now_utc.astimezone(master_tz)
+        day = local_now.date() + timedelta(days=1)
+        local_due = shift_out_of_quiet_hours(datetime.combine(day, time(11, 0), tzinfo=master_tz))
+        due_at_utc = local_due.astimezone(UTC)
+
+        dedup_key = f"beautydesk:outbox:billing:pro_invoice_reminder:{int(invoice_id)}"
+        return await self.upsert_invoice_payment_reminder(
+            master_id=master_id,
+            master_telegram_id=master_telegram_id,
+            invoice_id=invoice_id,
+            due_at_utc=due_at_utc,
+            now_utc=now_utc,
+            dedup_key=dedup_key,
+        )
+
     async def enqueue_booking_client_notification(
         self,
         *,
@@ -683,6 +768,7 @@ class ScheduledNotificationRepository(BaseRepository):
                 booking_id=int(e.booking_id) if e.booking_id is not None else None,
                 master_id=int(e.master_id) if e.master_id is not None else None,
                 client_id=int(e.client_id) if e.client_id is not None else None,
+                invoice_id=int(e.invoice_id) if getattr(e, "invoice_id", None) is not None else None,
                 booking_start_at=e.booking_start_at,
                 sequence=int(e.sequence) if e.sequence is not None else None,
                 due_at=e.due_at,

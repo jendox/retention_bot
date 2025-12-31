@@ -16,7 +16,13 @@ from sqlalchemy.orm import selectinload
 from src.core.sa import Database, active_session, session_local
 from src.datetime_utils import to_zone
 from src.models import Booking as BookingEntity, Master as MasterEntity, Subscription as SubscriptionEntity
-from src.notifications.context import BookingContext, OnboardingContext, ReminderContext, SubscriptionContext
+from src.notifications.context import (
+    BillingContext,
+    BookingContext,
+    OnboardingContext,
+    ReminderContext,
+    SubscriptionContext,
+)
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import DefaultNotificationPolicy, NotificationFacts
 from src.notifications.types import NotificationEvent, RecipientKind
@@ -24,6 +30,7 @@ from src.observability import setup_logging
 from src.observability.events import EventLogger
 from src.observability.heartbeat import write_worker_heartbeat
 from src.observability.metrics_server import start_metrics_server
+from src.repositories.payment_invoice import PaymentInvoiceNotFound, PaymentInvoiceRepository
 from src.repositories.scheduled_notification import ScheduledNotificationJob, ScheduledNotificationRepository
 from src.schemas.enums import AttendanceOutcome, BookingStatus
 from src.settings import AppSettings, app_settings, get_settings
@@ -71,6 +78,10 @@ _PRO_SUBSCRIPTION_EVENTS: set[NotificationEvent] = {
     NotificationEvent.PRO_EXPIRING_D2,
     NotificationEvent.PRO_EXPIRING_D0,
     NotificationEvent.PRO_EXPIRED_RECOVERY_D1,
+}
+
+_BILLING_EVENTS: set[NotificationEvent] = {
+    NotificationEvent.PRO_INVOICE_REMINDER,
 }
 
 
@@ -257,6 +268,19 @@ async def _load_subscription_for_master(*, master_id: int) -> SubscriptionEntity
         return await session.scalar(stmt)
 
 
+async def _load_invoice_for_notification(*, invoice_id: int):
+    async with session_local() as session:
+        try:
+            return await PaymentInvoiceRepository(session).get_by_id(int(invoice_id))
+        except PaymentInvoiceNotFound:
+            return None
+
+
+async def _load_latest_waiting_invoice_for_master(*, master_id: int):
+    async with session_local() as session:
+        return await PaymentInvoiceRepository(session).get_latest_waiting_for_master(master_id=int(master_id))
+
+
 def _pro_upgrade_keyboard(*, renew: bool) -> InlineKeyboardMarkup:
     text = "💎 Продлить Pro" if renew else "💎 Подключить Pro"
     return InlineKeyboardMarkup(
@@ -266,6 +290,12 @@ def _pro_upgrade_keyboard(*, renew: bool) -> InlineKeyboardMarkup:
 
 def _ends_on_str(day) -> str:
     return day.strftime("%d.%m.%Y")
+
+
+def _invoice_reminder_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="💳 Перейти к оплате", callback_data="billing:pro:start")]],
+    )
 
 
 @dataclass(frozen=True)
@@ -702,6 +732,59 @@ async def _send_booking_job(
     return False
 
 
+async def _send_pro_invoice_reminder_job(  # noqa: C901, PLR0911
+    *,
+    notifier: Notifier,
+    job: ScheduledNotificationJob,
+    chat_id: int,
+    now_utc: datetime,
+    plan_cache: dict[int, bool],
+) -> bool | None:
+    if job.master_id is None or job.invoice_id is None:
+        return False
+
+    master = await _load_master_for_notification(master_id=int(job.master_id))
+    if master is None:
+        return False
+
+    plan_is_pro = await _plan_is_pro(master_id=int(master.id), cache=plan_cache)
+    if plan_is_pro:
+        return False
+
+    invoice = await _load_invoice_for_notification(invoice_id=int(job.invoice_id))
+    if invoice is None:
+        return False
+    if int(invoice.master_id) != int(master.id):
+        return False
+    if str(invoice.status) != "waiting":
+        return False
+    if invoice.expires_at is not None and invoice.expires_at <= now_utc:
+        return False
+
+    latest_waiting = await _load_latest_waiting_invoice_for_master(master_id=int(master.id))
+    if latest_waiting is None or int(latest_waiting.id) != int(invoice.id):
+        return False
+
+    try:
+        return await notifier.maybe_send(
+            NotificationRequest(
+                event=NotificationEvent.PRO_INVOICE_REMINDER,
+                recipient=RecipientKind.MASTER,
+                chat_id=int(chat_id),
+                context=BillingContext(master_name=str(master.name)),
+                reply_markup=_invoice_reminder_keyboard(),
+                facts=NotificationFacts(
+                    event=NotificationEvent.PRO_INVOICE_REMINDER,
+                    recipient=RecipientKind.MASTER,
+                    chat_id=int(chat_id),
+                    plan_is_pro=bool(plan_is_pro),
+                ),
+            ),
+        )
+    except Exception:
+        return None
+
+
 async def _send_job(
     *,
     notifier: Notifier,
@@ -742,6 +825,14 @@ async def _send_job(
             return await _send_subscription_job(
                 notifier=notifier,
                 event=event,
+                job=job,
+                chat_id=chat_id,
+                now_utc=now_utc,
+                plan_cache=plan_cache,
+            )
+        if recipient == RecipientKind.MASTER and event in _BILLING_EVENTS:
+            return await _send_pro_invoice_reminder_job(
+                notifier=notifier,
                 job=job,
                 chat_id=chat_id,
                 now_utc=now_utc,

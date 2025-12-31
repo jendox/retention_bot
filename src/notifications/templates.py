@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from src.notifications.context import (
+    BillingContext,
     BookingContext,
     LimitsContext,
     OnboardingContext,
@@ -138,17 +139,17 @@ ONBOARDING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[On
 
 SUBSCRIPTION_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[SubscriptionContext], str]] = {
     (NotificationEvent.TRIAL_EXPIRING_D3, RecipientKind.MASTER): lambda context: (
-        "⏳ До конца Pro‑триала осталось 3 дня.\n\n"
+        "⏳ До конца пробного периода Pro подписки осталось 3 дня.\n\n"
         f"<b>Доступ до:</b> {context.ends_on}\n\n"
         "Если хочешь сохранить напоминания и переносы — можно подключить Pro заранее."
     ),
     (NotificationEvent.TRIAL_EXPIRING_D1, RecipientKind.MASTER): lambda context: (
-        "⏳ Pro‑триал заканчивается завтра.\n\n"
+        "⏳ Пробный период Pro подписки заканчивается завтра.\n\n"
         f"<b>Доступ до:</b> {context.ends_on}\n\n"
         "Если Pro нужен дальше — можно подключить заранее."
     ),
     (NotificationEvent.TRIAL_EXPIRING_D0, RecipientKind.MASTER): lambda context: (
-        "⏳ Сегодня последний день Pro‑триала.\n\n"
+        "⏳ Сегодня последний день пробного периода Pro подписки.\n\n"
         f"<b>Доступ до конца дня:</b> {context.ends_on}\n\n"
         "Если хочешь продолжить пользоваться функциями Pro — можно подключить в любой момент."
     ),
@@ -171,6 +172,15 @@ SUBSCRIPTION_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[
     (NotificationEvent.PRO_EXPIRED_RECOVERY_D1, RecipientKind.MASTER): lambda context: (
         "Pro истёк.\n\n"
         "Если хочешь вернуть напоминания и переносы — можно продлить Pro."
+    ),
+}
+
+
+BILLING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[BillingContext], str]] = {
+    (NotificationEvent.PRO_INVOICE_REMINDER, RecipientKind.MASTER): lambda context: (
+        "💎 Похоже, ты начинал подключение Pro, но не успел оплатить.\n\n"
+        "Если Pro всё ещё нужен — нажми кнопку ниже, мы снова покажем счёт.\n"
+        "Если уже не актуально — просто игнорируй это сообщение."
     ),
 }
 
@@ -231,6 +241,18 @@ def render_subscription_template(
         ev.debug(
             "notifications.unsupported_template",
             template="subscription",
+            event=event.value,
+            recipient=recipient.value,
+        )
+    return fn(context) if fn else ""
+
+
+def render_billing_template(*, event: NotificationEvent, recipient: RecipientKind, context: BillingContext) -> str:
+    fn = BILLING_TEMPLATES.get((event, recipient))
+    if fn is None:
+        ev.debug(
+            "notifications.unsupported_template",
+            template="billing",
             event=event.value,
             recipient=recipient.value,
         )

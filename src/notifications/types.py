@@ -44,3 +44,5 @@ class NotificationEvent(StrEnum):
     PRO_EXPIRING_D2 = "pro_expiring_d2"
     PRO_EXPIRING_D0 = "pro_expiring_d0"
     PRO_EXPIRED_RECOVERY_D1 = "pro_expired_recovery_d1"
+
+    PRO_INVOICE_REMINDER = "pro_invoice_reminder"

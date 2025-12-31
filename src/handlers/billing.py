@@ -15,6 +15,7 @@ from src.observability.events import EventLogger
 from src.paywall import build_paywall_keyboard, build_upgrade_button_with_fallback
 from src.repositories.master import MasterNotFound, MasterRepository
 from src.repositories.payment_invoice import PaymentInvoiceRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.settings import get_settings
 from src.texts import billing as txt, paywall as paywall_txt
 from src.texts.buttons import btn_back, btn_cancel, btn_go_pro
@@ -50,6 +51,26 @@ _CONFIRM_PAYWALL_PREFIX = "billing:pro:confirm_paywall:"
 _CONFIRM_PAYWALL_CANCEL_PREFIX = "billing:pro:confirm_paywall_cancel:"
 
 _MASTER_SETTINGS_BACK_MENU_CB = "m:settings:back_menu"
+
+
+async def _schedule_pro_invoice_reminder_best_effort(
+    session,
+    *,
+    master_telegram_id: int,
+    invoice_id: int,
+) -> None:
+    try:
+        master = await MasterRepository(session).get_by_telegram_id(int(master_telegram_id))
+        await ScheduledNotificationRepository(session).schedule_pro_invoice_payment_reminder(
+            master_id=int(master.id),
+            master_telegram_id=int(master.telegram_id),
+            master_timezone=str(master.timezone.value),
+            invoice_id=int(invoice_id),
+            now_utc=datetime.now(UTC),
+        )
+    except Exception:
+        # Best-effort: invoice reminder should never break the billing flow.
+        ev.warning("billing.invoice_reminder_schedule_failed", invoice_id=int(invoice_id))
 
 
 def _kb_invoice(*, invoice_url: str | None, invoice_id: int, contact: str) -> InlineKeyboardMarkup:
@@ -590,6 +611,12 @@ async def _create_and_show_invoice(
                 reuse_waiting=reuse_waiting,
             ),
         )
+        if result.ok and result.invoice is not None:
+            await _schedule_pro_invoice_reminder_best_effort(
+                session,
+                master_telegram_id=callback.from_user.id,
+                invoice_id=int(result.invoice.id),
+            )
 
     if not result.ok:
         ev.info(
@@ -696,6 +723,12 @@ async def _create_and_show_renewal_invoice(
                 reuse_waiting=reuse_waiting,
             ),
         )
+        if result.ok and result.invoice is not None:
+            await _schedule_pro_invoice_reminder_best_effort(
+                session,
+                master_telegram_id=callback.from_user.id,
+                invoice_id=int(result.invoice.id),
+            )
 
     if not result.ok:
         ev.info(

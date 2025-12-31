@@ -22,6 +22,10 @@ class ScheduledNotification(Base):
     master_id: Mapped[int | None] = mapped_column(ForeignKey("masters.id", ondelete="CASCADE"), nullable=True)
     client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id", ondelete="CASCADE"), nullable=True)
     booking_id: Mapped[int | None] = mapped_column(ForeignKey("bookings.id", ondelete="CASCADE"), nullable=True)
+    invoice_id: Mapped[int | None] = mapped_column(
+        ForeignKey("payment_invoices.id", ondelete="CASCADE"),
+        nullable=True,
+    )
 
     # used to invalidate reminders on reschedule (start_at change)
     booking_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -51,4 +55,5 @@ class ScheduledNotification(Base):
     __table_args__ = (
         Index("ix_scheduled_notifications_status_due", "status", "due_at"),
         Index("ix_scheduled_notifications_booking_event", "booking_id", "event"),
+        Index("ix_scheduled_notifications_invoice_event", "invoice_id", "event"),
     )
