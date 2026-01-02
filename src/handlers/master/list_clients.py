@@ -21,7 +21,7 @@ from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, master_list_clients as txt
 from src.texts.buttons import btn_back, btn_close
 from src.texts.master_client_card import ClientHints, ClientSummary, card as render_client_card
-from src.utils import format_phone_display, format_phone_e164
+from src.utils import format_phone_display, format_phone_e164, format_phone_masked_compact
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
@@ -149,7 +149,7 @@ def _render_client_line(client, *, index: int) -> str:
     name_raw = getattr(client, "name", None) or common_txt.label_default_client()
     name = html_escape(str(name_raw))
     phone = getattr(client, "phone", None)
-    phone_part = f"{txt.phone_sep()}{html_escape(str(phone))}" if phone else ""
+    phone_part = f"{txt.phone_sep()}{html_escape(format_phone_masked_compact(str(phone)))}" if phone else ""
     offline_badge = common_txt.label_offline_badge() if getattr(client, "telegram_id", None) is None else ""
     return f"{index}. {name}{phone_part}{offline_badge}"
 
@@ -158,7 +158,7 @@ def _render_client_label(client) -> str:
     name_raw = getattr(client, "name", None) or common_txt.label_default_client()
     name = html_escape(str(name_raw))
     phone = getattr(client, "phone", None)
-    phone_part = f"{txt.phone_sep()}{html_escape(format_phone_display(str(phone)))}" if phone else ""
+    phone_part = f"{txt.phone_sep()}{html_escape(format_phone_masked_compact(str(phone)))}" if phone else ""
     offline_badge = common_txt.label_offline_badge() if getattr(client, "telegram_id", None) is None else ""
     return f"{name}{phone_part}{offline_badge}".strip()
 

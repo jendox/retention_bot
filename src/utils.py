@@ -261,6 +261,31 @@ def format_phone_e164(value: str, region: str = "BY") -> str:
         return value
 
 
+def format_phone_masked_compact(value: str, region: str = "BY") -> str:
+    """
+    Compact phone masking for list views.
+
+    Example (BY): +37529*****11
+    """
+    try:
+        number = phonenumbers.parse(value, region)
+        if not phonenumbers.is_valid_number(number):
+            raise ValueError()
+        e164 = phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)  # +375291234567
+        digits = e164.lstrip("+")
+        if len(digits) < 4:  # noqa: PLR2004
+            raise ValueError()
+        prefix_len = 5 if len(digits) >= 7 else max(1, len(digits) - 2)  # +CCC + 2 digits typically
+        prefix = digits[:prefix_len]
+        suffix = digits[-2:]
+        return f"+{prefix}{'*' * 5}{suffix}"
+    except (NumberParseException, ValueError):
+        raw_digits = "".join(ch for ch in str(value) if ch.isdigit())
+        if len(raw_digits) >= 2:
+            return f"{'*' * 5}{raw_digits[-2:]}"
+        return str(value)
+
+
 def styled_text(text: str, color: str = None, bold: bool = False, italic: bool = False) -> str:
     """Форматирование текста с разными стилями"""
     styles = []

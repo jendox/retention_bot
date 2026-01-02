@@ -14,6 +14,8 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", text)
         self.assertNotIn("<b>", text)
         self.assertIn("📵", text)
+        self.assertIn("+37529*****67", text)
+        self.assertNotIn("+375291234567", text)
 
     def test_no_placeholder_nav_buttons_when_single_page(self) -> None:
         from src.handlers.master import list_clients as h
