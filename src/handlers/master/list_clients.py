@@ -21,7 +21,7 @@ from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, master_list_clients as txt
 from src.texts.buttons import btn_back, btn_close
 from src.texts.master_client_card import ClientHints, ClientSummary, card as render_client_card
-from src.utils import format_phone_display, format_phone_e164, format_phone_masked_compact
+from src.utils import format_phone_e164, format_phone_masked_compact
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)

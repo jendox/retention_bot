@@ -267,22 +267,32 @@ def format_phone_masked_compact(value: str, region: str = "BY") -> str:
 
     Example (BY): +37529*****11
     """
+    stars = 5
+    min_suffix_digits = 2
+    min_digits_total = 4
+    default_prefix_len = 5
+    long_number_min_digits = 7
     try:
         number = phonenumbers.parse(value, region)
         if not phonenumbers.is_valid_number(number):
             raise ValueError()
         e164 = phonenumbers.format_number(number, phonenumbers.PhoneNumberFormat.E164)  # +375291234567
         digits = e164.lstrip("+")
-        if len(digits) < 4:  # noqa: PLR2004
+        if len(digits) < min_digits_total:
             raise ValueError()
-        prefix_len = 5 if len(digits) >= 7 else max(1, len(digits) - 2)  # +CCC + 2 digits typically
+        # +CCC + 2 digits typically
+        prefix_len = (
+            default_prefix_len
+            if len(digits) >= long_number_min_digits
+            else max(1, len(digits) - min_suffix_digits)
+        )
         prefix = digits[:prefix_len]
-        suffix = digits[-2:]
-        return f"+{prefix}{'*' * 5}{suffix}"
+        suffix = digits[-min_suffix_digits:]
+        return f"+{prefix}{'*' * stars}{suffix}"
     except (NumberParseException, ValueError):
         raw_digits = "".join(ch for ch in str(value) if ch.isdigit())
-        if len(raw_digits) >= 2:
-            return f"{'*' * 5}{raw_digits[-2:]}"
+        if len(raw_digits) >= min_suffix_digits:
+            return f"{'*' * stars}{raw_digits[-min_suffix_digits:]}"
         return str(value)
 
 

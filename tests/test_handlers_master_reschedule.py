@@ -147,8 +147,9 @@ class MasterRescheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
         from src.handlers.master import reschedule as h
 
         state = MemoryState()
-        original_slot = datetime(2025, 12, 31, 10, 30, tzinfo=UTC)
-        other_slot = datetime(2025, 12, 31, 11, 0, tzinfo=UTC)
+        base = datetime.now(UTC) + timedelta(days=1)
+        original_slot = base.replace(hour=10, minute=30, second=0, microsecond=0)
+        other_slot = base.replace(hour=11, minute=0, second=0, microsecond=0)
         await state.update_data(
             reschedule_booking_id=7,
             reschedule_master_id=1,
@@ -166,7 +167,7 @@ class MasterRescheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         class _Calendar:
             async def process_selection(self, callback, callback_data):
-                return True, datetime(2025, 12, 31, tzinfo=UTC)
+                return True, base
 
             async def start_calendar(self):
                 return SimpleNamespace()

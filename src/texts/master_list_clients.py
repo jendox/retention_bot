@@ -26,7 +26,7 @@ def phone_sep(*, t: Translator = _noop_t) -> str:
 
 
 def btn_placeholder(*, t: Translator = _noop_t) -> str:
-    return t("·")
+    return t(" ")
 
 
 def btn_find(*, t: Translator = _noop_t) -> str:

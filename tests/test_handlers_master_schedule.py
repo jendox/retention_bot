@@ -38,12 +38,12 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
         from src.handlers.master import schedule as h
         from src.schemas.enums import AttendanceOutcome, BookingStatus
 
-        base = dict(
-            id=1,
-            start_at=datetime(2025, 12, 31, 10, 30, tzinfo=UTC),
-            status=BookingStatus.CONFIRMED,
-            client=SimpleNamespace(name="C"),
-        )
+        base = {
+            "id": 1,
+            "start_at": datetime(2025, 12, 31, 10, 30, tzinfo=UTC),
+            "status": BookingStatus.CONFIRMED,
+            "client": SimpleNamespace(name="C"),
+        }
 
         attended = SimpleNamespace(**base, attendance_outcome=AttendanceOutcome.ATTENDED)
         no_show = SimpleNamespace(**base, attendance_outcome=AttendanceOutcome.NO_SHOW)
