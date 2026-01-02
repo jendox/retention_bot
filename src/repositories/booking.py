@@ -247,6 +247,7 @@ class BookingRepository(BaseRepository):
         self,
         *,
         client_id: int,
+        now_utc: datetime | None = None,
         statuses: set[BookingStatus] | None = None,
         limit: int = 30,
     ) -> list[BookingForReview]:
@@ -262,6 +263,9 @@ class BookingRepository(BaseRepository):
         )
         if statuses:
             stmt = stmt.where(BookingEntity.status.in_(statuses))
+        if now_utc is not None:
+            end_at_expr = BookingEntity.start_at + (BookingEntity.duration_min * text("INTERVAL '1 minute'"))
+            stmt = stmt.where(end_at_expr > now_utc)
 
         result = await self._session.execute(stmt)
 

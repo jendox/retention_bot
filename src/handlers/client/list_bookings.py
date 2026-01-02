@@ -311,8 +311,10 @@ async def _fetch_client_bookings(
         except ClientNotFound:
             return None
 
+        now_utc = datetime.now(UTC)
         bookings = await booking_repo.get_for_client(
             client_id=client.id,
+            now_utc=now_utc,
             statuses=BookingStatus.active(),
             limit=50,
         )

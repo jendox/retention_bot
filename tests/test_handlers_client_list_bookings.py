@@ -18,6 +18,51 @@ async def _fake_session_local():
 
 
 class ClientListBookingsHandlerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fetch_client_bookings_passes_now_utc_filter(self) -> None:
+        from src.handlers.client import list_bookings as h
+        from src.schemas.enums import BookingStatus, Timezone
+
+        class _ClientRepo:
+            def __init__(self, session) -> None:
+                pass
+
+            async def get_by_telegram_id(self, telegram_id: int):
+                return SimpleNamespace(id=2, timezone=Timezone("Europe/Minsk"))
+
+        captured = {}
+
+        class _BookingRepo:
+            def __init__(self, session) -> None:
+                pass
+
+            async def get_for_client(self, *, client_id: int, now_utc=None, statuses=None, limit: int = 30):
+                captured["client_id"] = client_id
+                captured["now_utc"] = now_utc
+                captured["statuses"] = statuses
+                captured["limit"] = limit
+                return []
+
+        before = datetime.now(UTC)
+        with (
+            patch.object(h, "session_local", _fake_session_local),
+            patch.object(h, "ClientRepository", _ClientRepo),
+            patch.object(h, "BookingRepository", _BookingRepo),
+        ):
+            tz, bookings = await h._fetch_client_bookings(telegram_id=123)
+        after = datetime.now(UTC)
+
+        self.assertEqual(str(tz.value), "Europe/Minsk")
+        self.assertEqual(bookings, [])
+
+        passed_now = captured.get("now_utc")
+        self.assertIsInstance(passed_now, datetime)
+        self.assertIs(passed_now.tzinfo, UTC)
+        self.assertGreaterEqual(passed_now, before)
+        self.assertLessEqual(passed_now, after)
+        self.assertEqual(captured.get("client_id"), 2)
+        self.assertEqual(captured.get("statuses"), BookingStatus.active())
+        self.assertEqual(captured.get("limit"), 50)
+
     async def test_cancel_sends_master_notification_via_notifier(self) -> None:
         from src.handlers.client import list_bookings as h
         from src.schemas.enums import Timezone
