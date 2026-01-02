@@ -61,3 +61,14 @@ class MasterListClientsHandlerTests(unittest.IsolatedAsyncioTestCase):
             await h.master_clients_pagination(callback)
 
         callback.message.edit_reply_markup.assert_awaited_with(reply_markup=None)
+
+    def test_client_card_shows_write_button_only_for_online(self) -> None:
+        from src.handlers.master import list_clients as h
+
+        kb_offline = h._kb_client_card(client_id=1, page=1, chunk=1, telegram_id=None)
+        texts_offline = [btn.text for row in kb_offline.inline_keyboard for btn in row]
+        self.assertNotIn("💬 Написать клиенту", texts_offline)
+
+        kb_online = h._kb_client_card(client_id=1, page=1, chunk=1, telegram_id=123)
+        self.assertEqual(["➕ Записать клиента", "📅 История записей"], [b.text for b in kb_online.inline_keyboard[0]])
+        self.assertEqual(["💬 Написать клиенту"], [b.text for b in kb_online.inline_keyboard[1]])

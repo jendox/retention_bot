@@ -574,20 +574,22 @@ def _card_action_cb(action: str, *, client_id: int, page: int, chunk: int) -> st
 
 def _kb_client_card(*, client_id: int, page: int, chunk: int, telegram_id: int | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Записать клиента",
+                callback_data=_card_action_cb("book", client_id=client_id, page=page, chunk=chunk),
+            ),
+            InlineKeyboardButton(
+                text="📅 История записей",
+                callback_data=_card_action_cb("history", client_id=client_id, page=page, chunk=chunk),
+            ),
+        ],
+    )
     if telegram_id is not None:
-        rows.append([InlineKeyboardButton(text="💬 Написать в Telegram", url=f"tg://user?id={int(telegram_id)}")])
+        rows.append([InlineKeyboardButton(text="💬 Написать клиенту", url=f"tg://user?id={int(telegram_id)}")])
     rows.extend(
         [
-            [
-                InlineKeyboardButton(
-                    text="➕ Записать клиента",
-                    callback_data=_card_action_cb("book", client_id=client_id, page=page, chunk=chunk),
-                ),
-                InlineKeyboardButton(
-                    text="📅 История записей",
-                    callback_data=_card_action_cb("history", client_id=client_id, page=page, chunk=chunk),
-                ),
-            ],
             [
                 InlineKeyboardButton(
                     text="✏️ Редактировать клиента",
