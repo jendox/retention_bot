@@ -153,6 +153,13 @@ def _button_text(booking, tz: ZoneInfo, scope: Scope) -> str:
     """Text shown on booking buttons."""
     local_dt = booking.start_at.astimezone(tz)
     badge = status_badge(booking.status)
+    if scope in Scope.history() and booking.status == BookingStatus.CONFIRMED:
+        attendance = getattr(booking, "attendance_outcome", AttendanceOutcome.UNKNOWN)
+        badge = {
+            AttendanceOutcome.ATTENDED: "✅",
+            AttendanceOutcome.NO_SHOW: "🔴",
+            AttendanceOutcome.UNKNOWN: "🕒",
+        }.get(attendance, "🕒")
 
     client = getattr(booking, "client", None)
     client_name = getattr(client, "name", None) or txt.client_fallback(client_id=getattr(booking, "client_id", ""))

@@ -141,8 +141,8 @@ def attendance_label(*, outcome: AttendanceOutcome, t: Translator = _noop_t) -> 
     if outcome == AttendanceOutcome.ATTENDED:
         return t("✅ Пришёл")
     if outcome == AttendanceOutcome.NO_SHOW:
-        return t("❌ Не пришёл")
-    return t("— не отмечено")
+        return t("🔴 Не пришёл")
+    return t("🕒 Не отмечено")
 
 
 def attendance_line(*, outcome: AttendanceOutcome, t: Translator = _noop_t) -> str:

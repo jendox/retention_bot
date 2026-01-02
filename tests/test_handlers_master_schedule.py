@@ -34,6 +34,38 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;b&gt;X&lt;/b&gt;", text)
         self.assertNotIn("<b>", text)
 
+    def test_history_buttons_show_attendance_badge_for_confirmed(self) -> None:
+        from src.handlers.master import schedule as h
+        from src.schemas.enums import AttendanceOutcome, BookingStatus
+
+        base = dict(
+            id=1,
+            start_at=datetime(2025, 12, 31, 10, 30, tzinfo=UTC),
+            status=BookingStatus.CONFIRMED,
+            client=SimpleNamespace(name="C"),
+        )
+
+        attended = SimpleNamespace(**base, attendance_outcome=AttendanceOutcome.ATTENDED)
+        no_show = SimpleNamespace(**base, attendance_outcome=AttendanceOutcome.NO_SHOW)
+        unknown = SimpleNamespace(**base, attendance_outcome=AttendanceOutcome.UNKNOWN)
+
+        self.assertTrue(h._button_text(attended, tz=h.ZoneInfo("UTC"), scope=h.Scope.YESTERDAY).startswith("✅ "))
+        self.assertTrue(h._button_text(no_show, tz=h.ZoneInfo("UTC"), scope=h.Scope.YESTERDAY).startswith("🔴 "))
+        self.assertTrue(h._button_text(unknown, tz=h.ZoneInfo("UTC"), scope=h.Scope.YESTERDAY).startswith("🕒 "))
+
+    def test_history_buttons_keep_status_badge_for_non_confirmed(self) -> None:
+        from src.handlers.master import schedule as h
+        from src.schemas.enums import BookingStatus
+
+        booking = SimpleNamespace(
+            id=1,
+            start_at=datetime(2025, 12, 31, 10, 30, tzinfo=UTC),
+            status=BookingStatus.CANCELLED,
+            client=SimpleNamespace(name="C"),
+        )
+        text = h._button_text(booking, tz=h.ZoneInfo("UTC"), scope=h.Scope.HISTORY_WEEK)
+        self.assertTrue(text.startswith("🚫 "))
+
     async def test_cancel_enqueues_client_notification(self) -> None:
         from src.handlers.master import schedule as h
         from src.schemas.enums import Timezone
