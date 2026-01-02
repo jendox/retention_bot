@@ -3,6 +3,8 @@ from __future__ import annotations
 import html
 from datetime import datetime
 
+from src.texts import common as common_txt
+
 
 def pro_invoice_created(*, days: int, price_byn: float) -> str:
     return (
@@ -135,7 +137,8 @@ def _format_tariffs_message(
         "• Неограниченная база клиентов и записей\n"
         "• Быстрый перенос записи без лишней переписки\n"
         "• Напоминания отметить явку клиента\n\n"
-        f"Стоимость <b>Pro</b>: <b>{price_str} BYN</b> за <b>{pro_days}</b> дней."
+        f"Стоимость <b>Pro</b>: <b>{price_str} BYN</b> за <b>{pro_days}</b> дней.\n\n"
+        f"{common_txt.subscription_payment_disclaimer()}"
     )
 
 

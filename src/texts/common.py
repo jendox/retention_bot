@@ -41,3 +41,10 @@ def invalid_command(*, t: Translator = _noop_t) -> str:
 
 def input_choose_action(*, t: Translator = _noop_t) -> str:
     return t("Выбери действие")
+
+
+def subscription_payment_disclaimer(*, t: Translator = _noop_t) -> str:
+    return t(
+        "ℹ️ Мы <b>не принимаем оплату за твои услуги</b> и <b>не видим твоих доходов.</b> "
+        "Оплата нужна <b>только</b> за подписку на бота.",
+    )
