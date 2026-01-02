@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -104,15 +104,18 @@ class ClientBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         free = SimpleNamespace(slots_utc=[], slots_for_client=[])
 
-        class _Calendar:
-            async def start_calendar(self):
-                return SimpleNamespace()
-
         safe_edit = AsyncMock()
+        limits = h.month_calendar.CalendarLimits(
+            today=date(2025, 12, 30),
+            min_date=date(2025, 12, 31),
+            max_date=date(2026, 1, 6),
+            pro_max_date=date(2026, 2, 28),
+            plan_is_pro=False,
+        )
         with (
             patch.object(h, "session_local", _fake_session_local),
             patch.object(h, "_get_free_slots", AsyncMock(return_value=free)),
-            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(h, "_calendar_limits", AsyncMock(return_value=limits)),
             patch.object(h, "safe_edit_text", safe_edit),
         ):
             await h._recover_after_slot_not_available(callback=callback, state=state)
@@ -137,13 +140,16 @@ class ClientBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
 
-        class _Calendar:
-            async def start_calendar(self, *, year=None, month=None):  # noqa: ANN001
-                return SimpleNamespace(year=year, month=month)
-
         safe_edit = AsyncMock()
+        limits = h.month_calendar.CalendarLimits(
+            today=date.today(),
+            min_date=date.today() + timedelta(days=1),
+            max_date=date.today() + timedelta(days=7),
+            pro_max_date=date.today() + timedelta(days=60),
+            plan_is_pro=False,
+        )
         with (
-            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(h, "_calendar_limits", AsyncMock(return_value=limits)),
             patch.object(h, "track_callback_message", AsyncMock()),
             patch.object(h, "safe_edit_text", safe_edit),
         ):
@@ -223,3 +229,35 @@ class ClientBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         callback.answer.assert_awaited()
         callback_message.answer.assert_not_awaited()
+
+    async def test_locked_date_click_shows_toast(self) -> None:
+        from src.handlers.client import booking as h
+
+        state = MemoryState()
+        await state.update_data(master_id=1, client_timezone="Europe/Minsk", booking_calendar_month="202601")
+        await state.set_state(h.ClientBooking.selecting_date)
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            data=f"{h.MONTH_CAL_PREFIX}:l:20260110",
+            message=SimpleNamespace(edit_text=AsyncMock()),
+            answer=AsyncMock(),
+        )
+
+        limits = h.month_calendar.CalendarLimits(
+            today=date(2026, 1, 2),
+            min_date=date(2026, 1, 3),
+            max_date=date(2026, 1, 9),
+            pro_max_date=date(2026, 3, 2),
+            plan_is_pro=False,
+        )
+
+        with (
+            patch.object(h, "_calendar_limits", AsyncMock(return_value=limits)),
+            patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
+            patch.object(h, "track_callback_message", AsyncMock()),
+        ):
+            await h.process_booking_calendar_month(callback=callback, state=state)
+
+        callback.answer.assert_awaited()
+        callback.message.edit_text.assert_not_awaited()

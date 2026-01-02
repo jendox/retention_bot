@@ -8,8 +8,6 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
-from aiogram_calendar.schemas import SimpleCalAct
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone, to_zone
@@ -35,7 +33,6 @@ from src.texts.client_booking import (
     available_dates,
     booking_limit_reached,
     booking_not_saved,
-    choose_date,
     choose_master,
     choose_time,
     confirm_details,
@@ -47,6 +44,7 @@ from src.texts.client_booking import (
     state_broken_alert,
 )
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
+from src.ui import month_calendar
 from src.use_cases.create_client_booking import (
     CreateClientBooking,
     CreateClientBookingError,
@@ -64,6 +62,9 @@ ev = EventLogger(__name__)
 BOOKING_BUCKET = "client_booking"
 SLOTS_BACK_TO_CALENDAR_CB = "book:back:calendar"
 CONFIRM_BACK_TO_SLOTS_CB = "book:back:slots"
+MONTH_CAL_PREFIX = "book:mc"
+_STATE_CAL_MONTH = "booking_calendar_month"
+_FREE_BOOKING_HORIZON_DAYS = 7
 
 
 class ClientBooking(StatesGroup):
@@ -139,6 +140,14 @@ def _build_master_booking_review_keyboard(booking_id: int) -> InlineKeyboardMark
             ],
         ],
     )
+
+
+def _calendar_prompt_text() -> str:
+    return "Выберите дату 📅\nДоступно: до 7 дней (Free) / до 60 дней (Pro)"
+
+
+def _calendar_paywall_text() -> str:
+    return "У мастера Free‑тариф — запись доступна только на 7 дней вперёд."
 
 
 async def start_client_add_booking(
@@ -225,23 +234,14 @@ async def start_booking_for_master(
             await message.answer(booking_limit_reached())
             return
 
-    calendar = SimpleCalendar()
-    reply_markup = await calendar.start_calendar()
-
     await answer_tracked(
         message,
         state,
-        text=choose_date(),
-        reply_markup=reply_markup,
+        text=_calendar_prompt_text(),
+        reply_markup=await _calendar_markup(state),
         bucket=BOOKING_BUCKET,
     )
     await state.set_state(ClientBooking.selecting_date)
-
-
-def _get_client_day(picked_date: datetime, *, client_tz_info) -> date:
-    if picked_date.tzinfo is None:
-        return picked_date.date()
-    return picked_date.astimezone(client_tz_info).date()
 
 
 async def _load_calendar_context(state: FSMContext) -> tuple[int, Timezone] | None:
@@ -254,6 +254,54 @@ async def _load_calendar_context(state: FSMContext) -> tuple[int, Timezone] | No
     if tz is None:
         return None
     return int(master_id), tz
+
+
+async def _calendar_limits(state: FSMContext) -> month_calendar.CalendarLimits | None:
+    ctx = await _load_calendar_context(state)
+    if ctx is None:
+        return None
+    master_id, client_timezone = ctx
+    client_tz_info = get_timezone(str(client_timezone.value))
+
+    today_client = datetime.now(tz=client_tz_info).date()
+    min_date = today_client + timedelta(days=1)
+    async with session_local() as session:
+        entitlements = EntitlementsService(session)
+        horizon_days = int(await entitlements.max_booking_horizon_days(master_id=master_id))
+    max_date = today_client + timedelta(days=horizon_days)
+    pro_max_date = today_client + timedelta(days=PRO_BOOKING_HORIZON_DAYS)
+    plan_is_pro = horizon_days > _FREE_BOOKING_HORIZON_DAYS
+    return month_calendar.CalendarLimits(
+        today=today_client,
+        min_date=min_date,
+        max_date=max_date,
+        pro_max_date=pro_max_date,
+        plan_is_pro=plan_is_pro,
+    )
+
+
+def _month_ref_from_state(data: dict, *, today: date) -> month_calendar.MonthRef:
+    raw = data.get(_STATE_CAL_MONTH)
+    parsed = month_calendar.parse_month(str(raw)) if raw else None
+    return parsed or month_calendar.MonthRef(year=int(today.year), month=int(today.month))
+
+
+async def _calendar_markup(state: FSMContext, *, month: month_calendar.MonthRef | None = None) -> InlineKeyboardMarkup:
+    data = await state.get_data()
+    limits = await _calendar_limits(state)
+    if limits is None:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data="book:cancel_flow")]],
+        )
+
+    month_ref = month or _month_ref_from_state(data, today=limits.today)
+    controls = month_calendar.CalendarControls(
+        cancel_text=btn_cancel(),
+        cancel_callback_data="book:cancel_flow",
+        show_pro_button=False,
+    )
+    await state.update_data(_STATE_CAL_MONTH=f"{int(month_ref.year):04d}{int(month_ref.month):02d}")
+    return month_calendar.build(prefix=MONTH_CAL_PREFIX, month=month_ref, limits=limits, controls=controls)
 
 
 async def _validate_booking_day(
@@ -277,16 +325,7 @@ async def _get_free_slots(session, *, master_id: int, client_day: date, client_t
     return await use_case.execute(master_id=master_id, client_day=client_day, client_tz=client_tz)
 
 
-async def _handle_calendar_cancel(callback: CallbackQuery, state: FSMContext, *, act: SimpleCalAct) -> bool:
-    if act != SimpleCalAct.cancel:
-        return False
-    await callback.answer(booking_not_saved())
-    await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
-    await state.clear()
-    return True
-
-
-async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContext, *, picked_date: datetime) -> None:
+async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContext, *, client_day: date) -> None:
     ctx = await _load_calendar_context(state)
     if ctx is None:
         ev.warning("client_booking.state_invalid", reason="missing_master_or_timezone")
@@ -295,8 +334,7 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
     master_id, client_timezone = ctx
 
     client_tz_info = get_timezone(str(client_timezone.value))
-    client_day = _get_client_day(picked_date, client_tz_info=client_tz_info)
-    calendar_month_year = (int(client_day.year), int(client_day.month))
+    month_ref = month_calendar.MonthRef(year=int(client_day.year), month=int(client_day.month))
 
     async with session_local() as session:
         allowed, min_date, max_date, pro_max_date = await _validate_booking_day(
@@ -316,12 +354,10 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
                 show_alert=True,
             )
             if callback.message is not None:
-                calendar = SimpleCalendar()
-                reply_markup = await calendar.start_calendar(year=calendar_month_year[0], month=calendar_month_year[1])
                 await safe_edit_text(
                     callback.message,
-                    text=choose_date(),
-                    reply_markup=reply_markup,
+                    text=_calendar_prompt_text(),
+                    reply_markup=await _calendar_markup(state, month=month_ref),
                     ev=ev,
                     event="client_booking.edit_calendar_restore_out_of_range_failed",
                 )
@@ -339,12 +375,10 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
         ev.info("client_booking.no_slots", master_id=int(master_id), day=str(client_day))
         await callback.answer(no_available_slots(), show_alert=False)
         if callback.message is not None:
-            calendar = SimpleCalendar()
-            reply_markup = await calendar.start_calendar(year=calendar_month_year[0], month=calendar_month_year[1])
             await safe_edit_text(
                 callback.message,
                 text=no_available_slots(),
-                reply_markup=reply_markup,
+                reply_markup=await _calendar_markup(state, month=month_ref),
                 ev=ev,
                 event="client_booking.edit_calendar_restore_no_slots_failed",
             )
@@ -368,14 +402,116 @@ async def _handle_booking_day_selected(callback: CallbackQuery, state: FSMContex
     await state.set_state(ClientBooking.selecting_slot)
 
 
+async def _mc_show_calendar(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    month_ref: month_calendar.MonthRef,
+    event: str,
+) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=_calendar_prompt_text(),
+        reply_markup=await _calendar_markup(state, month=month_ref),
+        ev=ev,
+        event=event,
+    )
+
+
+async def _mc_show_paywall(
+    callback: CallbackQuery,
+    *,
+    shown_month: month_calendar.MonthRef,
+) -> None:
+    _ = shown_month
+    await callback.answer(_calendar_paywall_text(), show_alert=False)
+
+
+async def _mc_context(state: FSMContext) -> tuple[month_calendar.CalendarLimits, month_calendar.MonthRef] | None:
+    limits = await _calendar_limits(state)
+    if limits is None:
+        return None
+    data = await state.get_data()
+    return limits, _month_ref_from_state(data, today=limits.today)
+
+
+async def _mc_handle_today(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    limits: month_calendar.CalendarLimits,
+) -> None:
+    await _mc_show_calendar(
+        callback,
+        state,
+        month_ref=month_calendar.MonthRef(year=int(limits.today.year), month=int(limits.today.month)),
+        event="client_booking.edit_calendar_today_failed",
+    )
+
+
+async def _mc_handle_month(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    shown_month: month_calendar.MonthRef,
+    arg: str | None,
+) -> None:
+    await _mc_show_calendar(
+        callback,
+        state,
+        month_ref=month_calendar.parse_month(arg) or shown_month,
+        event="client_booking.edit_calendar_month_failed",
+    )
+
+
+async def _mc_handle_day(callback: CallbackQuery, state: FSMContext, *, arg: str | None) -> None:
+    picked_day = month_calendar.parse_day(arg)
+    if picked_day is None:
+        await callback.answer(state_broken_alert(), show_alert=True)
+        return
+    ev.info("client_booking.day_selected", day=str(picked_day))
+    await _handle_booking_day_selected(callback, state, client_day=picked_day)
+
+
+async def _mc_dispatch_action(callback: CallbackQuery, state: FSMContext, *, action: str, arg: str | None) -> None:
+    ctx = await _mc_context(state)
+    if ctx is None:
+        await callback.answer(state_broken_alert(), show_alert=True)
+        return
+    limits, shown_month = ctx
+
+    if action == "today":
+        await _mc_handle_today(callback, state, limits=limits)
+    elif action == "m":
+        await _mc_handle_month(callback, state, shown_month=shown_month, arg=arg)
+    elif action in {"l", "pro"}:
+        await _mc_show_paywall(callback, shown_month=shown_month)
+    elif action == "d":
+        await _mc_handle_day(callback, state, arg=arg)
+    elif action in {"invalid", "noop"}:
+        await callback.answer()
+    else:
+        await callback.answer(state_broken_alert(), show_alert=True)
+
+
+async def _mc_dispatch(callback: CallbackQuery, state: FSMContext) -> None:
+    action, arg = month_calendar.parse(MONTH_CAL_PREFIX, callback.data)
+    if action in {"invalid", "noop"}:
+        await callback.answer()
+        return
+    await _mc_dispatch_action(callback, state, action=action, arg=arg)
+
+
 @router.callback_query(
     UserRole(ActiveRole.CLIENT),
     StateFilter(ClientBooking.selecting_date),
-    SimpleCalendarCallback.filter(),
+    F.data.startswith(f"{MONTH_CAL_PREFIX}:"),
 )
-async def process_booking_calendar(
+async def process_booking_calendar_month(
     callback: CallbackQuery,
-    callback_data: SimpleCalendarCallback,
     state: FSMContext,
     rate_limiter: RateLimiter | None = None,
 ) -> None:
@@ -383,17 +519,7 @@ async def process_booking_calendar(
     if not await rate_limit_callback(callback, rate_limiter, name="client_booking:pick_date", ttl_sec=1):
         return
     await track_callback_message(state, callback, bucket=BOOKING_BUCKET)
-
-    if await _handle_calendar_cancel(callback, state, act=callback_data.act):
-        return
-
-    calendar = SimpleCalendar()
-    selected, picked_date = await calendar.process_selection(callback, callback_data)
-    if not selected:
-        return
-
-    ev.info("client_booking.day_selected", day=str(picked_date.date()))
-    await _handle_booking_day_selected(callback, state, picked_date=picked_date)
+    await _mc_dispatch(callback, state)
 
 
 @router.callback_query(
@@ -464,22 +590,21 @@ async def booking_back_to_calendar(callback: CallbackQuery, state: FSMContext) -
         else:
             year_month = (client_day.year, client_day.month)
 
-    calendar = SimpleCalendar()
-    if year_month is None:
-        reply_markup = await calendar.start_calendar()
-    else:
-        reply_markup = await calendar.start_calendar(year=year_month[0], month=year_month[1])
-
     await state.update_data(
         booking_slots_utc=[],
         selected_slot_index=None,
         client_day=None,
     )
     if callback.message is not None:
+        month_ref = (
+            month_calendar.MonthRef(year=int(year_month[0]), month=int(year_month[1]))
+            if year_month is not None
+            else None
+        )
         await safe_edit_text(
             callback.message,
-            text=choose_date(),
-            reply_markup=reply_markup,
+            text=_calendar_prompt_text(),
+            reply_markup=await _calendar_markup(state, month=month_ref),
             ev=ev,
             event="client_booking.edit_calendar_restore_failed",
         )
@@ -760,12 +885,13 @@ async def _recover_after_slot_not_available(*, callback: CallbackQuery, state: F
         return
 
     if not free.slots_utc:
-        calendar = SimpleCalendar()
-        reply_markup = await calendar.start_calendar()
         await safe_edit_text(
             callback.message,
-            text=choose_date(),
-            reply_markup=reply_markup,
+            text=_calendar_prompt_text(),
+            reply_markup=await _calendar_markup(
+                state,
+                month=month_calendar.MonthRef(year=int(client_day.year), month=int(client_day.month)),
+            ),
             ev=ev,
             event="client_booking.edit_choose_date_failed",
         )

@@ -9,7 +9,6 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import get_timezone
@@ -22,6 +21,7 @@ from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.paywall import build_paywall_keyboard
+from src.plans import PRO_BOOKING_HORIZON_DAYS
 from src.rate_limiter import RateLimiter
 from src.repositories import BookingNotFound, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
@@ -30,6 +30,7 @@ from src.schemas.enums import BookingStatus, Timezone
 from src.settings import get_settings
 from src.texts import master_reschedule as txt, paywall as paywall_txt
 from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_go_pro
+from src.ui import month_calendar
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
 from src.use_cases.reschedule_master_booking import (
@@ -46,6 +47,9 @@ router = Router(name=__name__)
 
 CB_CONFIRM = "m:reschedule:confirm"
 CB_CANCEL = "m:reschedule:cancel"
+MONTH_CAL_PREFIX = "m:reschedule:mc"
+_STATE_CAL_MONTH = "reschedule_calendar_month"
+_FREE_BOOKING_HORIZON_DAYS = 7
 RESCHEDULE_BUCKET = "master_reschedule"
 
 
@@ -106,13 +110,68 @@ async def _send_and_track(
     await track_message(state, msg, bucket=RESCHEDULE_BUCKET)
 
 
+def _calendar_prompt_text() -> str:
+    return "Выберите дату 📅\nДоступно: до 7 дней (Free) / до 60 дней (Pro)"
+
+
+def _calendar_paywall_text() -> str:
+    return "Даты дальше 7 дней доступны в Pro 🔒\n\nPro даёт запись до 60 дней вперёд."
+
+
+def _month_ref_from_state(data: dict, *, today: date) -> month_calendar.MonthRef:
+    raw = data.get(_STATE_CAL_MONTH)
+    parsed = month_calendar.parse_month(str(raw)) if raw else None
+    return parsed or month_calendar.MonthRef(year=int(today.year), month=int(today.month))
+
+
+async def _calendar_limits(state: FSMContext) -> month_calendar.CalendarLimits | None:
+    data = await state.get_data()
+    state_data = _pick_date_state(data)
+    if state_data is None:
+        return None
+    _booking_id, master_id, master_tz_name = state_data
+
+    master_tz = get_timezone(master_tz_name)
+    today_master = datetime.now(tz=master_tz).date()
+    horizon_days = await _fetch_horizon_days(master_id)
+    max_date = today_master + timedelta(days=int(horizon_days))
+    pro_max_date = today_master + timedelta(days=PRO_BOOKING_HORIZON_DAYS)
+    plan_is_pro = int(horizon_days) > _FREE_BOOKING_HORIZON_DAYS
+    return month_calendar.CalendarLimits(
+        today=today_master,
+        min_date=today_master,
+        max_date=max_date,
+        pro_max_date=pro_max_date,
+        plan_is_pro=plan_is_pro,
+    )
+
+
+async def _calendar_markup(state: FSMContext, *, month: month_calendar.MonthRef | None = None) -> InlineKeyboardMarkup:
+    data = await state.get_data()
+    limits = await _calendar_limits(state)
+    if limits is None:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL)]],
+        )
+
+    month_ref = month or _month_ref_from_state(data, today=limits.today)
+    controls = month_calendar.CalendarControls(
+        cancel_text=btn_cancel(),
+        cancel_callback_data=CB_CANCEL,
+        show_pro_button=True,
+    )
+    await state.update_data(_STATE_CAL_MONTH=f"{int(month_ref.year):04d}{int(month_ref.month):02d}")
+    markup = month_calendar.build(prefix=MONTH_CAL_PREFIX, month=month_ref, limits=limits, controls=controls)
+    markup.inline_keyboard.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    return markup
+
+
 async def _restore_calendar(callback: CallbackQuery, state: FSMContext) -> None:
-    calendar = SimpleCalendar()
-    reply_markup = await calendar.start_calendar()
+    reply_markup = await _calendar_markup(state)
     if callback.message is not None:
         ok = await safe_edit_text(
             callback.message,
-            text=txt.choose_new_date(),
+            text=_calendar_prompt_text(),
             reply_markup=reply_markup,
             ev=ev,
             event="master_reschedule.edit_failed",
@@ -123,7 +182,7 @@ async def _restore_calendar(callback: CallbackQuery, state: FSMContext) -> None:
         state=state,
         bot=callback.bot,
         chat_id=callback.from_user.id,
-        text=txt.choose_new_date(),
+        text=_calendar_prompt_text(),
         reply_markup=reply_markup,
     )
 
@@ -571,35 +630,67 @@ async def start_reschedule(
     await callback.answer()
 
 
-@router.callback_query(
-    UserRole(ActiveRole.MASTER),
-    StateFilter(RescheduleStates.selecting_date),
-    SimpleCalendarCallback.filter(),
-)
-async def pick_date(
-    callback: CallbackQuery,
-    callback_data: SimpleCalendarCallback,
-    state: FSMContext,
-    rate_limiter: RateLimiter | None = None,
-) -> None:
-    bind_log_context(flow="master_reschedule", step="pick_date")
-    if not await rate_limit_callback(callback, rate_limiter, name="master_reschedule:pick_date", ttl_sec=1):
-        return
-    selected, picked_date = await SimpleCalendar().process_selection(callback, callback_data)
-    if not selected:
-        return
-
+async def _mc_context(state: FSMContext) -> tuple[month_calendar.CalendarLimits, month_calendar.MonthRef, dict] | None:
+    limits = await _calendar_limits(state)
+    if limits is None:
+        return None
     data = await state.get_data()
-    state_data = _pick_date_state(data)
-    if state_data is None:
-        ev.warning("master_reschedule.state_invalid", reason="missing_state", stage="pick_date")
-        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_state")
+    return limits, _month_ref_from_state(data, today=limits.today), data
+
+
+async def _mc_show_month(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    month_ref: month_calendar.MonthRef,
+    event: str,
+) -> None:
+    await callback.answer()
+    if callback.message is None:
         return
+    await safe_edit_text(
+        callback.message,
+        text=_calendar_prompt_text(),
+        reply_markup=await _calendar_markup(state, month=month_ref),
+        ev=ev,
+        event=event,
+    )
+
+
+async def _mc_show_paywall(callback: CallbackQuery, *, shown_month: month_calendar.MonthRef) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    await safe_edit_text(
+        callback.message,
+        text=_calendar_paywall_text(),
+        reply_markup=build_paywall_keyboard(
+            contact=get_settings().billing.contact,
+            upgrade_text=btn_go_pro(),
+            back_text=btn_back(),
+            back_callback_data=month_calendar.cb_month(
+                MONTH_CAL_PREFIX,
+                year=shown_month.year,
+                month=shown_month.month,
+            ),
+            upgrade_callback_data="billing:pro:start",
+            force_upgrade_callback=True,
+        ),
+        ev=ev,
+        event="master_reschedule.paywall_edit_failed",
+    )
+
+
+async def _mc_fetch_slots_for_picked_day(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    data: dict,
+    state_data: tuple[int, int, str],
+    picked_day: date,
+) -> tuple[list[datetime], list[datetime]] | None:
     booking_id, master_id, master_tz_name = state_data
-
     master_tz = get_timezone(master_tz_name)
-    picked_day = picked_date.date() if picked_date.tzinfo is None else picked_date.astimezone(master_tz).date()
-
     try:
         allowed, today_master, max_day = await _validate_picked_day_in_horizon(
             master_id=master_id,
@@ -612,7 +703,7 @@ async def pick_date(
                 show_alert=True,
             )
             await _restore_calendar(callback, state)
-            return
+            return None
 
         result = await _fetch_free_slots_for_day(
             master_id=master_id,
@@ -624,23 +715,49 @@ async def pick_date(
         await ev.aexception("master_reschedule.pick_date_failed", stage="use_case", exc=exc)
         await callback.answer(txt.update_failed(), show_alert=True)
         await _restore_calendar(callback, state)
-        return
+        return None
 
-    slots_utc = list(result.slots_utc)
-    slots_local = list(result.slots_for_client)
     slots_utc, slots_local = _filter_out_original_slot(
         data=data,
-        slots_utc=slots_utc,
-        slots_local=slots_local,
+        slots_utc=list(result.slots_utc),
+        slots_local=list(result.slots_for_client),
         picked_day=picked_day,
         master_tz=master_tz,
     )
-
     if not slots_utc:
         ev.info("master_reschedule.slots_result", outcome="no_slots", master_id=master_id, day=str(picked_day))
         await callback.answer(text=txt.no_slots(), show_alert=True)
-        await _restore_calendar(callback, state)
+        month_ref = month_calendar.MonthRef(year=int(picked_day.year), month=int(picked_day.month))
+        await _mc_show_month(callback, state, month_ref=month_ref, event="master_reschedule.edit_failed")
+        return None
+
+    return slots_utc, slots_local
+
+
+async def _mc_handle_day(callback: CallbackQuery, state: FSMContext, *, arg: str | None) -> None:
+    picked_day = month_calendar.parse_day(arg)
+    if picked_day is None:
+        await callback.answer(txt.update_failed(), show_alert=True)
         return
+
+    data = await state.get_data()
+    state_data = _pick_date_state(data)
+    if state_data is None:
+        ev.warning("master_reschedule.state_invalid", reason="missing_state", stage="pick_date")
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_state")
+        return
+    booking_id, master_id, master_tz_name = state_data
+
+    slots = await _mc_fetch_slots_for_picked_day(
+        callback,
+        state,
+        data=data,
+        state_data=state_data,
+        picked_day=picked_day,
+    )
+    if slots is None:
+        return
+    slots_utc, slots_local = slots
 
     await state.update_data(
         reschedule_day=picked_day.isoformat(),
@@ -649,6 +766,59 @@ async def pick_date(
     await _show_slots_list(callback, state, picked_day=picked_day, slots_local=slots_local)
     await state.set_state(RescheduleStates.selecting_slot)
     await callback.answer()
+
+
+async def _mc_dispatch(callback: CallbackQuery, state: FSMContext) -> None:
+    action, arg = month_calendar.parse(MONTH_CAL_PREFIX, callback.data)
+    if action in {"invalid", "noop"}:
+        await callback.answer()
+        return
+
+    ctx = await _mc_context(state)
+    if ctx is None:
+        await callback.answer(txt.update_failed(), show_alert=True)
+        return
+    limits, shown_month, _data = ctx
+
+    if action == "today":
+        await _mc_show_month(
+            callback,
+            state,
+            month_ref=month_calendar.MonthRef(year=int(limits.today.year), month=int(limits.today.month)),
+            event="master_reschedule.edit_failed",
+        )
+        return
+
+    if action == "m":
+        await _mc_show_month(
+            callback,
+            state,
+            month_ref=month_calendar.parse_month(arg) or shown_month,
+            event="master_reschedule.edit_failed",
+        )
+        return
+
+    if action in {"l", "pro"}:
+        await _mc_show_paywall(callback, shown_month=shown_month)
+        return
+
+    if action == "d":
+        await _mc_handle_day(callback, state, arg=arg)
+        return
+
+    await callback.answer(txt.update_failed(), show_alert=True)
+
+
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.selecting_date),
+    F.data.startswith(f"{MONTH_CAL_PREFIX}:"),
+)
+async def pick_date(callback: CallbackQuery, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="master_reschedule", step="pick_date")
+    if not await rate_limit_callback(callback, rate_limiter, name="master_reschedule:pick_date", ttl_sec=1):
+        return
+    await _mc_dispatch(callback, state)
 
 
 @router.callback_query(

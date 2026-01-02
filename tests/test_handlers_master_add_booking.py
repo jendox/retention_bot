@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -76,20 +76,14 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             master_timezone="Europe/Minsk",
         )
 
+        picked_day = datetime.now(UTC).date() + timedelta(days=1)
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
             bot=SimpleNamespace(send_message=AsyncMock()),
             message=SimpleNamespace(edit_text=AsyncMock()),
             answer=AsyncMock(),
+            data=f"{h.MONTH_CAL_PREFIX}:d:{picked_day:%Y%m%d}",
         )
-        callback_data = SimpleNamespace()
-
-        class _Calendar:
-            async def process_selection(self, callback, callback_data):
-                return True, datetime.now(UTC)
-
-            async def start_calendar(self):
-                return SimpleNamespace()
 
         class _Entitlements:
             def __init__(self, session) -> None:
@@ -105,17 +99,25 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             async def execute(self, *, master_id, client_day, client_tz):
                 return SimpleNamespace(slots_utc=[], master_day=client_day)
 
+        limits = h.month_calendar.CalendarLimits(
+            today=picked_day - timedelta(days=1),
+            min_date=picked_day,
+            max_date=picked_day + timedelta(days=29),
+            pro_max_date=picked_day + timedelta(days=60),
+            plan_is_pro=True,
+        )
         with (
             patch.object(h, "track_callback_message", AsyncMock()),
-            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
+            patch.object(h, "_calendar_limits", AsyncMock(return_value=limits)),
+            patch.object(h, "safe_edit_text", AsyncMock(return_value=True)),
             patch.object(h, "session_local", _fake_session_local),
             patch.object(h, "EntitlementsService", _Entitlements),
             patch.object(h, "GetMasterFreeSlots", _Slots),
         ):
-            await h.pick_date(callback=callback, callback_data=callback_data, state=state)
+            await h.pick_date(callback=callback, state=state)
 
         callback.answer.assert_awaited()
-        callback.message.edit_text.assert_awaited()
 
     async def test_pick_date_out_of_range_restores_calendar(self) -> None:
         from src.handlers.master import add_booking as h
@@ -126,20 +128,14 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             master_timezone="Europe/Minsk",
         )
 
+        picked_day = datetime.now(UTC).date()
         callback = SimpleNamespace(
             from_user=SimpleNamespace(id=10),
             bot=SimpleNamespace(send_message=AsyncMock()),
             message=SimpleNamespace(edit_text=AsyncMock()),
             answer=AsyncMock(),
+            data=f"{h.MONTH_CAL_PREFIX}:d:{picked_day:%Y%m%d}",
         )
-        callback_data = SimpleNamespace()
-
-        class _Calendar:
-            async def process_selection(self, callback, callback_data):
-                return True, datetime.now(UTC)
-
-            async def start_calendar(self):
-                return SimpleNamespace()
 
         class _Entitlements:
             def __init__(self, session) -> None:
@@ -155,17 +151,25 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             async def execute(self, *, master_id, client_day, client_tz):
                 return SimpleNamespace(slots_utc=[], master_day=client_day)
 
+        limits = h.month_calendar.CalendarLimits(
+            today=picked_day,
+            min_date=picked_day + timedelta(days=1),
+            max_date=picked_day + timedelta(days=7),
+            pro_max_date=picked_day + timedelta(days=60),
+            plan_is_pro=False,
+        )
         with (
             patch.object(h, "track_callback_message", AsyncMock()),
-            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
+            patch.object(h, "_calendar_limits", AsyncMock(return_value=limits)),
+            patch.object(h, "safe_edit_text", AsyncMock(return_value=True)),
             patch.object(h, "session_local", _fake_session_local),
             patch.object(h, "EntitlementsService", _Entitlements),
             patch.object(h, "GetMasterFreeSlots", _Slots),
         ):
-            await h.pick_date(callback=callback, callback_data=callback_data, state=state)
+            await h.pick_date(callback=callback, state=state)
 
         callback.answer.assert_awaited()
-        callback.message.edit_text.assert_awaited()
 
     async def test_search_no_matches_shows_cancel_button(self) -> None:
         from src.handlers.master import add_booking as h
@@ -210,15 +214,28 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             bot=SimpleNamespace(send_message=AsyncMock()),
             message=SimpleNamespace(edit_text=AsyncMock()),
             answer=AsyncMock(),
+            data=f"{h.MONTH_CAL_PREFIX}:cancel",
         )
-        callback_data = SimpleNamespace(act=h.SimpleCalAct.cancel)
 
         with (
             patch.object(h, "track_callback_message", AsyncMock()),
             patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
+            patch.object(
+                h,
+                "_calendar_limits",
+                AsyncMock(
+                    return_value=h.month_calendar.CalendarLimits(
+                        today=date(2026, 1, 2),
+                        min_date=date(2026, 1, 3),
+                        max_date=date(2026, 1, 9),
+                        pro_max_date=date(2026, 3, 2),
+                        plan_is_pro=False,
+                    ),
+                ),
+            ),
             patch.object(h, "safe_edit_text", AsyncMock(return_value=True)),
         ):
-            await h.pick_date(callback=callback, callback_data=callback_data, state=state)
+            await h.pick_date(callback=callback, state=state)
 
         self.assertEqual(state._state, h.AddBookingStates.search_client)
         callback.answer.assert_awaited()
@@ -441,6 +458,7 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         )
 
         slot_utc = datetime.now(UTC) + timedelta(days=1)
+        picked_day = slot_utc.date()
 
         class _Calendar:
             async def start_calendar(self):
@@ -477,9 +495,23 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(h, "track_message", AsyncMock()),
             patch.object(h, "track_callback_message", AsyncMock()),
+            patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
             patch.object(h, "answer_tracked", AsyncMock()),
             patch.object(h, "_load_master_with_clients", AsyncMock(return_value=master)),
-            patch.object(h, "SimpleCalendar", _Calendar),
+            patch.object(
+                h,
+                "_calendar_limits",
+                AsyncMock(
+                    return_value=h.month_calendar.CalendarLimits(
+                        today=picked_day - timedelta(days=1),
+                        min_date=picked_day,
+                        max_date=picked_day + timedelta(days=29),
+                        pro_max_date=picked_day + timedelta(days=60),
+                        plan_is_pro=True,
+                    ),
+                ),
+            ),
+            patch.object(h, "safe_edit_text", AsyncMock(return_value=True)),
             patch.object(h, "session_local", _fake_session_local),
             patch.object(h, "EntitlementsService", _Entitlements),
             patch.object(h, "GetMasterFreeSlots", _Slots),
@@ -511,12 +543,12 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
 
             pick_date_cb = SimpleNamespace(
                 from_user=SimpleNamespace(id=10),
-                data="",
+                data=f"{h.MONTH_CAL_PREFIX}:d:{picked_day:%Y%m%d}",
                 bot=bot,
                 message=SimpleNamespace(edit_text=AsyncMock()),
                 answer=AsyncMock(),
             )
-            await h.pick_date(callback=pick_date_cb, callback_data=SimpleNamespace(), state=state)
+            await h.pick_date(callback=pick_date_cb, state=state)
             self.assertEqual(state._state, h.AddBookingStates.selecting_slot)
 
             pick_slot_cb = SimpleNamespace(

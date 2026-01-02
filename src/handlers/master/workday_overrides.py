@@ -8,7 +8,6 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone, utc_range_for_master_day
@@ -24,6 +23,7 @@ from src.schemas.enums import BookingStatus
 from src.texts import common as common_txt, master_overrides as txt
 from src.texts.buttons import btn_back, btn_close
 from src.texts.master_schedule import choose_period
+from src.ui import month_calendar
 from src.user_context import ActiveRole
 from src.utils import cleanup_messages, track_message
 
@@ -32,6 +32,8 @@ ev = EventLogger(__name__)
 
 OVERRIDES_BUCKET = "master_workday_overrides"
 MAIN_REF_KEY = "master_workday_overrides_main_ref"
+MONTH_CAL_PREFIX = "m:overrides:mc"
+_STATE_CAL_MONTH = "overrides_calendar_month"
 
 
 class WorkdayOverrideStates(StatesGroup):
@@ -62,6 +64,38 @@ def _kb_back_to_schedule() -> InlineKeyboardMarkup:
 
 def _kb_day_actions(*, has_override: bool) -> InlineKeyboardMarkup:
     raise RuntimeError("Use _kb_day_actions_for_master()")
+
+
+def _calendar_limits() -> month_calendar.CalendarLimits:
+    today = datetime.now().date()
+    return month_calendar.CalendarLimits(
+        today=today,
+        min_date=today,
+        max_date=today + timedelta(days=365),
+        pro_max_date=today + timedelta(days=365),
+        plan_is_pro=True,
+    )
+
+
+def _month_ref_from_state(data: dict, *, today: date) -> month_calendar.MonthRef:
+    raw = data.get(_STATE_CAL_MONTH)
+    parsed = month_calendar.parse_month(str(raw)) if raw else None
+    return parsed or month_calendar.MonthRef(year=int(today.year), month=int(today.month))
+
+
+async def _calendar_markup(state: FSMContext, *, month: month_calendar.MonthRef | None = None) -> InlineKeyboardMarkup:
+    limits = _calendar_limits()
+    data = await state.get_data()
+    month_ref = month or _month_ref_from_state(data, today=limits.today)
+    controls = month_calendar.CalendarControls(
+        cancel_text=txt.btn_back_to_schedule(),
+        cancel_callback_data="m:overrides:back_schedule",
+        show_pro_button=False,
+    )
+    await state.update_data(_STATE_CAL_MONTH=f"{int(month_ref.year):04d}{int(month_ref.month):02d}")
+    markup = month_calendar.build(prefix=MONTH_CAL_PREFIX, month=month_ref, limits=limits, controls=controls)
+    markup.inline_keyboard.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
+    return markup
 
 
 def _kb_back_to_day_actions() -> InlineKeyboardMarkup:
@@ -294,15 +328,10 @@ async def start_overrides(callback: CallbackQuery, state: FSMContext, rate_limit
     await state.clear()
     await _set_main_ref(state, chat_id=callback.message.chat.id, message_id=callback.message.message_id)
 
-    calendar = SimpleCalendar()
-    reply_markup = await calendar.start_calendar()
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[*reply_markup.inline_keyboard, *_kb_back_to_schedule().inline_keyboard],
-    )
     await safe_edit_text(
         callback.message,
         text=txt.choose_date(),
-        reply_markup=keyboard,
+        reply_markup=await _calendar_markup(state),
         parse_mode="HTML",
         ev=ev,
         event="master_overrides.open_calendar_failed",
@@ -310,31 +339,72 @@ async def start_overrides(callback: CallbackQuery, state: FSMContext, rate_limit
     await state.set_state(WorkdayOverrideStates.picking_date)
 
 
+async def _mc_show_month(callback: CallbackQuery, state: FSMContext, *, month_ref: month_calendar.MonthRef) -> None:
+    await callback.answer()
+    await safe_edit_text(
+        callback.message,
+        text=txt.choose_date(),
+        reply_markup=await _calendar_markup(state, month=month_ref),
+        parse_mode="HTML",
+        ev=ev,
+        event="master_overrides.open_calendar_failed",
+    )
+
+
+async def _mc_dispatch(callback: CallbackQuery, state: FSMContext) -> None:
+    action, arg = month_calendar.parse(MONTH_CAL_PREFIX, callback.data)
+    if action in {"invalid", "noop"}:
+        await callback.answer()
+        return
+
+    limits = _calendar_limits()
+    data = await state.get_data()
+    shown_month = _month_ref_from_state(data, today=limits.today)
+
+    if action == "today":
+        await _mc_show_month(
+            callback,
+            state,
+            month_ref=month_calendar.MonthRef(year=int(limits.today.year), month=int(limits.today.month)),
+        )
+        return
+
+    if action == "m":
+        await _mc_show_month(callback, state, month_ref=month_calendar.parse_month(arg) or shown_month)
+        return
+
+    if action != "d":
+        await callback.answer()
+        return
+
+    picked_day = month_calendar.parse_day(arg)
+    if picked_day is None:
+        await callback.answer(common_txt.generic_error(), show_alert=True)
+        return
+
+    try:
+        ev.info("master_overrides.day_selected", day=str(picked_day))
+        await _render_day_menu_main(state, bot=callback.bot, telegram_id=callback.from_user.id, day=picked_day)
+    except MasterNotFound:
+        ev.warning("master_overrides.master_not_found")
+        await callback.answer(common_txt.generic_error(), show_alert=True)
+        await state.clear()
+
+
 @router.callback_query(
     UserRole(ActiveRole.MASTER),
     StateFilter(WorkdayOverrideStates.picking_date),
-    SimpleCalendarCallback.filter(),
+    F.data.startswith(f"{MONTH_CAL_PREFIX}:"),
 )
 async def pick_override_day(
     callback: CallbackQuery,
-    callback_data: SimpleCalendarCallback,
     state: FSMContext,
     rate_limiter: RateLimiter | None = None,
 ) -> None:
     bind_log_context(flow="master_overrides", step="pick_day")
     if not await rate_limit_callback(callback, rate_limiter, name="master_overrides:pick_day", ttl_sec=1):
         return
-    selected, picked_dt = await SimpleCalendar().process_selection(callback, callback_data)
-    if not selected:
-        return
-
-    try:
-        ev.info("master_overrides.day_selected", day=str(picked_dt.date()))
-        await _render_day_menu_main(state, bot=callback.bot, telegram_id=callback.from_user.id, day=picked_dt.date())
-    except MasterNotFound:
-        ev.warning("master_overrides.master_not_found")
-        await callback.answer(common_txt.generic_error(), show_alert=True)
-        await state.clear()
+    await _mc_dispatch(callback, state)
 
 
 @router.callback_query(

@@ -361,9 +361,9 @@ def _kb_timezones() -> InlineKeyboardMarkup:
 def _plan_label(plan) -> str:
     source = str(getattr(plan, "source", "free"))
     if source == "trial":
-        return "Pro (trial)"
+        return "Pro (пробный)"
     if source == "paid":
-        return "Pro (paid)"
+        return "Pro (оплачено)"
     return "Pro" if bool(getattr(plan, "is_pro", False)) else "Free"
 
 
@@ -604,9 +604,9 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         source = str(plan.source)
         plan_label = "Pro" if plan.is_pro else "Free"
         if source == "trial":
-            plan_label = "Pro (trial)"
+            plan_label = "Pro (пробный)"
         elif source == "paid":
-            plan_label = "Pro (paid)"
+            plan_label = "Pro (оплачено)"
 
         msg = billing_txt.tariffs_message(
             plan_label=plan_label,

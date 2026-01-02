@@ -254,9 +254,9 @@ async def _restore_clients_limit_paywall(callback: CallbackQuery, *, limit: int)
 
 def _plan_label_for_tariffs(*, source: str, is_pro: bool) -> str:
     if source == "trial":
-        return "Pro (trial)"
+        return "Pro (пробный)"
     if source == "paid":
-        return "Pro (paid)"
+        return "Pro (оплачено)"
     return "Pro" if is_pro else "Free"
 
 

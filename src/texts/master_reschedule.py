@@ -36,7 +36,7 @@ def date_out_of_range(*, today: date, max_day: date, t: Translator = _noop_t) ->
 
 
 def no_slots(*, t: Translator = _noop_t) -> str:
-    return t("На этот день свободных слотов нет. Выбери другую дату.")
+    return t("На этот день свободного времени нет. Выбери другую дату.")
 
 
 def slots_title(*, day: date, t: Translator = _noop_t) -> str:

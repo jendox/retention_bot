@@ -768,10 +768,7 @@ async def book_client(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer(txt.invalid_client(), show_alert=True)
         return
 
-    from aiogram_calendar import SimpleCalendar
-
-    from src.handlers.master.add_booking import AddBookingStates
-    from src.texts import master_add_booking as add_booking_txt
+    from src.handlers.master import add_booking as add_booking_h
 
     await state.clear()
     await state.update_data(
@@ -782,15 +779,15 @@ async def book_client(callback: CallbackQuery, state: FSMContext) -> None:
         client=client.to_state_dict(),
         confirm_in_progress=False,
     )
-    reply_markup = await SimpleCalendar().start_calendar()
+    reply_markup = await add_booking_h._calendar_markup(state)
     await safe_edit_text(
         callback.message,
-        text=add_booking_txt.choose_date(),
+        text=add_booking_h._calendar_prompt_text(),
         reply_markup=reply_markup,
         parse_mode="HTML",
         event="edit_client.book_failed",
     )
-    await state.set_state(AddBookingStates.selecting_date)
+    await state.set_state(add_booking_h.AddBookingStates.selecting_date)
 
 
 @router.callback_query(

@@ -5,7 +5,6 @@ from html import escape as html_escape
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from aiogram_calendar import SimpleCalendar
 
 from src.core.sa import session_local
 from src.filters.user_role import UserRole
@@ -18,7 +17,7 @@ from src.repositories import ClientNotFound, ClientRepository
 from src.schemas.enums import Timezone
 from src.texts import client_list_masters as txt
 from src.texts.buttons import btn_back, btn_close
-from src.texts.client_booking import booking_limit_reached, choose_date
+from src.texts.client_booking import booking_limit_reached
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
@@ -420,11 +419,12 @@ async def book_from_card(callback: CallbackQuery, state: FSMContext, rate_limite
         client_name=client.name,
         master_id=int(master_id),
     )
-    calendar = SimpleCalendar()
-    reply_markup = await calendar.start_calendar()
+    from src.handlers.client import booking as booking_h
+
+    reply_markup = await booking_h._calendar_markup(state)
     await safe_edit_text(
         callback.message,
-        text=choose_date(),
+        text=booking_h._calendar_prompt_text(),
         reply_markup=reply_markup,
         parse_mode="HTML",
         ev=ev,

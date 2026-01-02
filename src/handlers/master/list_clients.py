@@ -978,10 +978,7 @@ async def master_clients_card_book(callback: CallbackQuery, state: FSMContext) -
         await callback.answer(common_txt.generic_error(), show_alert=True)
         return
 
-    from aiogram_calendar import SimpleCalendar
-
-    from src.handlers.master.add_booking import AddBookingStates
-    from src.texts import master_add_booking as add_booking_txt
+    from src.handlers.master import add_booking as add_booking_h
 
     await state.clear()
     await state.update_data(
@@ -993,12 +990,12 @@ async def master_clients_card_book(callback: CallbackQuery, state: FSMContext) -
         confirm_in_progress=False,
     )
 
-    reply_markup = await SimpleCalendar().start_calendar()
+    reply_markup = await add_booking_h._calendar_markup(state)
     await safe_edit_text(
         callback.message,
-        text=add_booking_txt.choose_date(),
+        text=add_booking_h._calendar_prompt_text(),
         reply_markup=reply_markup,
         ev=ev,
         event="master_list_clients.book_edit_failed",
     )
-    await state.set_state(AddBookingStates.selecting_date)
+    await state.set_state(add_booking_h.AddBookingStates.selecting_date)
