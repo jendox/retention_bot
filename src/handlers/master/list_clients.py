@@ -366,12 +366,13 @@ def _build_clients_page_text(
     lines: list[str] = [
         txt.title(page=page, total_pages=total_pages),
         "",
+        txt.offline_legend(),
+        "",
     ]
 
     for offset, client in enumerate(clients, start=1):
         lines.append(_render_client_line(client, index=start_index + offset))
 
-    lines.extend(["", txt.offline_legend()])
     return "\n".join(lines)
 
 

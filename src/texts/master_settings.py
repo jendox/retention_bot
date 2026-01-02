@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.plans import FREE_BOOKING_HORIZON_DAYS, PRO_BOOKING_HORIZON_DAYS
 from src.texts.base import Translator, noop_t as _noop_t
 
 
@@ -117,6 +118,7 @@ def render_details(
         f"<b>Длительность записи:</b> {slot_size}\n\n"
         f"<b>Телефон:</b> {phone}\n\n"
         "<b>💎 Pro‑функции</b>\n"
+        f"• Горизонт записи: {int(FREE_BOOKING_HORIZON_DAYS)} дней (Free) / {int(PRO_BOOKING_HORIZON_DAYS)} дней (Pro)\n"
         f"• Уведомлять клиентов: "
         f"{pro_feature_status(enabled=pro.notify_clients, plan_is_pro=pro.plan_is_pro, t=t)}\n"
         f"• Напоминать отмечать явку: "
