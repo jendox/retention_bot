@@ -21,7 +21,7 @@ from src.texts.client_booking import booking_limit_reached
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
-from src.utils import format_phone_display, format_phone_e164, format_work_days_label, track_message
+from src.utils import format_phone_e164, format_phone_masked_compact, format_work_days_label, track_message
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
@@ -63,8 +63,9 @@ def _clamp_page(page: int, total_pages: int) -> int:
 
 def _master_line(master: dict) -> str:
     name = html_escape(str(master.get("name") or "Мастер"))
-    phone = format_phone_e164(str(master.get("phone") or ""))
-    phone_safe = html_escape(phone) if phone else "—"
+    raw_phone = str(master.get("phone") or "").strip()
+    phone_masked = format_phone_masked_compact(raw_phone) if raw_phone else ""
+    phone_safe = html_escape(phone_masked) if phone_masked else "—"
     return f"• <b>{name}</b> · {phone_safe}"
 
 
@@ -137,9 +138,10 @@ def _kb_select_master_rows(*, visible: list[dict], page: int, chunk: int) -> lis
     rows: list[list[InlineKeyboardButton]] = []
     for m in visible:
         label = str(m.get("name") or "Мастер")
-        phone = format_phone_display(str(m.get("phone") or ""))
-        if phone:
-            label = f"{label} · {phone}"
+        raw_phone = str(m.get("phone") or "").strip()
+        phone_masked = format_phone_masked_compact(raw_phone) if raw_phone else ""
+        if phone_masked:
+            label = f"{label} · {phone_masked}"
         rows.append(
             [
                 InlineKeyboardButton(
