@@ -966,7 +966,7 @@ async def master_clients_card_book(callback: CallbackQuery, state: FSMContext) -
     parsed = _parse_card_action("book", callback.data)
     if parsed is None:
         return
-    client_id, _page, _chunk = parsed
+    client_id, page, chunk = parsed
 
     telegram_id = callback.from_user.id
     master = await _fetch_master_or_alert(callback, telegram_id=telegram_id)
@@ -987,6 +987,10 @@ async def master_clients_card_book(callback: CallbackQuery, state: FSMContext) -
         master_timezone=str(master.timezone.value),
         master_day=None,
         client=client.to_state_dict(),
+        return_to="master_list_clients_card",
+        return_client_id=int(client_id),
+        return_page=int(page),
+        return_chunk=int(chunk),
         confirm_in_progress=False,
     )
 

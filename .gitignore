@@ -305,4 +305,3 @@ Makefile
 .env*
 project_tree.txt
 docker-compose.yml
-/docs/LLM_PROJECT_CONTEXT_PROMPT.txt

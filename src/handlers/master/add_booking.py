@@ -2,6 +2,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from html import escape as html_escape
+from math import ceil
 
 from aiogram import F, Router
 from aiogram.filters import StateFilter
@@ -342,6 +343,8 @@ async def _handle_calendar_cancel(
     clients: list[dict] = list(data.get("clients") or [])
     await callback.answer()
     if not clients:
+        if await _maybe_return_to_clients_flow(callback, state, data=data):
+            return True
         await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
         await state.clear()
         return True
@@ -353,6 +356,50 @@ async def _handle_calendar_cancel(
         reply_markup=_build_clients_keyboard_from_state(clients),
     )
     await state.set_state(AddBookingStates.search_client)
+    return True
+
+
+async def _maybe_return_to_clients_flow(callback: CallbackQuery, state: FSMContext, *, data: dict) -> bool:
+    """
+    Calendar "К клиентам" button should not terminate the flow when add-booking was started from clients screens.
+
+    If we have enough context, we return to the originating clients view; otherwise we fall back to the clients list.
+    """
+
+    return_to = str(data.get("return_to") or "").strip()
+    if not return_to:
+        return False
+
+    from src.handlers.master import list_clients as list_clients_h
+
+    if callback.message is None:
+        await state.clear()
+        return True
+
+    if return_to == "master_list_clients_card":
+        client_id = data.get("return_client_id")
+        page = data.get("return_page")
+        chunk = data.get("return_chunk")
+        if isinstance(client_id, int) and isinstance(page, int) and isinstance(chunk, int):
+            master = await _load_master_with_clients(callback.from_user.id)
+            total_pages = max(
+                1,
+                ceil(len(master.clients) / list_clients_h.TEXT_LIST_PAGE_SIZE),
+            )
+            ok = await list_clients_h._edit_client_card(
+                callback.message,
+                master=master,
+                client_id=int(client_id),
+                page=max(1, min(int(page), total_pages)),
+                chunk=max(1, int(chunk)),
+            )
+            await state.clear()
+            if ok:
+                return True
+
+    # Fallback: open clients list entry (page 1).
+    await state.clear()
+    await list_clients_h.start_clients_entry(callback)
     return True
 
 

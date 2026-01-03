@@ -5,7 +5,6 @@ description = "Retention Telegram Bot"
 requires-python = ">=3.13,<= 3.14"
 dependencies = [
     "aiogram>=3.23.0",
-    "aiogram-calendar>=0.6.0",
     "alembic>=1.17.2",
     "asyncpg>=0.31.0",
     "httpx>=0.28.1",
