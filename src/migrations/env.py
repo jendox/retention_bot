@@ -11,7 +11,8 @@ from alembic import context
 from src import models
 from src.core.sa import Base
 
-load_dotenv(".env.local")
+env_file = os.getenv("ENV_FILE", ".env.local")
+load_dotenv(env_file, override=False)
 postgres_url = os.environ["DATABASE__POSTGRES_URL"]
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
