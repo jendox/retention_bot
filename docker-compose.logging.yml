@@ -1,0 +1,46 @@
+services:
+  loki:
+    image: grafana/loki:3.0.0
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes:
+      - ./ops/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    ports:
+      # Bind to localhost; access via SSH tunnel or reverse proxy.
+      - "127.0.0.1:3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./ops/promtail/promtail.yml:/etc/promtail/promtail.yml:ro
+      # Read Docker's json-file logs directly.
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      # Optional: container discovery/labels via Docker API.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - loki
+    ports:
+      # Bind to localhost; access via SSH tunnel or reverse proxy.
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+
+volumes:
+  loki_data:
+  grafana_data:
+
