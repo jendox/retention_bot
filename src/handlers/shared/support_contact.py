@@ -5,14 +5,20 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from src.paywall import upgrade_url_from_contact
 from src.settings import get_settings
 from src.texts import support as support_txt
+from src.texts.buttons import btn_close
 
 
 def build_support_keyboard(*, contact: str) -> InlineKeyboardMarkup | None:
     url = upgrade_url_from_contact(contact)
     if not url:
-        return None
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=btn_close(), callback_data="paywall:close")]],
+        )
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="💬 Написать в поддержку", url=url)]],
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💬 Написать в поддержку", url=url)],
+            [InlineKeyboardButton(text=btn_close(), callback_data="paywall:close")],
+        ],
     )
 
 
