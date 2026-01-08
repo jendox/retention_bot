@@ -11,6 +11,7 @@ from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.personal_data_policy import send_personal_data_policy
+from src.handlers.shared.support_contact import send_support_contact
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.observability.audit_log import write_audit_log
 from src.observability.context import bind_log_context
@@ -54,6 +55,7 @@ def _kb_settings_hub() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=txt.btn_edit_profile(), callback_data=f"{SETTINGS_CB_PREFIX}edit_profile")],
             [InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide")],
             [InlineKeyboardButton(text=txt.btn_personal_data(), callback_data=f"{SETTINGS_CB_PREFIX}personal_data")],
+            [InlineKeyboardButton(text=txt.btn_support(), callback_data=f"{SETTINGS_CB_PREFIX}support")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
         ],
     )
@@ -525,6 +527,7 @@ def _parse_action(data: str) -> tuple[str, str | None]:
         "back_menu": "back_menu",
         "personal_data": "personal_data",
         "pd_policy": "pd_policy",
+        "support": "support",
         "delete_data": "delete_data",
         "delete_confirm": "delete_confirm",
     }
@@ -694,6 +697,10 @@ async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
     if action == "pd_policy":
         await callback.answer()
         await send_personal_data_policy(bot=callback.bot, chat_id=int(telegram_id))
+        return
+    if action == "support":
+        await _handle_back(callback, state)
+        await send_support_contact(bot=callback.bot, chat_id=int(telegram_id))
         return
     if action == "delete_data":
         await callback.answer()

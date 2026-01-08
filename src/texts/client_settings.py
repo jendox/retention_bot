@@ -35,6 +35,10 @@ def btn_personal_data(*, t: Translator = _noop_t) -> str:
     return t("🛡 Персональные данные")
 
 
+def btn_support(*, t: Translator = _noop_t) -> str:
+    return t("💬 Поддержка")
+
+
 def render_settings(
     *,
     name: str,

@@ -15,6 +15,17 @@ class ClientSettingsUiTests(unittest.TestCase):
                     return
         raise AssertionError("personal_data button not found")
 
+    def test_support_button_is_present(self) -> None:
+        from src.handlers.client import settings as h
+
+        kb = h._kb_settings_hub()
+        for row in kb.inline_keyboard:
+            for btn in row:
+                if btn.callback_data == f"{h.SETTINGS_CB_PREFIX}support":
+                    self.assertIn("Поддержка", btn.text)
+                    return
+        raise AssertionError("support button not found")
+
     def test_personal_data_menu_order(self) -> None:
         from src.handlers.client import settings as h
 

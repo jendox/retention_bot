@@ -11,6 +11,7 @@ from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.personal_data_policy import send_personal_data_policy
+from src.handlers.shared.support_contact import send_support_contact
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import BookingContext, ReminderContext
@@ -75,6 +76,7 @@ def _kb_settings_hub() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide"),
     )
     builder.row(InlineKeyboardButton(text=txt.btn_personal_data(), callback_data=f"{SETTINGS_CB_PREFIX}personal_data"))
+    builder.row(InlineKeyboardButton(text=txt.btn_support(), callback_data=f"{SETTINGS_CB_PREFIX}support"))
     builder.row(InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back"))
     return builder.as_markup()
 
@@ -572,6 +574,16 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
     if data == f"{SETTINGS_CB_PREFIX}pd_policy":
         await callback.answer()
         await send_personal_data_policy(bot=callback.bot, chat_id=int(telegram_id))
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}support":
+        await callback.answer()
+        if callback.message is not None:
+            await safe_delete(callback.message, event="master.settings.delete_failed")
+        await cleanup_messages(state, callback.bot, bucket=SETTINGS_BUCKET)
+        await state.set_state(None)
+        await state.update_data(**{SETTINGS_MAIN_KEY: {}, SETTINGS_VIEW_KEY: VIEW_HUB})
+        await send_support_contact(bot=callback.bot, chat_id=int(telegram_id))
         return
 
     if data == f"{SETTINGS_CB_PREFIX}delete_data":

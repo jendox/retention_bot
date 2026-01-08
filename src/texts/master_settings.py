@@ -50,6 +50,10 @@ def btn_personal_data(*, t: Translator = _noop_t) -> str:
     return t("🛡 Персональные данные")
 
 
+def btn_support(*, t: Translator = _noop_t) -> str:
+    return t("💬 Поддержка")
+
+
 def btn_notify(*, notify_clients: bool, plan_is_pro: bool, t: Translator = _noop_t) -> str:
     if not plan_is_pro:
         return t("🔒 Уведомлять клиентов: Pro")
