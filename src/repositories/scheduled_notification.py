@@ -43,6 +43,17 @@ class ScheduledNotificationJob:
     due_at: datetime
 
 
+@dataclass(frozen=True)
+class SnoozeAttendanceNudgeRequest:
+    booking_id: int
+    master_id: int
+    master_telegram_id: int
+    client_id: int
+    booking_start_at: datetime
+    due_at: datetime
+    now_utc: datetime
+
+
 QUIET_FROM = time(22, 0)
 QUIET_TO = time(9, 0)
 
@@ -50,7 +61,8 @@ QUIET_TO = time(9, 0)
 def shift_out_of_quiet_hours(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         raise ValueError("Expected tz-aware datetime.")
-    local_time = dt.timetz()
+    # Compare using local wall-clock time (naive) to avoid tz-aware time comparison pitfalls.
+    local_time = dt.timetz().replace(tzinfo=None)
     in_quiet = (local_time >= QUIET_FROM) or (local_time < QUIET_TO)
     if not in_quiet:
         return dt
@@ -871,15 +883,70 @@ class ScheduledNotificationRepository(BaseRepository):
         await self._session.flush()
         return int(result.rowcount or 0)
 
-    async def snooze_attendance_nudges_for_booking(self, *, booking_id: int, due_at: datetime) -> int:
-        stmt = (
-            update(ScheduledNotificationEntity)
-            .where(
-                ScheduledNotificationEntity.booking_id == int(booking_id),
-                ScheduledNotificationEntity.event == "master_attendance_nudge",
-                ScheduledNotificationEntity.status == ScheduledNotificationStatus.PENDING.value,
-            )
-            .values(due_at=due_at, updated_at=func.now())
+    async def snooze_attendance_nudges_for_booking(
+        self,
+        *,
+        request: SnoozeAttendanceNudgeRequest,
+    ) -> int:
+        """
+        Snooze master attendance reminder to a specific time.
+
+        Historically this was implemented as UPDATE of existing pending nudges by booking_id.
+        That fails when there are no pending rows left (e.g. the nudge already sent), and it can
+        unintentionally shift multiple future nudges at once.
+
+        Current behavior:
+        - cancel any pending/sending attendance nudges for the booking
+        - upsert a single "snoozed" attendance nudge with a stable dedup key
+        """
+        if request.due_at.tzinfo is None:
+            raise ValueError("Expected tz-aware due_at.")
+        if request.now_utc.tzinfo is None:
+            raise ValueError("Expected tz-aware now_utc in UTC.")
+        if request.booking_start_at.tzinfo is None:
+            raise ValueError("Expected tz-aware booking_start_at.")
+
+        await self.cancel_attendance_nudges_for_booking(booking_id=int(request.booking_id))
+
+        dedup_key = f"beautydesk:outbox:attendance:snooze:{int(request.booking_id)}"
+        ins = pg_insert(ScheduledNotificationEntity).values(
+            {
+                "event": "master_attendance_nudge",
+                "recipient": "master",
+                "chat_id": int(request.master_telegram_id),
+                "master_id": int(request.master_id),
+                "client_id": int(request.client_id),
+                "booking_id": int(request.booking_id),
+                "invoice_id": None,
+                "booking_start_at": request.booking_start_at,
+                "status": ScheduledNotificationStatus.PENDING.value,
+                "due_at": request.due_at,
+                "sequence": None,
+                "dedup_key": dedup_key,
+                "locked_at": None,
+                "attempts": 0,
+                "last_error": None,
+                "sent_at": None,
+                "created_at": request.now_utc,
+                "updated_at": request.now_utc,
+            },
+        )
+        stmt = ins.on_conflict_do_update(
+            index_elements=["dedup_key"],
+            set_={
+                "chat_id": ins.excluded.chat_id,
+                "master_id": ins.excluded.master_id,
+                "client_id": ins.excluded.client_id,
+                "booking_id": ins.excluded.booking_id,
+                "booking_start_at": ins.excluded.booking_start_at,
+                "status": ScheduledNotificationStatus.PENDING.value,
+                "due_at": ins.excluded.due_at,
+                "locked_at": None,
+                "attempts": 0,
+                "last_error": None,
+                "sent_at": None,
+                "updated_at": request.now_utc,
+            },
         )
         result = await self._session.execute(stmt)
         await self._session.flush()

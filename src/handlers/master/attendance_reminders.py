@@ -13,7 +13,7 @@ from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.repositories import MasterRepository
 from src.repositories.booking import BookingRepository
-from src.repositories.scheduled_notification import ScheduledNotificationRepository
+from src.repositories.scheduled_notification import ScheduledNotificationRepository, SnoozeAttendanceNudgeRequest
 from src.schemas.enums import AttendanceOutcome
 from src.texts import common as common_txt
 from src.use_cases.mark_booking_attendance import MarkBookingAttendance, MarkBookingAttendanceRequest
@@ -88,7 +88,17 @@ async def _snooze(callback: CallbackQuery, *, booking_id: int, due_at: datetime)
             if booking.master.id != master.id:
                 await callback.answer(common_txt.generic_error(), show_alert=False)
                 return
-            await repo.snooze_attendance_nudges_for_booking(booking_id=int(booking_id), due_at=due_at)
+            await repo.snooze_attendance_nudges_for_booking(
+                request=SnoozeAttendanceNudgeRequest(
+                    booking_id=int(booking_id),
+                    master_id=int(master.id),
+                    master_telegram_id=int(master.telegram_id),
+                    client_id=int(booking.client.id),
+                    booking_start_at=booking.start_at,
+                    due_at=due_at,
+                    now_utc=datetime.now(UTC),
+                ),
+            )
     except Exception as exc:
         await ev.aexception("attendance_reminder.snooze_failed", exc=exc, booking_id=int(booking_id))
         await callback.answer(common_txt.generic_error(), show_alert=True)
