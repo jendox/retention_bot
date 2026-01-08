@@ -4,6 +4,9 @@ services:
     network_mode: host
     env_file:
       - ./.env.prod
+    volumes:
+      # Host path should point to the uploaded PDF policy file.
+      - /opt/retention_bot/privacy_policy.pdf:/app/assets/privacy_policy.pdf:ro
     environment:
       METRICS__HOST: 127.0.0.1
       METRICS__PORT: 8000
@@ -41,4 +44,3 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--web.listen-address=127.0.0.1:9090"
     restart: unless-stopped
-

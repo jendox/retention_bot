@@ -31,6 +31,10 @@ def btn_delete_data(*, t: Translator = _noop_t) -> str:
     return t("🗑 Удалить данные")
 
 
+def btn_personal_data(*, t: Translator = _noop_t) -> str:
+    return t("🛡 Персональные данные")
+
+
 def render_settings(
     *,
     name: str,

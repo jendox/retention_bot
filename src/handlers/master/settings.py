@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.personal_data_policy import send_personal_data_policy
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import BookingContext, ReminderContext
@@ -48,6 +49,7 @@ SETTINGS_VIEW_KEY = "master_settings_view"
 
 VIEW_HUB = "hub"
 VIEW_EDIT_PROFILE = "edit_profile"
+VIEW_PERSONAL_DATA = "personal_data"
 
 
 class MasterSettingsStates(StatesGroup):
@@ -72,9 +74,19 @@ def _kb_settings_hub() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=txt.btn_tariffs(), callback_data=f"{SETTINGS_CB_PREFIX}tariffs"),
         InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide"),
     )
-    builder.row(InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data"))
+    builder.row(InlineKeyboardButton(text=txt.btn_personal_data(), callback_data=f"{SETTINGS_CB_PREFIX}personal_data"))
     builder.row(InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back"))
     return builder.as_markup()
+
+
+def _kb_personal_data_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
+            [InlineKeyboardButton(text=pd_txt.btn_policy(), callback_data=f"{SETTINGS_CB_PREFIX}pd_policy")],
+            [InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data")],
+        ],
+    )
 
 
 def _kb_settings_edit_profile(
@@ -481,6 +493,8 @@ async def _refresh_settings_message(*, state: FSMContext, bot, telegram_id: int)
             notify_attendance=bool(getattr(master, "notify_attendance", True)),
             plan_is_pro=plan.is_pro,
         )
+    elif view == VIEW_PERSONAL_DATA:
+        kb = _kb_personal_data_menu()
     else:
         kb = _kb_settings_hub()
     await safe_bot_edit_message_text(
@@ -547,6 +561,17 @@ async def settings_callbacks(  # noqa: C901, PLR0911, PLR0912, PLR0914, PLR0915
         await callback.answer()
         await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_EDIT_PROFILE})
         await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}personal_data":
+        await callback.answer()
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_PERSONAL_DATA})
+        await _refresh_settings_message(state=state, bot=callback.bot, telegram_id=telegram_id)
+        return
+
+    if data == f"{SETTINGS_CB_PREFIX}pd_policy":
+        await callback.answer()
+        await send_personal_data_policy(bot=callback.bot, chat_id=int(telegram_id))
         return
 
     if data == f"{SETTINGS_CB_PREFIX}delete_data":

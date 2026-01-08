@@ -14,6 +14,7 @@ from src.core.sa import active_session, session_local
 from src.handlers.client.client_menu import send_client_main_menu
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.personal_data_policy import send_personal_data_policy
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
@@ -351,11 +352,7 @@ async def client_reg_pd_policy(callback: CallbackQuery, state: FSMContext) -> No
     await callback.answer()
     await track_callback_message(state, callback, bucket=CLIENT_REGISTRATION_BUCKET)
     ev.info("client_reg.pd.policy_opened", policy_version=str(PD_POLICY_VERSION))
-    await callback.bot.send_message(
-        chat_id=callback.from_user.id,
-        text=pd_txt.policy_in_progress(),
-        parse_mode="HTML",
-    )
+    await send_personal_data_policy(bot=callback.bot, chat_id=int(callback.from_user.id))
 
 
 @router.callback_query(StateFilter(ClientRegistration.consent), F.data == CLIENT_REGISTRATION_CB["pd_disagree"])

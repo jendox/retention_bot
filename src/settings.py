@@ -65,6 +65,7 @@ class SecuritySettings(BaseModel):
     master_public_registration: bool = False
     master_registration_start_rl_sec: int = 5
     master_registration_confirm_rl_sec: int = 15
+    personal_data_policy_path: str = "/app/assets/privacy_policy.pdf"
 
 
 class ObservabilitySettings(BaseModel):

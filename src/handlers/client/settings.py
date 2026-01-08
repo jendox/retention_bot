@@ -10,6 +10,7 @@ from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
+from src.handlers.shared.personal_data_policy import send_personal_data_policy
 from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.observability.audit_log import write_audit_log
 from src.observability.context import bind_log_context
@@ -35,6 +36,7 @@ SETTINGS_BUCKET = "client_settings"
 
 VIEW_HUB = "hub"
 VIEW_EDIT_PROFILE = "edit_profile"
+VIEW_PERSONAL_DATA = "personal_data"
 
 _NAME_MAX_LEN = 64
 
@@ -51,8 +53,18 @@ def _kb_settings_hub() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text=txt.btn_edit_profile(), callback_data=f"{SETTINGS_CB_PREFIX}edit_profile")],
             [InlineKeyboardButton(text=txt.btn_guide(), callback_data=f"{SETTINGS_CB_PREFIX}guide")],
-            [InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data")],
+            [InlineKeyboardButton(text=txt.btn_personal_data(), callback_data=f"{SETTINGS_CB_PREFIX}personal_data")],
             [InlineKeyboardButton(text=btn_close(), callback_data=f"{SETTINGS_CB_PREFIX}back")],
+        ],
+    )
+
+
+def _kb_personal_data_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="↩️ К настройкам", callback_data=f"{SETTINGS_CB_PREFIX}back_menu")],
+            [InlineKeyboardButton(text=pd_txt.btn_policy(), callback_data=f"{SETTINGS_CB_PREFIX}pd_policy")],
+            [InlineKeyboardButton(text=txt.btn_delete_data(), callback_data=f"{SETTINGS_CB_PREFIX}delete_data")],
         ],
     )
 
@@ -235,6 +247,8 @@ async def _render_and_edit_main(
     notifications_enabled = bool(getattr(client, "notifications_enabled", True))
     if view == VIEW_EDIT_PROFILE:
         kb = _kb_settings_edit_profile(notifications_enabled=notifications_enabled)
+    elif view == VIEW_PERSONAL_DATA:
+        kb = _kb_personal_data_menu()
     else:
         kb = _kb_settings_hub()
 
@@ -509,6 +523,8 @@ def _parse_action(data: str) -> tuple[str, str | None]:
         "toggle_notify": "toggle_notify",
         "cancel_edit": "cancel_edit",
         "back_menu": "back_menu",
+        "personal_data": "personal_data",
+        "pd_policy": "pd_policy",
         "delete_data": "delete_data",
         "delete_confirm": "delete_confirm",
     }
@@ -669,6 +685,15 @@ async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
         return
     if action == "back_menu":
         await _handle_back_menu(callback, state=state, telegram_id=telegram_id)
+        return
+    if action == "personal_data":
+        await callback.answer()
+        await state.update_data(**{SETTINGS_VIEW_KEY: VIEW_PERSONAL_DATA})
+        await _render_and_edit_main(state=state, bot=callback.bot, telegram_id=telegram_id)
+        return
+    if action == "pd_policy":
+        await callback.answer()
+        await send_personal_data_policy(bot=callback.bot, chat_id=int(telegram_id))
         return
     if action == "delete_data":
         await callback.answer()

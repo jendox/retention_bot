@@ -22,6 +22,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 
 from src.core.sa import active_session, session_local
 from src.handlers.master.master_menu import send_master_main_menu
+from src.handlers.shared.personal_data_policy import send_personal_data_policy
 from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup, safe_edit_text
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
@@ -454,11 +455,7 @@ async def master_reg_pd_policy(callback: CallbackQuery, state: FSMContext) -> No
     await callback.answer()
     await track_callback_message(state, callback, bucket=MASTER_REGISTRATION_BUCKET)
     ev.info("master_reg.pd.policy_opened", policy_version=str(PD_POLICY_VERSION))
-    await callback.bot.send_message(
-        chat_id=callback.from_user.id,
-        text=pd_txt.policy_in_progress(),
-        parse_mode="HTML",
-    )
+    await send_personal_data_policy(bot=callback.bot, chat_id=int(callback.from_user.id))
 
 
 @router.callback_query(StateFilter(MasterRegistration.consent), F.data == MASTER_REGISTRATION_CB["pd_disagree"])
