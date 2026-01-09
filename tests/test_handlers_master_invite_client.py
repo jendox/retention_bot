@@ -49,7 +49,11 @@ class MasterInviteClientHandlerTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=10)),
             answer=AsyncMock(),
         )
-        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
+        notifier = SimpleNamespace(
+            maybe_send=AsyncMock(return_value=True),
+            maybe_render=lambda _r: None,
+            policy=DefaultNotificationPolicy(),
+        )
 
         class _UseCase:
             def __init__(self, session) -> None:
@@ -86,7 +90,11 @@ class MasterInviteClientHandlerTests(unittest.IsolatedAsyncioTestCase):
             message=SimpleNamespace(message_id=1, chat=SimpleNamespace(id=10)),
             answer=AsyncMock(),
         )
-        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
+        notifier = SimpleNamespace(
+            maybe_send=AsyncMock(return_value=True),
+            maybe_render=lambda _r: None,
+            policy=DefaultNotificationPolicy(),
+        )
 
         class _UseCase:
             def __init__(self, session) -> None:

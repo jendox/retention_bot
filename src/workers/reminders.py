@@ -464,22 +464,16 @@ async def _send_client_reminder(
     client = booking.client
     master = booking.master
 
-    if getattr(client, "telegram_id", None) is None:
-        return False
-    if not getattr(client, "notifications_enabled", True):
-        return False
-    if not getattr(master, "notify_clients", True):
-        return False
-
     start_at_utc = booking.start_at.astimezone(UTC)
     slot_client = to_zone(start_at_utc, client.timezone)
     slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
+    client_tg = getattr(client, "telegram_id", None)
     try:
         return await notifier.maybe_send(
             NotificationRequest(
                 event=event,
                 recipient=RecipientKind.CLIENT,
-                chat_id=int(client.telegram_id),
+                chat_id=int(client_tg) if client_tg is not None else None,
                 context=ReminderContext(
                     master_name=str(master.name),
                     slot_str=slot_str,
@@ -487,7 +481,7 @@ async def _send_client_reminder(
                 facts=NotificationFacts(
                     event=event,
                     recipient=RecipientKind.CLIENT,
-                    chat_id=int(client.telegram_id),
+                    chat_id=int(client_tg) if client_tg is not None else None,
                     plan_is_pro=bool(plan_is_pro),
                     master_notify_clients=bool(getattr(master, "notify_clients", True)),
                     client_notifications_enabled=bool(getattr(client, "notifications_enabled", True)),
@@ -546,13 +540,6 @@ async def _send_client_booking_notification(
     now_utc: datetime,
     plan_is_pro: bool,
 ) -> bool | None:
-    if (
-        booking.client.telegram_id is None
-        or booking.client.notifications_enabled is False
-        or booking.master.notify_clients is False
-    ):
-        return False
-
     if event in {NotificationEvent.BOOKING_CONFIRMED, NotificationEvent.BOOKING_DECLINED}:
         expected = (
             BookingStatus.CONFIRMED if event == NotificationEvent.BOOKING_CONFIRMED else BookingStatus.DECLINED
@@ -609,9 +596,6 @@ async def _send_master_attendance_nudge(
 
     master = booking.master
     client = booking.client
-
-    if not getattr(master, "notify_attendance", True):
-        return False
 
     end_at_utc = booking.start_at.astimezone(UTC) + timedelta(minutes=int(booking.duration_min))
     if end_at_utc > now_utc:
@@ -748,8 +732,6 @@ async def _send_pro_invoice_reminder_job(  # noqa: C901, PLR0911
         return False
 
     plan_is_pro = await _plan_is_pro(master_id=int(master.id), cache=plan_cache)
-    if plan_is_pro:
-        return False
 
     invoice = await _load_invoice_for_notification(invoice_id=int(job.invoice_id))
     if invoice is None:

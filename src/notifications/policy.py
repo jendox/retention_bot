@@ -104,6 +104,10 @@ class DefaultNotificationPolicy:
         NotificationEvent.LIMIT_BOOKINGS_REACHED,
     }
 
+    MASTER_EVENTS_FREE_PLAN: set[NotificationEvent] = {
+        NotificationEvent.PRO_INVOICE_REMINDER,
+    }
+
     MASTER_EVENTS_PRO: set[NotificationEvent] = {
         NotificationEvent.MASTER_ATTENDANCE_NUDGE,
     }
@@ -144,10 +148,20 @@ class DefaultNotificationPolicy:
 
         if facts.event in self.MASTER_EVENTS_ONBOARDING:
             return self._check_master_onboarding(facts)
+        if facts.event in self.MASTER_EVENTS_FREE_PLAN:
+            return self._check_master_free_plan(facts)
         if facts.event in self.MASTER_EVENTS_PRO:
             return self._check_master_pro(facts)
         if facts.event in self.MASTER_FREE_ONLY_EVENTS:
             return self._check_master_free_only(facts)
+        return PolicyDecision.allow()
+
+    @staticmethod
+    def _check_master_free_plan(facts: NotificationFacts) -> PolicyDecision:
+        if facts.plan_is_pro is None:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_plan_event_requires_plan")
+        if facts.plan_is_pro:
+            return PolicyDecision.deny(DenyReason.EVENT_NOT_ALLOWED, detail="free_plan_event_for_pro_master")
         return PolicyDecision.allow()
 
     @staticmethod

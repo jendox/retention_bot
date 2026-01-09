@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardMarkup
 from src.notifications import BookingContext, NotificationEvent, NotificationService, RecipientKind
 from src.notifications.context import LimitsContext, OnboardingContext, ReminderContext, SubscriptionContext
 from src.notifications.policy import NotificationFacts, NotificationPolicy
+from src.notifications.renderer import RenderedMessage, render
 
 
 @dataclass(frozen=True)
@@ -72,4 +73,20 @@ class Notifier:
             bot=self.bot,
             policy=self.policy,
             request=request,
+        )
+
+    def maybe_render(self, request: NotificationRequest) -> RenderedMessage | None:
+        """
+        Check policy and render a notification message without sending it.
+        Useful for embedding "optional" notification copy into other UI flows.
+        """
+        facts = build_facts(request)
+        decision = self.policy.check(facts)
+        if not decision.allowed:
+            return None
+        return render(
+            event=request.event,
+            recipient=request.recipient,
+            context=request.context,
+            reply_markup=request.reply_markup,
         )

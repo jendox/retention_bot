@@ -12,9 +12,8 @@ from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_text
 from src.notifications.context import LimitsContext
-from src.notifications.notifier import NotificationRequest, Notifier, build_facts
+from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
-from src.notifications.renderer import render as render_notification
 from src.notifications.types import NotificationEvent, RecipientKind
 from src.observability.alerts import AdminAlerter
 from src.observability.audit_log import write_audit_log
@@ -139,14 +138,8 @@ def _build_near_limit_warning(
             plan_is_pro=plan_is_pro,
         ),
     )
-    if not notifier.policy.check(build_facts(warn_request)).allowed:
-        return ""
-
-    warning_text = render_notification(
-        event=NotificationEvent.WARNING_NEAR_CLIENTS_LIMIT,
-        recipient=RecipientKind.MASTER,
-        context=LimitsContext(usage=usage, clients_limit=clients_limit),
-    ).text
+    rendered = notifier.maybe_render(warn_request)
+    warning_text = (rendered.text if rendered else "") or ""
     return "\n\n" + warning_text if warning_text else ""
 
 
