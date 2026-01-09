@@ -35,7 +35,7 @@ def contact_message(*, contact: str, t: Translator = _noop_t) -> str:
     safe_contact = html.escape(str(contact))
     return t(
         "💬 Поддержка\n\n"
-        "Если возникли сложности с оплатой подписки Pro — напиши на email: "
+        "Если возникли сложности с оплатой подписки Pro — напиши: "
         f"{safe_contact}\n\n"
         "Чтобы мы быстро нашли аккаунт, укажи своё имя мастера и телефон.",
     )

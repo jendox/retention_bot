@@ -6,6 +6,7 @@ from typing import Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.datetime_utils import get_timezone
 from src.models.subscription import SubscriptionPlan
 from src.plans import (
     FREE_BOOKING_HORIZON_DAYS,
@@ -53,6 +54,19 @@ def _month_bounds_utc(now: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _month_bounds_for_timezone(*, now_utc: datetime, tz_name: str) -> tuple[datetime, datetime]:
+    if now_utc.tzinfo is None:
+        raise ValueError("Expected timezone-aware datetime in UTC.")
+    tz = get_timezone(str(tz_name))
+    local_now = now_utc.astimezone(tz)
+    start_local = datetime(local_now.year, local_now.month, 1, tzinfo=tz)
+    if local_now.month == 12:  # noqa: PLR2004
+        end_local = datetime(local_now.year + 1, 1, 1, tzinfo=tz)
+    else:
+        end_local = datetime(local_now.year, local_now.month + 1, 1, tzinfo=tz)
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
 class EntitlementsService:
     """
     Central place for Free/Pro checks.
@@ -98,10 +112,11 @@ class EntitlementsService:
 
     async def get_usage(self, *, master_id: int, now: datetime | None = None) -> Usage:
         now_utc = now or datetime.now(UTC)
-        month_start, month_end = _month_bounds_utc(now_utc)
+        master = await self._master_repo.get_by_id(master_id)
+        month_start, month_end = _month_bounds_for_timezone(now_utc=now_utc, tz_name=str(master.timezone.value))
 
         clients_count = await self._master_repo.count_clients(master_id)
-        bookings_count = await self._booking_repo.count_created_for_master_in_range(
+        bookings_count = await self._booking_repo.count_by_start_at_for_master_in_range(
             master_id=master_id,
             start_at_utc=month_start,
             end_at_utc=month_end,

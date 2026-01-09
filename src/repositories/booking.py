@@ -328,6 +328,30 @@ class BookingRepository(BaseRepository):
         count = await self._session.scalar(stmt)
         return int(count or 0)
 
+    async def count_by_start_at_for_master_in_range(
+        self,
+        *,
+        master_id: int,
+        start_at_utc: datetime,
+        end_at_utc: datetime,
+    ) -> int:
+        """
+        Counts bookings by visit time (Booking.start_at), not by creation time.
+
+        Used for "bookings per month" entitlements and near-limit warnings.
+        """
+        stmt = (
+            select(func.count())
+            .select_from(BookingEntity)
+            .where(
+                BookingEntity.master_id == master_id,
+                BookingEntity.start_at >= start_at_utc,
+                BookingEntity.start_at < end_at_utc,
+            )
+        )
+        count = await self._session.scalar(stmt)
+        return int(count or 0)
+
     async def reschedule(
         self,
         *,
