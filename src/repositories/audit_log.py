@@ -4,6 +4,7 @@ import inspect
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.audit_log import AuditLog
@@ -46,3 +47,24 @@ class AuditLogRepository(BaseRepository):
         maybe_awaitable = self._session.add(AuditLog(**kwargs))
         if inspect.isawaitable(maybe_awaitable):
             maybe_awaitable.close()
+
+    async def anonymize_by_actor_id(self, *, actor_id: int) -> int:
+        """
+        Anonymize audit log entries for a Telegram user by clearing identifiers.
+
+        Keeps the audit record (event/timestamps) but removes `actor_id` and other
+        potentially identifying fields to support "delete my data" flows.
+        """
+        stmt = (
+            update(AuditLog)
+            .where(AuditLog.actor_id == int(actor_id))
+            .values(
+                actor=None,
+                actor_id=None,
+                trace_id=None,
+                meta=None,
+            )
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return int(result.rowcount or 0)

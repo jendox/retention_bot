@@ -16,14 +16,13 @@ from src.handlers.shared.ui import safe_bot_delete_message, safe_bot_edit_messag
 from src.observability.audit_log import write_audit_log
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
-from src.privacy import ConsentRole
 from src.rate_limiter import RateLimiter
-from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
-from src.repositories.consent import ConsentRepository
+from src.repositories import ClientNotFound, ClientRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import Timezone
 from src.texts import client_settings as txt, common as common_txt, personal_data as pd_txt
 from src.texts.buttons import btn_back, btn_close
+from src.use_cases.delete_personal_data import DeleteClientPersonalData
 from src.user_context import ActiveRole, UserContextStorage
 from src.utils import cleanup_messages, format_phone_e164, track_message, validate_phone
 
@@ -721,13 +720,7 @@ async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
         await callback.answer()
         ev.info("pd.delete_confirmed", role="client")
         async with active_session() as session:
-            deleted = await ClientRepository(session).delete_by_telegram_id(telegram_id)
-            await ConsentRepository(session).delete_consent(telegram_id=telegram_id, role=str(ConsentRole.CLIENT.value))
-            master_exists = True
-            try:
-                await MasterRepository(session).get_by_telegram_id(telegram_id)
-            except MasterNotFound:
-                master_exists = False
+            result = await DeleteClientPersonalData(session).execute(telegram_id=telegram_id)
 
         if callback.message is not None:
             await safe_delete(callback.message, ev=ev, event="client_settings.delete_main_failed")
@@ -735,12 +728,12 @@ async def _dispatch_without_client(  # noqa: C901, PLR0911, PLR0912, PLR0915
         await _clear_main_ref(state)
         await state.clear()
 
-        if master_exists:
+        if result.other_role_exists:
             await user_ctx_storage.set_role(telegram_id, ActiveRole.MASTER)
         else:
             await user_ctx_storage.clear_role(telegram_id)
 
-        if deleted:
+        if result.deleted:
             ev.info("pd.deleted", role="client", deleted=True)
             await callback.bot.send_message(chat_id=telegram_id, text=pd_txt.deleted_done(), parse_mode="HTML")
         else:
