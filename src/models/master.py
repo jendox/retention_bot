@@ -140,4 +140,9 @@ master_clients = Table(
         String(255),
         nullable=True,
     ),
+    Column(
+        "master_alias",
+        String(255),
+        nullable=True,
+    ),
 )

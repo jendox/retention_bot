@@ -15,7 +15,7 @@ from src.handlers.shared.ui import safe_delete, safe_edit_reply_markup, safe_edi
 from src.models import Booking as BookingEntity
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
-from src.repositories import MasterNotFound, MasterRepository
+from src.repositories import MasterClientRepository, MasterNotFound, MasterRepository
 from src.schemas import MasterWithClients
 from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, master_list_clients as txt
@@ -135,7 +135,7 @@ async def _fetch_master_with_clients(telegram_id: int) -> MasterWithClients:
     async with active_session(begin=False) as session:
         repo = MasterRepository(session)
         master = await repo.get_with_clients_by_telegram_id(telegram_id)
-        aliases = await repo.get_client_aliases(master_id=int(master.id))
+        aliases = await MasterClientRepository(session).get_client_aliases_for_master(master_id=int(master.id))
         if aliases:
             for client in master.clients:
                 alias = aliases.get(int(client.id))

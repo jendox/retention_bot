@@ -4,7 +4,7 @@ from html import escape as html_escape
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 
-from src.core.sa import active_session
+from src.core.sa import active_session, session_local
 from src.datetime_utils import to_zone
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
@@ -16,6 +16,7 @@ from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
+from src.repositories import MasterClientRepository
 from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.enums import BookingStatus
 from src.texts import master_booking_review as txt
@@ -57,6 +58,17 @@ def _review_error_text(error: ReviewMasterBookingError | None) -> str:
     return txt.failed()
 
 
+async def _client_alias_for_master_view(*, booking) -> str | None:
+    try:
+        async with session_local() as session:
+            return await MasterClientRepository(session).get_client_alias(
+                master_id=int(booking.master.id),
+                client_id=int(booking.client.id),
+            )
+    except Exception:
+        return None
+
+
 async def _disable_keyboard(callback: CallbackQuery) -> None:
     if callback.message is None:
         return
@@ -68,10 +80,10 @@ async def _disable_keyboard(callback: CallbackQuery) -> None:
     )
 
 
-def _master_review_text(*, booking, new_status: BookingStatus) -> str:
+def _master_review_text(*, booking, new_status: BookingStatus, client_name: str) -> str:
     slot_master = to_zone(booking.start_at.astimezone(UTC), booking.master.timezone)
     slot_master_str = slot_master.strftime("%d.%m.%Y %H:%M")
-    client_name_safe = html_escape(str(booking.client.name))
+    client_name_safe = html_escape(str(client_name))
     if new_status == BookingStatus.CONFIRMED:
         return txt.master_confirmed(client_name=client_name_safe, slot_str=slot_master_str)
     return txt.master_declined(client_name=client_name_safe, slot_str=slot_master_str)
@@ -174,7 +186,13 @@ async def master_review_booking(
         await callback.answer(txt.failed(), show_alert=True)
         return
 
-    master_text = _master_review_text(booking=booking, new_status=new_status)
+    client_alias = await _client_alias_for_master_view(booking=booking)
+
+    master_text = _master_review_text(
+        booking=booking,
+        new_status=new_status,
+        client_name=str(client_alias or booking.client.name),
+    )
 
     if callback.message:
         await safe_edit_text(

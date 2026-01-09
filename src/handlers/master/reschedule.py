@@ -26,7 +26,7 @@ from src.observability.events import EventLogger
 from src.paywall import build_paywall_keyboard
 from src.plans import PRO_BOOKING_HORIZON_DAYS
 from src.rate_limiter import RateLimiter
-from src.repositories import BookingNotFound, MasterNotFound, MasterRepository
+from src.repositories import BookingNotFound, MasterClientRepository, MasterNotFound, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.enums import BookingStatus, Timezone
@@ -47,6 +47,18 @@ from src.utils import cleanup_messages, track_message
 
 ev = EventLogger(__name__)
 router = Router(name=__name__)
+
+
+async def _client_alias_for_master_view(*, booking) -> str | None:
+    try:
+        async with session_local() as session:
+            return await MasterClientRepository(session).get_client_alias(
+                master_id=int(booking.master.id),
+                client_id=int(booking.client.id),
+            )
+    except Exception:
+        return None
+
 
 CB_CONFIRM = "m:reschedule:confirm"
 CB_CANCEL = "m:reschedule:cancel"
@@ -617,6 +629,7 @@ async def start_reschedule(
         return
 
     await _reset_reschedule(state, callback.bot)
+    client_alias = await _client_alias_for_master_view(booking=booking)
     await state.update_data(
         reschedule_booking_id=booking_id,
         reschedule_scope=getattr(scope, "value", str(scope)),
@@ -624,7 +637,7 @@ async def start_reschedule(
         reschedule_master_id=booking.master.id,
         reschedule_master_tz=str(booking.master.timezone.value),
         reschedule_original_start_at=booking.start_at.astimezone(UTC).isoformat(),
-        reschedule_client_name=booking.client.name,
+        reschedule_client_name=client_alias or booking.client.name,
         reschedule_client_tg=booking.client.telegram_id,
         confirm_in_progress=False,
     )

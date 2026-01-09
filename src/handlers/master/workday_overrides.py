@@ -18,6 +18,7 @@ from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
 from src.repositories import BookingRepository, MasterNotFound, MasterRepository, WorkdayOverrideRepository
+from src.repositories.master_client import MasterClientRepository
 from src.schemas import WorkdayOverrideCreate
 from src.schemas.enums import BookingStatus
 from src.texts import common as common_txt, master_overrides as txt
@@ -188,13 +189,24 @@ async def _bookings_for_master_day(*, master_id: int, master_tz, day: date):
     async with session_local() as session:
         repo = BookingRepository(session)
         utc_range = utc_range_for_master_day(master_day=day, master_tz=master_tz)
-        return await repo.get_for_master_in_range(
+        bookings = await repo.get_for_master_in_range(
             master_id=master_id,
             start_at_utc=utc_range.start,
             end_at_utc=utc_range.end,
             statuses=BookingStatus.active(),
             load_clients=True,
         )
+        aliases = await MasterClientRepository(session).get_client_aliases_for_master(master_id=int(master_id))
+        if aliases:
+            for booking in bookings:
+                client = getattr(booking, "client", None)
+                client_id = getattr(client, "id", None)
+                if client is None or client_id is None:
+                    continue
+                alias = aliases.get(int(client_id))
+                if alias:
+                    client.name = alias
+        return bookings
 
 
 def _conflicts_for_window(*, bookings: list, master_tz, window: tuple[time, time] | None) -> list:

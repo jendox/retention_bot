@@ -47,3 +47,19 @@ def btn_write_master(*, t: Translator = _noop_t) -> str:
 
 def btn_book(*, t: Translator = _noop_t) -> str:
     return t("📅 Записаться")
+
+
+def btn_edit_name(*, t: Translator = _noop_t) -> str:
+    return t("✏️ Переименовать")
+
+
+def ask_new_name(*, t: Translator = _noop_t) -> str:
+    return t("Введи, как ты хочешь записать этого мастера у себя:")
+
+
+def name_not_recognized(*, t: Translator = _noop_t) -> str:
+    return t("⚠️ Имя не должно быть пустым.")
+
+
+def name_updated(*, t: Translator = _noop_t) -> str:
+    return t("✅ Сохранено.")

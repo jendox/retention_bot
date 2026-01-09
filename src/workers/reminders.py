@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from src.core.sa import Database, active_session, session_local
 from src.datetime_utils import to_zone
 from src.models import Booking as BookingEntity, Master as MasterEntity, Subscription as SubscriptionEntity
+from src.models.master import master_clients
 from src.notifications.context import (
     BillingContext,
     BookingContext,
@@ -38,6 +39,42 @@ from src.texts.buttons import btn_cancel_booking
 from src.use_cases.entitlements import EntitlementsService
 
 ev = EventLogger("workers.reminders")
+
+_MASTER_ALIAS_CACHE: dict[tuple[int, int], str | None] = {}
+_CLIENT_ALIAS_CACHE: dict[tuple[int, int], str | None] = {}
+
+
+async def _resolve_display_names(
+    *,
+    master_id: int,
+    client_id: int,
+) -> tuple[str | None, str | None]:
+    key = (int(master_id), int(client_id))
+    if key in _MASTER_ALIAS_CACHE and key in _CLIENT_ALIAS_CACHE:
+        return _MASTER_ALIAS_CACHE[key], _CLIENT_ALIAS_CACHE[key]
+
+    try:
+        async with session_local() as session:
+            stmt = (
+                select(master_clients.c.master_alias, master_clients.c.client_alias)
+                .where(
+                    master_clients.c.master_id == int(master_id),
+                    master_clients.c.client_id == int(client_id),
+                )
+                .limit(1)
+            )
+            row = (await session.execute(stmt)).one_or_none()
+            master_alias, client_alias = (row if row is not None else (None, None))
+    except RuntimeError:
+        # Unit-tests can run without initializing the DB session maker.
+        master_alias, client_alias = None, None
+
+    master_alias_str = str(master_alias) if master_alias is not None else None
+    client_alias_str = str(client_alias) if client_alias is not None else None
+    _MASTER_ALIAS_CACHE[key] = master_alias_str
+    _CLIENT_ALIAS_CACHE[key] = client_alias_str
+    return master_alias_str, client_alias_str
+
 
 _ONBOARDING_CLIENT_CHOICE_SEQUENCE = 2
 
@@ -166,13 +203,16 @@ async def _send_reminder(  # noqa: PLR0913
     slot_client = to_zone(start_at_utc, client.timezone)
     slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
 
+    master_alias, _client_alias = await _resolve_display_names(master_id=int(master.id), client_id=int(client.id))
+    master_name_for_client = str(master_alias or master.name)
+
     return await notifier.maybe_send(
         NotificationRequest(
             event=kind.event,
             recipient=RecipientKind.CLIENT,
             chat_id=int(client_telegram_id),
             context=ReminderContext(
-                master_name=str(master.name),
+                master_name=master_name_for_client,
                 slot_str=slot_str,
             ),
             facts=NotificationFacts(
@@ -468,6 +508,8 @@ async def _send_client_reminder(
     slot_client = to_zone(start_at_utc, client.timezone)
     slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
     client_tg = getattr(client, "telegram_id", None)
+    master_alias, _client_alias = await _resolve_display_names(master_id=int(master.id), client_id=int(client.id))
+    master_name_for_client = str(master_alias or master.name)
     try:
         return await notifier.maybe_send(
             NotificationRequest(
@@ -475,7 +517,7 @@ async def _send_client_reminder(
                 recipient=RecipientKind.CLIENT,
                 chat_id=int(client_tg) if client_tg is not None else None,
                 context=ReminderContext(
-                    master_name=str(master.name),
+                    master_name=master_name_for_client,
                     slot_str=slot_str,
                 ),
                 facts=NotificationFacts(
@@ -551,6 +593,17 @@ async def _send_client_booking_notification(
     slot_client = to_zone(start_at_utc, booking.client.timezone)
     slot_str = slot_client.strftime("%d.%m.%Y %H:%M")
 
+    master_id = getattr(booking, "master_id", None) or getattr(getattr(booking, "master", None), "id", None)
+    client_id = getattr(booking, "client_id", None) or getattr(getattr(booking, "client", None), "id", None)
+    if master_id is not None and client_id is not None:
+        master_alias, _client_alias = await _resolve_display_names(
+            master_id=int(master_id),
+            client_id=int(client_id),
+        )
+    else:
+        master_alias = None
+    master_name_for_client = str(master_alias or booking.master.name)
+
     try:
         return await notifier.maybe_send(
             NotificationRequest(
@@ -559,7 +612,7 @@ async def _send_client_booking_notification(
                 chat_id=int(chat_id),
                 context=BookingContext(
                     booking_id=int(booking.id),
-                    master_name=str(booking.master.name),
+                    master_name=master_name_for_client,
                     client_name=str(booking.client.name),
                     slot_str=slot_str,
                     duration_min=int(booking.duration_min),
@@ -603,6 +656,8 @@ async def _send_master_attendance_nudge(
 
     slot_master = to_zone(booking.start_at.astimezone(UTC), master.timezone)
     slot_str = slot_master.strftime("%d.%m.%Y %H:%M")
+    _master_alias, client_alias = await _resolve_display_names(master_id=int(master.id), client_id=int(client.id))
+    client_name_for_master = str(client_alias or getattr(client, "name", "") or "")
     try:
         return await notifier.maybe_send(
             NotificationRequest(
@@ -612,7 +667,7 @@ async def _send_master_attendance_nudge(
                 context=BookingContext(
                     booking_id=int(booking.id),
                     master_name=str(master.name),
-                    client_name=str(getattr(client, "name", "") or ""),
+                    client_name=client_name_for_master,
                     slot_str=slot_str,
                     duration_min=int(booking.duration_min),
                 ),

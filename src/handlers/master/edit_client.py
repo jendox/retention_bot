@@ -18,7 +18,7 @@ from src.models import Booking as BookingEntity
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
-from src.repositories import ClientNotFound, ClientRepository, MasterNotFound, MasterRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterClientRepository, MasterNotFound, MasterRepository
 from src.schemas import ClientUpdate
 from src.schemas.enums import AttendanceOutcome, status_badge
 from src.texts import common as common_txt, edit_client as txt
@@ -59,7 +59,7 @@ async def _load_master_with_clients_and_aliases(*, telegram_id: int):
             master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
         except MasterNotFound:
             return None
-        aliases = await master_repo.get_client_aliases(master_id=int(master.id))
+        aliases = await MasterClientRepository(session).get_client_aliases_for_master(master_id=int(master.id))
     if aliases:
         for client in master.clients:
             alias = aliases.get(int(client.id))
@@ -906,7 +906,7 @@ async def _update_name_for_master(
     except MasterNotFound:
         return "master_not_found"
 
-    updated = await master_repo.set_client_alias(
+    updated = await MasterClientRepository(session).set_client_alias(
         master_id=int(master.id),
         client_id=int(selected["id"]),
         alias=name,

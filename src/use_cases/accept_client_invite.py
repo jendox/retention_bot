@@ -14,6 +14,7 @@ from src.repositories import (
     InviteRepository,
     MasterRepository,
 )
+from src.repositories.master_client import MasterClientRepository
 from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas import Client, ClientCreate, ClientUpdate, Invite, Master
 from src.schemas.enums import InviteType, Timezone
@@ -109,6 +110,7 @@ class AcceptClientInvite:
         self._invite_repo = InviteRepository(session)
         self._client_repo = ClientRepository(session)
         self._master_repo = MasterRepository(session)
+        self._master_client_repo = MasterClientRepository(session)
         self._booking_repo = BookingRepository(session)
         self._entitlements = EntitlementsService(session)
         self._outbox = ScheduledNotificationRepository(session)
@@ -383,7 +385,7 @@ class AcceptClientInvite:
                 )
                 await self._master_repo.detach_client(master_id, client_for_phone.id)
                 await self._master_repo.attach_client(master_id, existing_client.id)
-                await self._master_repo.set_client_alias_if_empty(
+                await self._master_client_repo.set_client_alias_if_empty(
                     master_id=master_id,
                     client_id=existing_client.id,
                     alias=offline_name,
@@ -418,7 +420,7 @@ class AcceptClientInvite:
                 ),
             )
             if request.name is not None and str(request.name).strip():
-                await self._master_repo.set_client_alias_if_empty(
+                await self._master_client_repo.set_client_alias_if_empty(
                     master_id=master_id,
                     client_id=client_for_phone.id,
                     alias=offline_name,

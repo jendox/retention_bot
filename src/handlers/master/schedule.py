@@ -23,7 +23,7 @@ from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.paywall import build_upgrade_button_with_fallback
 from src.rate_limiter import RateLimiter
-from src.repositories import MasterRepository
+from src.repositories import MasterClientRepository, MasterRepository
 from src.repositories.booking import BookingRepository
 from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas.enums import BOOKING_STATUS_MAP, AttendanceOutcome, BookingStatus, status_badge
@@ -56,6 +56,73 @@ class Scope(StrEnum):
     @classmethod
     def history(cls) -> set["Scope"]:
         return {cls.YESTERDAY, cls.HISTORY_WEEK}
+
+
+async def _apply_client_aliases_for_master(*, session, master_id: int, bookings: list) -> None:
+    aliases = await MasterClientRepository(session).get_client_aliases_for_master(master_id=int(master_id))
+    if not aliases:
+        return
+    for booking in bookings:
+        client = getattr(booking, "client", None)
+        client_id = getattr(client, "id", None)
+        if client is None or client_id is None:
+            continue
+        alias = aliases.get(int(client_id))
+        if alias:
+            client.name = alias
+
+
+async def _apply_client_alias_for_booking(*, session, master_id: int, booking) -> None:
+    client = getattr(booking, "client", None)
+    client_id = getattr(client, "id", None)
+    if client is None or client_id is None:
+        return
+    alias = await MasterClientRepository(session).get_client_alias(master_id=int(master_id), client_id=int(client_id))
+    if alias:
+        client.name = alias
+
+
+async def _fetch_master_or_none(callback: CallbackQuery):
+    try:
+        return await _fetch_master(callback.from_user.id)
+    except Exception as exc:
+        await ev.aexception("master_schedule.load_master_failed", exc=exc)
+        return None
+
+
+def _statuses_for_scope(scope: Scope):
+    if scope in Scope.history():
+        return BookingStatus.without_completed()
+    return BookingStatus.active() if scope in Scope.long() else BookingStatus.without_completed()
+
+
+async def _fetch_bookings_or_none(
+    *,
+    master_id: int,
+    scope: Scope,
+    start_at_utc: datetime,
+    end_at_utc: datetime,
+) -> list | None:
+    try:
+        async with session_local() as session:
+            repo = BookingRepository(session)
+            bookings = await repo.get_for_master_in_range(
+                master_id=master_id,
+                start_at_utc=start_at_utc,
+                end_at_utc=end_at_utc,
+                statuses=_statuses_for_scope(scope),
+                load_clients=True,
+            )
+            await _apply_client_aliases_for_master(session=session, master_id=int(master_id), bookings=bookings)
+            return bookings
+    except Exception as exc:
+        await ev.aexception(
+            "master_schedule.load_bookings_failed",
+            exc=exc,
+            master_id=master_id,
+            scope=scope.value,
+        )
+        return None
 
 
 PER_PAGE = 10
@@ -508,37 +575,21 @@ async def _maybe_notify_client_cancelled(
 
 async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1) -> None:
     bind_log_context(flow="master_schedule", step="send_schedule")
-    try:
-        master = await _fetch_master(callback.from_user.id)
-    except Exception as exc:
-        await ev.aexception("master_schedule.load_master_failed", exc=exc)
+    master = await _fetch_master_or_none(callback)
+    if master is None:
         await callback.answer(txt.navigation_error(), show_alert=True)
         return
     master_tz = get_timezone(str(master.timezone.value))
 
     start_local, end_local, cutoff_local = _compute_range(master_tz, scope)
 
-    if scope in Scope.history():
-        statuses = BookingStatus.without_completed()
-    else:
-        statuses = BookingStatus.active() if scope in Scope.long() else BookingStatus.without_completed()
-    try:
-        async with session_local() as session:
-            repo = BookingRepository(session)
-            bookings = await repo.get_for_master_in_range(
-                master_id=master.id,
-                start_at_utc=start_local.astimezone(UTC),
-                end_at_utc=end_local.astimezone(UTC),
-                statuses=statuses,
-                load_clients=True,
-            )
-    except Exception as exc:
-        await ev.aexception(
-            "master_schedule.load_bookings_failed",
-            exc=exc,
-            master_id=master.id,
-            scope=scope.value,
-        )
+    bookings = await _fetch_bookings_or_none(
+        master_id=int(master.id),
+        scope=scope,
+        start_at_utc=start_local.astimezone(UTC),
+        end_at_utc=end_local.astimezone(UTC),
+    )
+    if bookings is None:
         await callback.answer(txt.navigation_error(), show_alert=True)
         return
 
@@ -575,6 +626,7 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
             booking = await repo.get_for_review(booking_id)
             entitlements = EntitlementsService(session)
             plan = await entitlements.get_plan(master_id=master.id)
+            await _apply_client_alias_for_booking(session=session, master_id=int(master.id), booking=booking)
     except Exception as exc:
         await ev.aexception("master_schedule.load_booking_failed", exc=exc, booking_id=booking_id)
         await callback.answer(txt.open_booking_error(), show_alert=True)
@@ -635,6 +687,7 @@ async def _send_cancel_confirm_card(callback: CallbackQuery, *, booking_id: int,
         async with session_local() as session:
             repo = BookingRepository(session)
             booking = await repo.get_for_review(booking_id)
+            await _apply_client_alias_for_booking(session=session, master_id=int(master.id), booking=booking)
     except Exception as exc:
         await ev.aexception("master_schedule.load_booking_failed", exc=exc, booking_id=booking_id)
         await callback.answer(txt.action_error(), show_alert=True)

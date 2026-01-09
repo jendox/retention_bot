@@ -96,8 +96,10 @@ class AcceptClientInviteTests(unittest.IsolatedAsyncioTestCase):
             is_client_attached=AsyncMock(return_value=False),
             attach_client=AsyncMock(),
             detach_client=AsyncMock(),
-            set_client_alias_if_empty=AsyncMock(),
             count_clients=AsyncMock(return_value=0),
+        )
+        uc._master_client_repo = SimpleNamespace(
+            set_client_alias_if_empty=AsyncMock(),
         )
         uc._booking_repo = SimpleNamespace(
             reassign_client_for_master=AsyncMock(return_value=0),
@@ -317,7 +319,7 @@ class AcceptClientInviteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ok)
         self.assertEqual(result.outcome, AcceptInviteOutcome.MERGED_OFFLINE)
         self.assertEqual(result.client_id, existing.id)
-        uc._master_repo.set_client_alias_if_empty.assert_awaited_with(
+        uc._master_client_repo.set_client_alias_if_empty.assert_awaited_with(
             master_id=1,
             client_id=existing.id,
             alias=offline.name,
@@ -365,7 +367,7 @@ class AcceptClientInviteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ok)
         self.assertEqual(result.outcome, AcceptInviteOutcome.CLAIMED_OFFLINE)
-        uc._master_repo.set_client_alias_if_empty.assert_awaited_with(
+        uc._master_client_repo.set_client_alias_if_empty.assert_awaited_with(
             master_id=1,
             client_id=offline.id,
             alias="Offline",

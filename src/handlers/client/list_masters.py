@@ -3,17 +3,19 @@ from __future__ import annotations
 from html import escape as html_escape
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from src.core.sa import session_local
+from src.core.sa import active_session, session_local
 from src.filters.user_role import UserRole
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
-from src.handlers.shared.ui import safe_delete, safe_edit_text
+from src.handlers.shared.ui import safe_bot_edit_message_text, safe_delete, safe_edit_text
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
-from src.repositories import ClientNotFound, ClientRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterClientRepository
 from src.schemas.enums import Timezone
 from src.texts import client_list_masters as txt
 from src.texts.buttons import btn_back, btn_close
@@ -21,7 +23,13 @@ from src.texts.client_booking import booking_limit_reached
 from src.texts.client_messages import CLIENT_NOT_FOUND_MESSAGE
 from src.use_cases.entitlements import EntitlementsService
 from src.user_context import ActiveRole
-from src.utils import format_phone_e164, format_phone_masked_compact, format_work_days_label, track_message
+from src.utils import (
+    cleanup_messages,
+    format_phone_e164,
+    format_phone_masked_compact,
+    format_work_days_label,
+    track_message,
+)
 
 router = Router(name=__name__)
 ev = EventLogger(__name__)
@@ -29,11 +37,17 @@ ev = EventLogger(__name__)
 CB_PREFIX = "c:masters:"
 MAIN_KEY = "client_masters_main"
 LIST_KEY = "client_masters_items"
+EDIT_ALIAS_KEY = "client_masters_edit_alias"
+EDIT_ALIAS_BUCKET = "client_masters_alias"
 
 TEXT_PAGE_SIZE = 10
 SELECT_FIRST_SIZE = 6
 CHUNK_1 = 1
 CHUNK_2 = 2
+
+
+class ClientMastersStates(StatesGroup):
+    edit_alias = State()
 
 
 def _main_ref(chat_id: int, message_id: int) -> dict[str, int]:
@@ -180,6 +194,12 @@ def _kb_master_card(*, master_id: int, master_tg: int, page: int, chunk: int) ->
                 InlineKeyboardButton(text=txt.btn_book(), callback_data=f"{CB_PREFIX}book:{int(master_id)}"),
                 InlineKeyboardButton(text=txt.btn_write_master(), url=f"tg://user?id={int(master_tg)}"),
             ],
+            [
+                InlineKeyboardButton(
+                    text=txt.btn_edit_name(),
+                    callback_data=f"{CB_PREFIX}alias:{int(master_id)}:p:{int(page)}:c:{int(chunk)}",
+                ),
+            ],
             [InlineKeyboardButton(text=btn_back(), callback_data=f"{CB_PREFIX}s:p:{int(page)}:c:{int(chunk)}")],
         ],
     )
@@ -212,8 +232,15 @@ async def _load_masters(telegram_id: int) -> list[dict] | None:
             client = await repo.get_details_by_telegram_id(telegram_id)
         except ClientNotFound:
             return None
-    masters = client.masters
-    return [m.to_state_dict() for m in masters]
+        link_repo = MasterClientRepository(session)
+        aliases = await link_repo.get_master_aliases_for_client(client_id=int(client.id))
+        masters = client.masters
+        if aliases:
+            for master in masters:
+                alias = aliases.get(int(master.id))
+                if alias:
+                    master.name = alias
+        return [m.to_state_dict() for m in masters]
 
 
 async def start_client_list_masters(
@@ -371,6 +398,131 @@ async def open_master(callback: CallbackQuery, state: FSMContext, rate_limiter: 
         ev=ev,
         event="client_list_masters.edit_card_failed",
     )
+
+
+@router.callback_query(UserRole(ActiveRole.CLIENT), F.data.startswith(f"{CB_PREFIX}alias:"))
+async def start_edit_alias(callback: CallbackQuery, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_list_masters", step="edit_alias_start")
+    if not await rate_limit_callback(callback, rate_limiter, name="client_list_masters:edit_alias_start", ttl_sec=1):
+        return
+    await callback.answer()
+    if callback.message is None:
+        return
+
+    # c:masters:alias:<id>:p:<page>:c:<chunk>
+    parts = (callback.data or "").split(":")
+    try:
+        master_id = int(parts[3])
+        page = int(parts[5])
+        chunk = int(parts[7])
+    except Exception:
+        return
+
+    await cleanup_messages(state, callback.bot, bucket=EDIT_ALIAS_BUCKET)
+    await state.update_data(**{EDIT_ALIAS_KEY: {"master_id": master_id, "page": page, "chunk": chunk}})
+    await safe_edit_text(
+        callback.message,
+        text=txt.ask_new_name(),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=btn_back(),
+                        callback_data=f"{CB_PREFIX}open:{master_id}:p:{page}:c:{chunk}",
+                    ),
+                ],
+            ],
+        ),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_list_masters.edit_alias_prompt_failed",
+    )
+    await state.set_state(ClientMastersStates.edit_alias)
+
+
+def _alias_ctx(data: dict) -> tuple[int, int, int] | None:
+    raw = data.get(EDIT_ALIAS_KEY) or {}
+    master_id = raw.get("master_id")
+    page = raw.get("page")
+    chunk = raw.get("chunk")
+    if master_id is None or page is None or chunk is None:
+        return None
+    return int(master_id), int(page), int(chunk)
+
+
+async def _save_master_alias_for_client(*, telegram_id: int, master_id: int, alias: str) -> bool:
+    async with active_session() as session:
+        client_repo = ClientRepository(session)
+        link_repo = MasterClientRepository(session)
+        try:
+            client = await client_repo.get_by_telegram_id(telegram_id)
+        except ClientNotFound:
+            return False
+        return await link_repo.set_master_alias(master_id=int(master_id), client_id=int(client.id), alias=alias)
+
+
+async def _save_alias_impl(*, message: Message, state: FSMContext, alias: str) -> bool:
+    data = await state.get_data()
+    ctx = _alias_ctx(data)
+    if ctx is None:
+        return False
+    master_id, page, chunk = ctx
+
+    telegram_id = message.from_user.id
+    updated = await _save_master_alias_for_client(telegram_id=telegram_id, master_id=master_id, alias=alias)
+    if not updated:
+        return False
+
+    masters: list[dict] = data.get(LIST_KEY) or []
+    master = None
+    for m in masters:
+        if int(m.get("id") or 0) == int(master_id):
+            m["name"] = alias
+            master = m
+            break
+    await state.update_data(**{LIST_KEY: masters})
+
+    ref = _get_main_ref(data, telegram_id=telegram_id)
+    if ref is None or master is None:
+        return True
+
+    chat_id, message_id = ref
+    master_tg = int(master.get("telegram_id") or 0)
+    if master_tg <= 0:
+        return True
+
+    await safe_bot_edit_message_text(
+        message.bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=_render_master_card(master),
+        reply_markup=_kb_master_card(master_id=int(master_id), master_tg=master_tg, page=page, chunk=chunk),
+        parse_mode="HTML",
+        ev=ev,
+        event="client_list_masters.edit_alias_saved_failed",
+    )
+    return True
+
+
+@router.message(UserRole(ActiveRole.CLIENT), StateFilter(ClientMastersStates.edit_alias))
+async def save_alias(message: Message, state: FSMContext, rate_limiter: RateLimiter | None = None) -> None:
+    bind_log_context(flow="client_list_masters", step="edit_alias_save")
+    if not await rate_limit_message(message, rate_limiter, name="client_list_masters:edit_alias_save", ttl_sec=1):
+        return
+    await track_message(state, message, bucket=EDIT_ALIAS_BUCKET)
+    alias = " ".join((message.text or "").split()).strip()
+    if not alias:
+        await message.answer(txt.name_not_recognized())
+        return
+
+    ok = await _save_alias_impl(message=message, state=state, alias=alias)
+    if not ok:
+        await message.answer(CLIENT_NOT_FOUND_MESSAGE)
+        await state.clear()
+        return
+    await cleanup_messages(state, message.bot, bucket=EDIT_ALIAS_BUCKET)
+    await state.update_data(**{EDIT_ALIAS_KEY: {}})
+    await state.set_state(None)
 
 
 @router.callback_query(UserRole(ActiveRole.CLIENT), F.data.startswith(f"{CB_PREFIX}book:"))

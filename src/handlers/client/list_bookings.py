@@ -19,7 +19,7 @@ from src.notifications.notifier import NotificationRequest, Notifier
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
 from src.rate_limiter import RateLimiter
-from src.repositories import ClientNotFound, ClientRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterClientRepository
 from src.repositories.booking import BookingNotFound, BookingRepository
 from src.schemas import BookingForReview
 from src.schemas.enums import BOOKING_STATUS_MAP, BookingStatus, Timezone, status_badge
@@ -304,6 +304,7 @@ async def _fetch_client_bookings(
 ) -> tuple[Timezone, list[BookingForReview]] | None:
     async with session_local() as session:
         client_repo = ClientRepository(session)
+        link_repo = MasterClientRepository(session)
         booking_repo = BookingRepository(session)
 
         try:
@@ -318,6 +319,18 @@ async def _fetch_client_bookings(
             statuses=BookingStatus.active(),
             limit=50,
         )
+        try:
+            aliases = await link_repo.get_master_aliases_for_client(client_id=int(client.id))
+        except Exception:
+            aliases = {}
+        if aliases:
+            for booking in bookings:
+                master_id = getattr(getattr(booking, "master", None), "id", None)
+                if master_id is None:
+                    continue
+                alias = aliases.get(int(master_id))
+                if alias and getattr(booking.master, "name", None) != alias:
+                    booking.master.name = alias
         return client.timezone, bookings
 
 
@@ -391,6 +404,7 @@ async def _load_and_validate_booking(
 ) -> tuple[Timezone, BookingForReview] | None:
     async with session_local() as session:
         client_repo = ClientRepository(session)
+        link_repo = MasterClientRepository(session)
         booking_repo = BookingRepository(session)
         try:
             client = await client_repo.get_by_telegram_id(telegram_id)
@@ -402,6 +416,12 @@ async def _load_and_validate_booking(
             raise
         if booking.client.id != client.id:
             return None
+        try:
+            alias = await link_repo.get_master_alias(master_id=int(booking.master.id), client_id=int(client.id))
+        except Exception:
+            alias = None
+        if alias:
+            booking.master.name = alias
     return client.timezone, booking
 
 
@@ -1009,6 +1029,7 @@ async def _cancel_booking_and_notify(
     )
     async with active_session() as session:
         client_repo = ClientRepository(session)
+        link_repo = MasterClientRepository(session)
         booking_repo = BookingRepository(session)
         try:
             client = await client_repo.get_by_telegram_id(callback.from_user.id)
@@ -1052,6 +1073,13 @@ async def _cancel_booking_and_notify(
             return None
 
         cancelled = await booking_repo.cancel_by_client(booking_id=booking_id, client_id=client.id)
+        master_id = getattr(getattr(booking, "master", None), "id", None) or getattr(booking, "master_id", None)
+        client_alias = None
+        if master_id is not None:
+            try:
+                client_alias = await link_repo.get_client_alias(master_id=int(master_id), client_id=int(client.id))
+            except Exception:
+                client_alias = None
 
     if not cancelled:
         ev.info("client_list_bookings.cannot_cancel", booking_id=int(booking_id))
@@ -1075,7 +1103,7 @@ async def _cancel_booking_and_notify(
             context=BookingContext(
                 booking_id=booking.id,
                 master_name=html_escape(str(getattr(booking.master, "name", ""))),
-                client_name=html_escape(str(getattr(booking.client, "name", ""))),
+                client_name=html_escape(str(client_alias or getattr(booking.client, "name", ""))),
                 slot_str=slot_master_str,
                 duration_min=booking.duration_min,
             ),

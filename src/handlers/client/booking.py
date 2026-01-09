@@ -24,7 +24,7 @@ from src.observability.events import EventLogger
 from src.paywall import build_upgrade_only_keyboard
 from src.plans import PRO_BOOKING_HORIZON_DAYS
 from src.rate_limiter import RateLimiter
-from src.repositories import ClientNotFound, ClientRepository
+from src.repositories import ClientNotFound, ClientRepository, MasterClientRepository
 from src.schemas import Master
 from src.schemas.enums import Timezone
 from src.settings import get_settings
@@ -150,6 +150,24 @@ def _calendar_paywall_text() -> str:
     return "У мастера Free‑тариф — запись доступна только на 7 дней вперёд."
 
 
+async def _load_client_and_masters(*, telegram_id: int):
+    async with session_local() as session:
+        repo = ClientRepository(session)
+        try:
+            client = await repo.get_details_by_telegram_id(telegram_id)
+        except ClientNotFound:
+            return None, None
+
+        masters = client.masters
+        aliases = await MasterClientRepository(session).get_master_aliases_for_client(client_id=int(client.id))
+        if aliases:
+            for master in masters:
+                alias = aliases.get(int(master.id))
+                if alias:
+                    master.name = alias
+        return client, masters
+
+
 async def start_client_add_booking(
     message: Message,
     state: FSMContext,
@@ -161,15 +179,11 @@ async def start_client_add_booking(
     ev.info("client_booking.start")
     await track_message(state, message, bucket=BOOKING_BUCKET)
     telegram_id = message.from_user.id
-    async with session_local() as session:
-        repo = ClientRepository(session)
-        try:
-            client = await repo.get_details_by_telegram_id(telegram_id)
-        except ClientNotFound:
-            ev.warning("client_booking.client_not_found")
-            await message.answer(CLIENT_NOT_FOUND_MESSAGE)
-            return
-        masters = client.masters
+    client, masters = await _load_client_and_masters(telegram_id=telegram_id)
+    if client is None or masters is None:
+        ev.warning("client_booking.client_not_found")
+        await message.answer(CLIENT_NOT_FOUND_MESSAGE)
+        return
 
     if not masters:
         ev.info("client_booking.start_result", outcome="no_masters")
@@ -760,6 +774,10 @@ async def _booking_confirm_impl(
             ev.warning("client_booking.state_invalid", reason="missing_result_objects")
             await context_lost(callback, state, bucket=BOOKING_BUCKET, reason="missing_result_objects")
             return
+        client_alias = await MasterClientRepository(session).get_client_alias(
+            master_id=int(master.id),
+            client_id=int(client_id),
+        )
         ev.info("client_booking.created", booking_id=int(booking.id), master_id=int(master.id))
     await callback.answer()
 
@@ -778,7 +796,7 @@ async def _booking_confirm_impl(
             context=BookingContext(
                 booking_id=booking.id,
                 master_name=html_escape(master.name),
-                client_name=html_escape(str(client_name)),
+                client_name=html_escape(str(client_alias or client_name)),
                 slot_str=slot_master_str,
                 duration_min=master.slot_size_min,
             ),
