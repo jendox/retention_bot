@@ -63,6 +63,10 @@ def ask_new_name(*, t: Translator = _noop_t) -> str:
     return t("Введи новое имя клиента:")
 
 
+def ask_new_alias(*, t: Translator = _noop_t) -> str:
+    return t("Введи, как ты хочешь записать этого клиента у себя:")
+
+
 def name_not_recognized(*, t: Translator = _noop_t) -> str:
     return t("⚠️ Имя не понял 😅 Введи, пожалуйста, имя клиента.")
 

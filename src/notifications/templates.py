@@ -132,7 +132,7 @@ ONBOARDING_TEMPLATES: dict[tuple[NotificationEvent, RecipientKind], Callable[[On
     (NotificationEvent.MASTER_ONBOARDING_ADD_FIRST_BOOKING, RecipientKind.MASTER): lambda context: (
         f"✨ {context.master_name}, клиент уже добавлен.\n\n"
         "Следующий шаг — создать первую запись (это займёт минуту).\n\n"
-        "🎁 Pro‑триал начнётся автоматически после первой записи — чтобы ты оценил функции в деле."
+        "🎁 Pro‑триал начнётся автоматически после первой записи — чтобы оценить функции в деле."
     ),
 }
 

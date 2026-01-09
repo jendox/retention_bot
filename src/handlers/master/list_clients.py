@@ -133,7 +133,15 @@ class ClientStats:
 
 async def _fetch_master_with_clients(telegram_id: int) -> MasterWithClients:
     async with active_session(begin=False) as session:
-        return await MasterRepository(session).get_with_clients_by_telegram_id(telegram_id)
+        repo = MasterRepository(session)
+        master = await repo.get_with_clients_by_telegram_id(telegram_id)
+        aliases = await repo.get_client_aliases(master_id=int(master.id))
+        if aliases:
+            for client in master.clients:
+                alias = aliases.get(int(client.id))
+                if alias:
+                    client.name = alias
+        return master
 
 
 async def _fetch_master_clients(telegram_id: int) -> Sequence:

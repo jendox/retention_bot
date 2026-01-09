@@ -52,6 +52,22 @@ class EditClientStates(StatesGroup):
     edit_phone = State()
 
 
+async def _load_master_with_clients_and_aliases(*, telegram_id: int):
+    async with session_local() as session:
+        master_repo = MasterRepository(session)
+        try:
+            master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
+        except MasterNotFound:
+            return None
+        aliases = await master_repo.get_client_aliases(master_id=int(master.id))
+    if aliases:
+        for client in master.clients:
+            alias = aliases.get(int(client.id))
+            if alias:
+                client.name = alias
+    return master
+
+
 def _kb_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -229,12 +245,9 @@ async def _store_origin_if_present(state: FSMContext, *, page: int | None, chunk
 
 
 async def _get_selected_client_for_master(*, telegram_id: int, client_id: int) -> dict | None | str:
-    async with session_local() as session:
-        master_repo = MasterRepository(session)
-        try:
-            master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
-        except MasterNotFound:
-            return "master_not_found"
+    master = await _load_master_with_clients_and_aliases(telegram_id=telegram_id)
+    if master is None:
+        return "master_not_found"
 
     selected = next((c.to_state_dict() for c in master.clients if int(c.id) == int(client_id)), None)
     return selected
@@ -271,12 +284,9 @@ async def _client_view_payload(
     telegram_id: int,
     client_id: int,
 ) -> tuple[str, int | None, bool] | None:
-    async with session_local() as session:
-        master_repo = MasterRepository(session)
-        try:
-            master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
-        except MasterNotFound:
-            return None
+    master = await _load_master_with_clients_and_aliases(telegram_id=telegram_id)
+    if master is None:
+        return None
 
     client = next((c for c in master.clients if int(c.id) == int(client_id)), None)
     if client is None:
@@ -371,6 +381,7 @@ async def _get_last_card_message_ref(state: FSMContext) -> tuple[int | None, int
 
 
 async def _update_card(message: Message, state: FSMContext, selected: dict) -> None:
+    can_edit_phone = selected.get("telegram_id") is None
     chat_id, message_id = await _get_last_card_message_ref(state)
     if chat_id is not None and message_id is not None:
         ok = await safe_bot_edit_message_text(
@@ -378,13 +389,17 @@ async def _update_card(message: Message, state: FSMContext, selected: dict) -> N
             chat_id=int(chat_id),
             message_id=int(message_id),
             text=_render_client_card(selected),
-            reply_markup=_kb_actions(),
+            reply_markup=_kb_actions(can_edit_phone=bool(can_edit_phone)),
             event="edit_client.update_card_failed",
         )
         if ok:
             return
 
-    card = await message.answer(_render_client_card(selected), reply_markup=_kb_actions(), parse_mode="HTML")
+    card = await message.answer(
+        _render_client_card(selected),
+        reply_markup=_kb_actions(can_edit_phone=bool(can_edit_phone)),
+        parse_mode="HTML",
+    )
     await track_message(state, card, bucket=EDIT_CLIENT_CARD_BUCKET)
 
 
@@ -433,14 +448,11 @@ async def process_query(message: Message, state: FSMContext, rate_limiter: RateL
     await cleanup_messages(state, message.bot, bucket=EDIT_CLIENT_BUCKET)
 
     telegram_id = message.from_user.id
-    async with session_local() as session:
-        master_repo = MasterRepository(session)
-        try:
-            master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
-        except MasterNotFound:
-            ev.warning("master_edit_client.master_not_found")
-            await message.answer(txt.master_profile_not_found())
-            return
+    master = await _load_master_with_clients_and_aliases(telegram_id=telegram_id)
+    if master is None:
+        ev.warning("master_edit_client.master_not_found")
+        await message.answer(txt.master_profile_not_found())
+        return
 
     q = query.lower()
     matches = [
@@ -649,13 +661,10 @@ async def edit_menu_client(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     telegram_id = callback.from_user.id
-    async with session_local() as session:
-        master_repo = MasterRepository(session)
-        try:
-            master = await master_repo.get_with_clients_by_telegram_id(telegram_id)
-        except MasterNotFound:
-            await callback.answer(txt.master_profile_not_found(), show_alert=True)
-            return
+    master = await _load_master_with_clients_and_aliases(telegram_id=telegram_id)
+    if master is None:
+        await callback.answer(txt.master_profile_not_found(), show_alert=True)
+        return
 
     selected = next((c.to_state_dict() for c in master.clients if int(c.id) == client_id), None)
     if selected is None:
@@ -806,11 +815,12 @@ async def start_edit_name(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer(common_txt.context_lost(), show_alert=True)
         await state.clear()
         return
+    prompt = txt.ask_new_alias() if selected.get("telegram_id") is not None else txt.ask_new_name()
     await _edit_main(
         state,
         bot=callback.bot,
         telegram_id=callback.from_user.id,
-        text=txt.ask_new_name(),
+        text=prompt,
         reply_markup=_kb_edit_input(client_id=int(selected["id"])),
         event="edit_client.edit_name_prompt_failed",
     )
@@ -850,8 +860,22 @@ async def save_name(message: Message, state: FSMContext, rate_limiter: RateLimit
     await track_message(state, message, bucket=EDIT_CLIENT_BUCKET)
 
     async with active_session() as session:
-        repo = ClientRepository(session)
-        await repo.update_by_id(selected["id"], ClientUpdate(name=name))
+        result = await _update_name_for_master(
+            session=session,
+            telegram_id=message.from_user.id,
+            selected=selected,
+            name=name,
+        )
+        if result == "master_not_found":
+            await cleanup_messages(state, message.bot, bucket=EDIT_CLIENT_BUCKET)
+            await message.answer(txt.master_profile_not_found())
+            await state.clear()
+            return
+        if result != "ok":
+            await cleanup_messages(state, message.bot, bucket=EDIT_CLIENT_BUCKET)
+            await message.answer(common_txt.generic_error())
+            await state.clear()
+            return
 
     selected["name"] = name
     await state.update_data(edit_client_selected=selected)
@@ -862,6 +886,32 @@ async def save_name(message: Message, state: FSMContext, rate_limiter: RateLimit
         telegram_id=message.from_user.id,
         client_id=int(selected["id"]),
     )
+
+
+async def _update_name_for_master(
+    *,
+    session,
+    telegram_id: int,
+    selected: dict,
+    name: str,
+) -> str:
+    repo = ClientRepository(session)
+    if selected.get("telegram_id") is None:
+        await repo.update_by_id(int(selected["id"]), ClientUpdate(name=name))
+        return "ok"
+
+    master_repo = MasterRepository(session)
+    try:
+        master = await master_repo.get_by_telegram_id(telegram_id)
+    except MasterNotFound:
+        return "master_not_found"
+
+    updated = await master_repo.set_client_alias(
+        master_id=int(master.id),
+        client_id=int(selected["id"]),
+        alias=name,
+    )
+    return "ok" if updated else "not_attached"
 
 
 @router.callback_query(

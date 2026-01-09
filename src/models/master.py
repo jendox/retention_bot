@@ -135,4 +135,9 @@ master_clients = Table(
         primary_key=True,
         nullable=False,
     ),
+    Column(
+        "client_alias",
+        String(255),
+        nullable=True,
+    ),
 )

@@ -375,6 +375,7 @@ class AcceptClientInvite:
 
         if existing_client is not None and client_for_phone is not None and client_for_phone.id != existing_client.id:
             if getattr(client_for_phone, "telegram_id", None) is None:
+                offline_name = getattr(client_for_phone, "name", None)
                 reassigned = await self._booking_repo.reassign_client_for_master(
                     master_id=master_id,
                     from_client_id=client_for_phone.id,
@@ -382,6 +383,11 @@ class AcceptClientInvite:
                 )
                 await self._master_repo.detach_client(master_id, client_for_phone.id)
                 await self._master_repo.attach_client(master_id, existing_client.id)
+                await self._master_repo.set_client_alias_if_empty(
+                    master_id=master_id,
+                    client_id=existing_client.id,
+                    alias=offline_name,
+                )
                 return AcceptClientInviteResult(
                     ok=True,
                     outcome=AcceptInviteOutcome.MERGED_OFFLINE,
@@ -402,6 +408,7 @@ class AcceptClientInvite:
             )
 
         if client_for_phone is not None:
+            offline_name = getattr(client_for_phone, "name", None)
             await self._client_repo.update_by_id(
                 client_for_phone.id,
                 ClientUpdate(
@@ -410,6 +417,12 @@ class AcceptClientInvite:
                     timezone=request.timezone,
                 ),
             )
+            if request.name is not None and str(request.name).strip():
+                await self._master_repo.set_client_alias_if_empty(
+                    master_id=master_id,
+                    client_id=client_for_phone.id,
+                    alias=offline_name,
+                )
             await self._master_repo.attach_client(master_id, client_for_phone.id)
             return AcceptClientInviteResult(
                 ok=True,

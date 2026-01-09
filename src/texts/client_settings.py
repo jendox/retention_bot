@@ -93,6 +93,14 @@ def phone_updated(*, t: Translator = _noop_t) -> str:
     return t("✅ Телефон обновлён.")
 
 
+def phone_conflict(*, t: Translator = _noop_t) -> str:
+    return t(
+        "⚠️ Не получилось сохранить телефон.\n"
+        "У одного из твоих мастеров уже есть другой клиент с таким номером.\n\n"
+        "Попроси мастера помочь или введи другой номер.",
+    )
+
+
 def ask_new_name(*, t: Translator = _noop_t) -> str:
     return t("Введи новое имя:")
 

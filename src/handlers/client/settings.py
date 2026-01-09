@@ -227,6 +227,30 @@ async def _load_client(telegram_id: int):
         return await repo.get_by_telegram_id(telegram_id)
 
 
+async def _load_client_details(telegram_id: int):
+    async with session_local() as session:
+        repo = ClientRepository(session)
+        return await repo.get_details_by_telegram_id(telegram_id)
+
+
+async def _has_phone_conflict_for_client(*, telegram_id: int, phone: str) -> bool:
+    try:
+        client = await _load_client_details(telegram_id)
+    except ClientNotFound:
+        return False
+
+    async with session_local() as session:
+        repo = ClientRepository(session)
+        for master in client.masters:
+            try:
+                other = await repo.find_for_master_by_phone(master_id=int(master.id), phone=phone)
+            except ClientNotFound:
+                continue
+            if int(other.id) != int(client.id):
+                return True
+    return False
+
+
 async def _render_and_edit_main(
     *,
     state: FSMContext,
@@ -851,13 +875,35 @@ async def save_phone(message: Message, state: FSMContext, rate_limiter: RateLimi
 
     telegram_id = message.from_user.id
     try:
-        client = await _load_client(telegram_id)
+        client = await _load_client_details(telegram_id)
     except ClientNotFound:
         ev.warning("client_settings.client_not_found")
         await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
         await message.answer(txt.client_only())
         await _clear_main_ref(state)
         await state.set_state(None)
+        return
+
+    if await _has_phone_conflict_for_client(telegram_id=telegram_id, phone=phone):
+        ev.info("client_settings.phone_conflict")
+        await cleanup_messages(state, message.bot, bucket=SETTINGS_BUCKET)
+        data = await state.get_data()
+        ref = _get_main_ref(data, telegram_id=telegram_id)
+        if ref is None:
+            await message.answer(common_txt.context_lost())
+            await state.clear()
+            return
+        chat_id, message_id = ref
+        await safe_bot_edit_message_text(
+            message.bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"{txt.phone_conflict()}\n\n{txt.ask_new_phone()}",
+            reply_markup=_kb_phone_prompt(),
+            parse_mode="HTML",
+            ev=ev,
+            event="client_settings.edit_phone_conflict_failed",
+        )
         return
 
     async with active_session() as session:

@@ -108,6 +108,55 @@ class MasterRepository(BaseRepository):
         await self._session.execute(stmt)
         await self._session.flush()
 
+    async def get_client_aliases(self, *, master_id: int) -> dict[int, str]:
+        stmt = select(master_clients.c.client_id, master_clients.c.client_alias).where(
+            master_clients.c.master_id == int(master_id),
+            master_clients.c.client_alias.is_not(None),
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {int(client_id): str(alias) for client_id, alias in rows if alias is not None}
+
+    async def set_client_alias(
+        self,
+        *,
+        master_id: int,
+        client_id: int,
+        alias: str | None,
+    ) -> bool:
+        stmt = (
+            update(master_clients)
+            .where(
+                master_clients.c.master_id == int(master_id),
+                master_clients.c.client_id == int(client_id),
+            )
+            .values(client_alias=(str(alias).strip() if alias is not None else None))
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return (result.rowcount or 0) > 0
+
+    async def set_client_alias_if_empty(
+        self,
+        *,
+        master_id: int,
+        client_id: int,
+        alias: str | None,
+    ) -> bool:
+        if alias is None or not str(alias).strip():
+            return False
+        stmt = (
+            update(master_clients)
+            .where(
+                master_clients.c.master_id == int(master_id),
+                master_clients.c.client_id == int(client_id),
+                master_clients.c.client_alias.is_(None),
+            )
+            .values(client_alias=str(alias).strip())
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+        return (result.rowcount or 0) > 0
+
     async def detach_client(self, master_id: int, client_id: int) -> bool:
         stmt = delete(master_clients).where(
             master_clients.c.master_id == master_id,
