@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -68,6 +68,7 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancel_enqueues_client_notification(self) -> None:
         from src.handlers.master import schedule as h
+        from src.notifications.policy import DefaultNotificationPolicy
         from src.schemas.enums import Timezone
 
         callback = SimpleNamespace(
@@ -78,11 +79,11 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
             answer=AsyncMock(),
         )
 
-        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
 
         booking = SimpleNamespace(
             id=7,
-            start_at=datetime(2025, 12, 31, 10, 30, tzinfo=UTC),
+            start_at=datetime.now(UTC) + timedelta(days=1),
             duration_min=60,
             master=SimpleNamespace(id=1, name="M", notify_clients=True),
             client=SimpleNamespace(
@@ -126,6 +127,65 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
         kwargs = outbox.enqueue_booking_client_notification.await_args.kwargs
         self.assertEqual(kwargs["event"], NotificationEvent.BOOKING_CANCELLED_BY_MASTER.value)
         self.assertEqual(kwargs["booking_id"], 7)
+
+    async def test_cancel_free_plan_does_not_enqueue_client_notification(self) -> None:
+        from src.handlers.master import schedule as h
+        from src.notifications.policy import DefaultNotificationPolicy
+        from src.schemas.enums import Timezone
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            data="m:a:cancel_yes:7:s:today:p:1",
+            message=SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock()),
+            bot=SimpleNamespace(send_message=AsyncMock()),
+            answer=AsyncMock(),
+        )
+
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
+
+        booking = SimpleNamespace(
+            id=7,
+            start_at=datetime(2025, 12, 31, 10, 30, tzinfo=UTC),
+            duration_min=60,
+            master=SimpleNamespace(id=1, name="M", notify_clients=True),
+            client=SimpleNamespace(
+                id=2,
+                name="C",
+                telegram_id=123,
+                timezone=Timezone("Europe/Minsk"),
+                notifications_enabled=True,
+            ),
+        )
+
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
+        class _BookingRepo:
+            def __init__(self, session) -> None:
+                pass
+
+            async def get_for_review(self, booking_id: int):
+                return booking
+
+        class _Entitlements:
+            def __init__(self, session) -> None:
+                pass
+
+            async def get_plan(self, *, master_id: int, now=None):
+                return SimpleNamespace(is_pro=False)
+
+        with (
+            patch.object(h, "_fetch_master", AsyncMock(return_value=SimpleNamespace(id=1))),
+            patch.object(h, "_cancel_booking", AsyncMock(return_value=True)),
+            patch.object(h, "_send_schedule", AsyncMock()),
+            patch.object(h, "session_local", _fake_session_local),
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "BookingRepository", _BookingRepo),
+            patch.object(h, "EntitlementsService", _Entitlements),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
+        ):
+            await h.master_booking_actions(callback=callback, state=SimpleNamespace(), notifier=notifier)
+
+        outbox.enqueue_booking_client_notification.assert_not_awaited()
 
     async def test_cancel_shows_confirmation_prompt(self) -> None:
         from src.handlers.master import schedule as h

@@ -18,6 +18,7 @@ from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import NotificationEvent, RecipientKind
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
+from src.notifications.outbox import BookingClientOutboxNotification, maybe_enqueue_booking_client_notification
 from src.notifications.policy import NotificationFacts
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
@@ -562,20 +563,21 @@ async def _handle_success(
     await callback.answer(text=txt.created(client_has_tg=client_has_tg), show_alert=True)
 
     if client_has_tg:
-        allow_client_notifications = (
-            bool(result.plan_is_pro)
-            and bool(getattr(master, "notify_clients", True))
-            and bool(confirm.client.get("notifications_enabled", True))
-        )
-        if allow_client_notifications:
-            async with active_session() as session:
-                await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
-                    event=str(NotificationEvent.BOOKING_CREATED_CONFIRMED.value),
+        async with active_session() as session:
+            await maybe_enqueue_booking_client_notification(
+                policy=notifier.policy,
+                outbox=ScheduledNotificationRepository(session),
+                request=BookingClientOutboxNotification(
+                    event=NotificationEvent.BOOKING_CREATED_CONFIRMED,
                     chat_id=int(confirm.client["telegram_id"]),
                     booking_id=int(booking.id),
                     booking_start_at=confirm.slot_dt,
                     now_utc=datetime.now(UTC),
-                )
+                    plan_is_pro=result.plan_is_pro,
+                    master_notify_clients=bool(getattr(master, "notify_clients", True)),
+                    client_notifications_enabled=bool(confirm.client.get("notifications_enabled", True)),
+                ),
+            )
 
     await cleanup_messages(state, callback.bot, bucket=ADD_BOOKING_BUCKET)
     await state.clear()

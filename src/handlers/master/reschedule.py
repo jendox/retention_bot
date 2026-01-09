@@ -16,7 +16,10 @@ from src.filters.user_role import UserRole
 from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
+from src.notifications import NotificationEvent
 from src.notifications.notifier import Notifier
+from src.notifications.outbox import BookingClientOutboxNotification, maybe_enqueue_booking_client_notification
+from src.notifications.policy import NotificationPolicy
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -475,6 +478,7 @@ async def _apply_confirm_result(
             new_start_at=meta.new_start_at,
             client_tg=meta.client_tg,
             plan_is_pro=result.plan_is_pro,
+            policy=notifier.policy,
         )
 
     await _reset_reschedule(state, callback.bot)
@@ -509,22 +513,22 @@ async def _notify_client_about_reschedule(
     new_start_at: datetime,
     client_tg: int,
     plan_is_pro: bool | None,
+    policy: NotificationPolicy,
 ) -> None:
-    allow = (
-        bool(plan_is_pro)
-        and bool(getattr(booking.master, "notify_clients", True))
-        and bool(getattr(booking.client, "notifications_enabled", True))
-    )
-    if not allow:
-        return
-
     async with active_session() as session:
-        await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
-            event="booking_rescheduled_by_master",
-            chat_id=int(client_tg),
-            booking_id=int(booking.id),
-            booking_start_at=new_start_at,
-            now_utc=datetime.now(UTC),
+        await maybe_enqueue_booking_client_notification(
+            policy=policy,
+            outbox=ScheduledNotificationRepository(session),
+            request=BookingClientOutboxNotification(
+                event=NotificationEvent.BOOKING_RESCHEDULED_BY_MASTER,
+                chat_id=int(client_tg),
+                booking_id=int(booking.id),
+                booking_start_at=new_start_at,
+                now_utc=datetime.now(UTC),
+                plan_is_pro=plan_is_pro,
+                master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
+                client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
+            ),
         )
 
 

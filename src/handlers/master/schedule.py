@@ -16,6 +16,8 @@ from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_delete, safe_edit_text
 from src.notifications import NotificationEvent
 from src.notifications.notifier import Notifier
+from src.notifications.outbox import BookingClientOutboxNotification, maybe_enqueue_booking_client_notification
+from src.notifications.policy import NotificationPolicy
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -478,26 +480,26 @@ async def _maybe_notify_client_cancelled(
     *,
     booking,
     plan_is_pro: bool,
+    policy: NotificationPolicy,
 ) -> None:
     client_tg = getattr(booking.client, "telegram_id", None)
     if client_tg is None:
         return
 
-    allow = (
-        bool(plan_is_pro)
-        and bool(getattr(booking.master, "notify_clients", True))
-        and bool(getattr(booking.client, "notifications_enabled", True))
-    )
-    if not allow:
-        return
-
     async with active_session() as session:
-        await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
-            event=str(NotificationEvent.BOOKING_CANCELLED_BY_MASTER.value),
-            chat_id=int(client_tg),
-            booking_id=int(booking.id),
-            booking_start_at=booking.start_at,
-            now_utc=datetime.now(UTC),
+        await maybe_enqueue_booking_client_notification(
+            policy=policy,
+            outbox=ScheduledNotificationRepository(session),
+            request=BookingClientOutboxNotification(
+                event=NotificationEvent.BOOKING_CANCELLED_BY_MASTER,
+                chat_id=int(client_tg),
+                booking_id=int(booking.id),
+                booking_start_at=booking.start_at,
+                now_utc=datetime.now(UTC),
+                plan_is_pro=bool(plan_is_pro),
+                master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
+                client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
+            ),
         )
 
 
@@ -744,7 +746,7 @@ async def _handle_action_cancel_yes(
             booking = await booking_repo.get_for_review(booking_id)
             entitlements = EntitlementsService(session)
             plan = await entitlements.get_plan(master_id=master.id)
-        await _maybe_notify_client_cancelled(booking=booking, plan_is_pro=plan.is_pro)
+        await _maybe_notify_client_cancelled(booking=booking, plan_is_pro=plan.is_pro, policy=notifier.policy)
     except Exception as exc:
         await ev.aexception(
             "master_schedule.cancel_notify_failed",

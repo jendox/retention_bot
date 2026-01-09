@@ -17,6 +17,7 @@ async def _fake_active_session():
 class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirm_success_edits_text_and_enqueues_notification(self) -> None:
         from src.handlers.master import booking_review as h
+        from src.notifications.policy import DefaultNotificationPolicy
         from src.schemas.enums import Timezone
 
         booking = SimpleNamespace(
@@ -53,7 +54,7 @@ class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
                     error=None,
                 )
 
-        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True))
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
         outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
 
         with (
@@ -68,6 +69,57 @@ class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("&lt;b&gt;C&lt;/b&gt;", edited_text)
         notifier.maybe_send.assert_not_awaited()
         outbox.enqueue_booking_client_notification.assert_awaited()
+
+    async def test_confirm_free_plan_does_not_enqueue_notification(self) -> None:
+        from src.handlers.master import booking_review as h
+        from src.notifications.policy import DefaultNotificationPolicy
+        from src.schemas.enums import Timezone
+
+        booking = SimpleNamespace(
+            id=7,
+            start_at=datetime.now(UTC) + timedelta(days=1),
+            duration_min=60,
+            master=SimpleNamespace(id=1, name="M", timezone=Timezone("Europe/Minsk"), notify_clients=True),
+            client=SimpleNamespace(
+                id=2,
+                name="C",
+                telegram_id=123,
+                timezone=Timezone("Europe/Minsk"),
+                notifications_enabled=True,
+            ),
+        )
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            data="m:booking:7:confirm",
+            message=SimpleNamespace(edit_reply_markup=AsyncMock(), edit_text=AsyncMock()),
+            answer=AsyncMock(),
+        )
+
+        class _UC:
+            def __init__(self, session) -> None:
+                pass
+
+            async def execute(self, request):
+                return SimpleNamespace(
+                    ok=True,
+                    booking=booking,
+                    new_status=BookingStatus.CONFIRMED,
+                    plan_is_pro=False,
+                    error=None,
+                )
+
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
+        with (
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "ReviewMasterBooking", _UC),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
+        ):
+            await h.master_review_booking(callback=callback, notifier=notifier)
+
+        outbox.enqueue_booking_client_notification.assert_not_awaited()
 
     async def test_already_handled_shows_alert(self) -> None:
         from src.handlers.master import booking_review as h

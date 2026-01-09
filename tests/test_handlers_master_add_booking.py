@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from src.notifications.policy import DefaultNotificationPolicy
 from src.use_cases.create_master_booking import CreateMasterBookingError, CreateMasterBookingResult
 from src.use_cases.entitlements import Usage
 
@@ -358,7 +359,7 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             await h.confirm_booking(
                 callback=callback,
                 state=state,
-                notifier=SimpleNamespace(maybe_send=AsyncMock(return_value=False)),
+                notifier=SimpleNamespace(maybe_send=AsyncMock(return_value=False), policy=DefaultNotificationPolicy()),
             )
 
         cleanup.assert_awaited()
@@ -408,7 +409,7 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             await h.confirm_booking(
                 callback=callback,
                 state=state,
-                notifier=SimpleNamespace(maybe_send=AsyncMock()),
+                notifier=SimpleNamespace(maybe_send=AsyncMock(), policy=DefaultNotificationPolicy()),
             )
 
         self.assertEqual(state._state, h.AddBookingStates.selecting_slot)
@@ -571,7 +572,77 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             await h.confirm_booking(
                 callback=confirm_cb,
                 state=state,
-                notifier=SimpleNamespace(maybe_send=AsyncMock(return_value=True)),
+                notifier=SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy()),
             )
 
         self.assertEqual(await state.get_data(), {})
+
+    async def test_confirm_pro_enqueues_client_notification(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+        state = MemoryState()
+
+        now = datetime.now(UTC)
+        confirm = SimpleNamespace(
+            client={"telegram_id": 123, "notifications_enabled": True},
+            slot_dt=now + timedelta(days=1),
+        )
+        result = SimpleNamespace(
+            booking=SimpleNamespace(id=7),
+            master=SimpleNamespace(notify_clients=True),
+            warn_master_bookings_near_limit=False,
+            usage=None,
+            bookings_limit=None,
+            plan_is_pro=True,
+        )
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
+        with (
+            patch.object(h, "cleanup_messages", AsyncMock()),
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
+        ):
+            await h._handle_success(callback, state, notifier, confirm=confirm, result=result)
+
+        outbox.enqueue_booking_client_notification.assert_awaited()
+
+    async def test_confirm_free_plan_does_not_enqueue_client_notification(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        callback = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            bot=SimpleNamespace(),
+            answer=AsyncMock(),
+        )
+        state = MemoryState()
+
+        now = datetime.now(UTC)
+        confirm = SimpleNamespace(
+            client={"telegram_id": 123, "notifications_enabled": True},
+            slot_dt=now + timedelta(days=1),
+        )
+        result = SimpleNamespace(
+            booking=SimpleNamespace(id=7),
+            master=SimpleNamespace(notify_clients=True),
+            warn_master_bookings_near_limit=False,
+            usage=None,
+            bookings_limit=None,
+            plan_is_pro=False,
+        )
+        notifier = SimpleNamespace(maybe_send=AsyncMock(return_value=True), policy=DefaultNotificationPolicy())
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
+        with (
+            patch.object(h, "cleanup_messages", AsyncMock()),
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
+        ):
+            await h._handle_success(callback, state, notifier, confirm=confirm, result=result)
+
+        outbox.enqueue_booking_client_notification.assert_not_awaited()

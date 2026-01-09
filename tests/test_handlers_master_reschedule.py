@@ -6,6 +6,8 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from src.notifications.policy import DefaultNotificationPolicy
+
 
 class MemoryState:
     def __init__(self) -> None:
@@ -199,3 +201,65 @@ class MasterRescheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
 
         data = await state.get_data()
         self.assertEqual(data["reschedule_slots"], [other_slot.isoformat()])
+
+    async def test_notify_client_about_reschedule_requires_pro(self) -> None:
+        from src.handlers.master import reschedule as h
+        from src.schemas.enums import Timezone
+
+        booking = SimpleNamespace(
+            id=7,
+            master=SimpleNamespace(notify_clients=True),
+            client=SimpleNamespace(
+                telegram_id=123,
+                timezone=Timezone("Europe/Minsk"),
+                notifications_enabled=True,
+            ),
+        )
+        new_start_at = datetime.now(UTC) + timedelta(days=1)
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
+        with (
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
+        ):
+            await h._notify_client_about_reschedule(
+                callback=SimpleNamespace(),
+                booking=booking,
+                new_start_at=new_start_at,
+                client_tg=123,
+                plan_is_pro=False,
+                policy=DefaultNotificationPolicy(),
+            )
+
+        outbox.enqueue_booking_client_notification.assert_not_awaited()
+
+    async def test_notify_client_about_reschedule_enqueues_when_allowed(self) -> None:
+        from src.handlers.master import reschedule as h
+        from src.schemas.enums import Timezone
+
+        booking = SimpleNamespace(
+            id=7,
+            master=SimpleNamespace(notify_clients=True),
+            client=SimpleNamespace(
+                telegram_id=123,
+                timezone=Timezone("Europe/Minsk"),
+                notifications_enabled=True,
+            ),
+        )
+        new_start_at = datetime.now(UTC) + timedelta(days=1)
+        outbox = SimpleNamespace(enqueue_booking_client_notification=AsyncMock(return_value=1))
+
+        with (
+            patch.object(h, "active_session", _fake_active_session),
+            patch.object(h, "ScheduledNotificationRepository", lambda _s: outbox),
+        ):
+            await h._notify_client_about_reschedule(
+                callback=SimpleNamespace(),
+                booking=booking,
+                new_start_at=new_start_at,
+                client_tg=123,
+                plan_is_pro=True,
+                policy=DefaultNotificationPolicy(),
+            )
+
+        outbox.enqueue_booking_client_notification.assert_awaited()

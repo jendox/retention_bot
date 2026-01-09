@@ -10,6 +10,8 @@ from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import NotificationEvent
 from src.notifications.notifier import Notifier
+from src.notifications.outbox import BookingClientOutboxNotification, maybe_enqueue_booking_client_notification
+from src.notifications.policy import NotificationPolicy
 from src.observability.alerts import AdminAlerter
 from src.observability.context import bind_log_context
 from src.observability.events import EventLogger
@@ -80,6 +82,7 @@ async def _maybe_notify_client(
     booking,
     new_status: BookingStatus,
     plan_is_pro: bool | None,
+    policy: NotificationPolicy,
 ) -> None:
     event = (
         NotificationEvent.BOOKING_CONFIRMED
@@ -89,20 +92,20 @@ async def _maybe_notify_client(
     client_tg = getattr(booking.client, "telegram_id", None)
     if client_tg is None:
         return
-    allow = (
-        bool(plan_is_pro)
-        and bool(getattr(booking.master, "notify_clients", True))
-        and bool(getattr(booking.client, "notifications_enabled", True))
-    )
-    if not allow:
-        return
     async with active_session() as session:
-        await ScheduledNotificationRepository(session).enqueue_booking_client_notification(
-            event=str(event.value),
-            chat_id=int(client_tg),
-            booking_id=int(booking.id),
-            booking_start_at=booking.start_at,
-            now_utc=datetime.now(UTC),
+        await maybe_enqueue_booking_client_notification(
+            policy=policy,
+            outbox=ScheduledNotificationRepository(session),
+            request=BookingClientOutboxNotification(
+                event=event,
+                chat_id=int(client_tg),
+                booking_id=int(booking.id),
+                booking_start_at=booking.start_at,
+                now_utc=datetime.now(UTC),
+                plan_is_pro=plan_is_pro,
+                master_notify_clients=bool(getattr(booking.master, "notify_clients", True)),
+                client_notifications_enabled=bool(getattr(booking.client, "notifications_enabled", True)),
+            ),
         )
 
 
@@ -183,7 +186,12 @@ async def master_review_booking(
         )
     await callback.answer(txt.done(), show_alert=False)
 
-    await _maybe_notify_client(booking=booking, new_status=new_status, plan_is_pro=result.plan_is_pro)
+    await _maybe_notify_client(
+        booking=booking,
+        new_status=new_status,
+        plan_is_pro=result.plan_is_pro,
+        policy=notifier.policy,
+    )
 
     ev.info(
         "booking.reviewed",
