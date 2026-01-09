@@ -40,19 +40,12 @@ from src.use_cases.entitlements import EntitlementsService
 
 ev = EventLogger("workers.reminders")
 
-_MASTER_ALIAS_CACHE: dict[tuple[int, int], str | None] = {}
-_CLIENT_ALIAS_CACHE: dict[tuple[int, int], str | None] = {}
-
 
 async def _resolve_display_names(
     *,
     master_id: int,
     client_id: int,
 ) -> tuple[str | None, str | None]:
-    key = (int(master_id), int(client_id))
-    if key in _MASTER_ALIAS_CACHE and key in _CLIENT_ALIAS_CACHE:
-        return _MASTER_ALIAS_CACHE[key], _CLIENT_ALIAS_CACHE[key]
-
     try:
         async with session_local() as session:
             stmt = (
@@ -71,8 +64,6 @@ async def _resolve_display_names(
 
     master_alias_str = str(master_alias) if master_alias is not None else None
     client_alias_str = str(client_alias) if client_alias is not None else None
-    _MASTER_ALIAS_CACHE[key] = master_alias_str
-    _CLIENT_ALIAS_CACHE[key] = client_alias_str
     return master_alias_str, client_alias_str
 
 
