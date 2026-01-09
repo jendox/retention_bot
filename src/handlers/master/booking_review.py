@@ -9,6 +9,7 @@ from src.datetime_utils import to_zone
 from src.handlers.shared.guards import rate_limit_callback
 from src.handlers.shared.ui import safe_edit_reply_markup, safe_edit_text
 from src.notifications import NotificationEvent
+from src.notifications.close import add_close_button
 from src.notifications.notifier import Notifier
 from src.notifications.outbox import BookingClientOutboxNotification, maybe_enqueue_booking_client_notification
 from src.notifications.policy import NotificationPolicy
@@ -198,6 +199,7 @@ async def master_review_booking(
         await safe_edit_text(
             callback.message,
             text=master_text,
+            reply_markup=add_close_button(None),
             parse_mode="HTML",
             ev=ev,
             event="master_booking_review.edit_failed",

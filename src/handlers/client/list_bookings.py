@@ -448,12 +448,19 @@ async def _render_list(
         await safe_edit_text(
             callback.message,
             text=txt.empty_list(),
-            reply_markup=None,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=btn_close(), callback_data=f"{CB_PREFIX}close")]],
+            ),
             parse_mode="HTML",
             ev=ev,
             event="client_list_bookings.edit_empty_failed",
         )
-        await _clear_main_message(state)
+        await _set_main_message(
+            state,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            page=1,
+        )
         return
 
     start = (page - 1) * TEXT_PAGE_SIZE
@@ -500,12 +507,19 @@ async def _render_select(
         await safe_edit_text(
             callback.message,
             text=txt.empty_list(),
-            reply_markup=None,
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=btn_close(), callback_data=f"{CB_PREFIX}close")]],
+            ),
             parse_mode="HTML",
             ev=ev,
             event="client_list_bookings.edit_empty_failed",
         )
-        await _clear_main_message(state)
+        await _set_main_message(
+            state,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            page=1,
+        )
         return
 
     total_pages = _total_pages(len(all_bookings))

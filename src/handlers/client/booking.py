@@ -16,6 +16,7 @@ from src.handlers.shared.flow import context_lost
 from src.handlers.shared.guards import rate_limit_callback, rate_limit_message
 from src.handlers.shared.ui import safe_edit_text
 from src.notifications import BookingContext, NotificationEvent, RecipientKind
+from src.notifications.close import add_close_button
 from src.notifications.context import LimitsContext
 from src.notifications.notifier import NotificationRequest, Notifier
 from src.notifications.policy import NotificationFacts
@@ -783,7 +784,7 @@ async def _booking_confirm_impl(
 
     await cleanup_messages(state, callback.bot, bucket=BOOKING_BUCKET)
     await state.clear()
-    await callback.message.answer(done())
+    await callback.message.answer(done(), reply_markup=add_close_button(None))
 
     # Send a notification to the master
     slot_dt_master = to_zone(slot_dt_utc, master.timezone)

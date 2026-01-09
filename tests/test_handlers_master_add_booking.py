@@ -458,7 +458,8 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             clients=[_Client(2)],
         )
 
-        slot_utc = datetime.now(UTC) + timedelta(days=1)
+        now_utc = datetime.now(UTC)
+        slot_utc = now_utc.replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=2)
         picked_day = slot_utc.date()
 
         class _Calendar:

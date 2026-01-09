@@ -17,6 +17,7 @@ async def _fake_active_session():
 class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirm_success_edits_text_and_enqueues_notification(self) -> None:
         from src.handlers.master import booking_review as h
+        from src.notifications.close import NOTIFICATION_CLOSE_CB
         from src.notifications.policy import DefaultNotificationPolicy
         from src.schemas.enums import Timezone
 
@@ -67,6 +68,15 @@ class MasterBookingReviewHandlerTests(unittest.IsolatedAsyncioTestCase):
         callback.message.edit_text.assert_awaited()
         edited_text = callback.message.edit_text.await_args.kwargs["text"]
         self.assertIn("&lt;b&gt;C&lt;/b&gt;", edited_text)
+        markup = callback.message.edit_text.await_args.kwargs.get("reply_markup")
+        self.assertIsNotNone(markup)
+        close_buttons = [
+            btn
+            for row in markup.inline_keyboard
+            for btn in row
+            if getattr(btn, "callback_data", None) == NOTIFICATION_CLOSE_CB
+        ]
+        self.assertTrue(close_buttons)
         notifier.maybe_send.assert_not_awaited()
         outbox.enqueue_booking_client_notification.assert_awaited()
 

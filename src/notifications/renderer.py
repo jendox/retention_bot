@@ -5,6 +5,7 @@ from html import escape as html_escape
 
 from aiogram.types import InlineKeyboardMarkup
 
+from src.notifications.close import add_close_button, should_add_close_button
 from src.notifications.context import (
     BillingContext,
     BookingContext,
@@ -85,6 +86,17 @@ def _escape_context(
     return context
 
 
+def _render_closeable_markup(
+    *,
+    event: NotificationEvent,
+    recipient: RecipientKind,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> InlineKeyboardMarkup | None:
+    if not should_add_close_button(event=event, recipient=recipient):
+        return reply_markup
+    return add_close_button(reply_markup)
+
+
 def render(
     *,
     event: NotificationEvent,
@@ -114,4 +126,8 @@ def render(
         text = render_billing_template(event=event, recipient=recipient, context=safe_context)
     else:
         text = ""
-    return RenderedMessage(text=text, parse_mode="HTML", reply_markup=reply_markup)
+    return RenderedMessage(
+        text=text,
+        parse_mode="HTML",
+        reply_markup=_render_closeable_markup(event=event, recipient=recipient, reply_markup=reply_markup),
+    )
