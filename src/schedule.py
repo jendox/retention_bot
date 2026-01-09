@@ -1,11 +1,32 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from src import datetime_utils
 from src.schemas import Booking, MasterWithOverrides
+
+
+def _localize_wall_time(*, dt_naive: datetime, tz: ZoneInfo) -> datetime | None:
+    """
+    Convert a naive local datetime (wall-clock) into a timezone-aware datetime.
+
+    Handles DST edge cases:
+    - Non-existent local times (spring forward) => returns None (skip slot).
+    - Ambiguous local times (fall back) => uses fold=0 (first occurrence) to avoid duplicates.
+    """
+    if dt_naive.tzinfo is not None:
+        raise ValueError("Expected naive local datetime.")
+
+    dt0 = dt_naive.replace(tzinfo=tz, fold=0)
+    back0 = dt0.astimezone(UTC).astimezone(tz).replace(tzinfo=None)
+    if back0 != dt_naive:
+        # Non-existent local time.
+        return None
+
+    # For ambiguous times, fold=1 is also valid but would create duplicated wall-clock slots.
+    return dt0
 
 
 def _iter_slots_local(
@@ -16,13 +37,15 @@ def _iter_slots_local(
     tz: ZoneInfo,
     step: timedelta,
 ) -> list[datetime]:
-    start_local = datetime.combine(day, start_time, tzinfo=tz)
-    end_local = datetime.combine(day, end_time, tzinfo=tz)
+    start_naive = datetime.combine(day, start_time)
+    end_naive = datetime.combine(day, end_time)
 
     slots: list[datetime] = []
-    current = start_local
-    while current + step <= end_local:
-        slots.append(current)
+    current = start_naive
+    while current + step <= end_naive:
+        localized = _localize_wall_time(dt_naive=current, tz=tz)
+        if localized is not None:
+            slots.append(localized)
         current += step
     return slots
 
