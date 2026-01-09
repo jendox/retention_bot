@@ -1,9 +1,14 @@
+from __future__ import annotations
+
+import secrets
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from src.models import Invite as InviteEntity
+from src.models.invite import TOKEN_LENGTH
 from src.repositories.base import BaseRepository
 from src.schemas import Invite
 
@@ -14,17 +19,40 @@ class InviteNotFound(Exception): ...
 
 
 class InviteRepository(BaseRepository):
+    @staticmethod
+    def _generate_token() -> str:
+        raw = secrets.token_urlsafe(TOKEN_LENGTH)
+        return raw[:TOKEN_LENGTH]
+
     async def create(self, invite: Invite) -> Invite:
+        payload = invite.model_dump(exclude={"id", "used_count"})
         for _ in range(MAX_TOKEN_RETRIES):
-            entity = invite.to_db_entity()
-            self._session.add(entity)
+            if payload.get("token") is None:
+                payload["token"] = self._generate_token()
+            stmt = (
+                pg_insert(InviteEntity)
+                .values(payload)
+                .on_conflict_do_nothing(index_elements=["token"])
+                .returning(
+                    InviteEntity.id,
+                    InviteEntity.token,
+                    InviteEntity.type,
+                    InviteEntity.max_uses,
+                    InviteEntity.used_count,
+                    InviteEntity.expires_at,
+                    InviteEntity.used_at,
+                    InviteEntity.master_id,
+                    InviteEntity.client_id,
+                    InviteEntity.created_at,
+                )
+            )
             try:
-                await self._session.flush()
-                await self._session.refresh(entity)
-                return Invite.from_db_entity(entity)
+                row = (await self._session.execute(stmt)).first()
             except IntegrityError:
-                await self._session.rollback()
-                invite.token = None
+                row = None
+            if row is not None:
+                return Invite.model_validate(dict(row._mapping))
+            payload["token"] = None
         raise RuntimeError("Failed to generate unique invite token after retries.")
 
     async def get_by_token(self, token: str) -> Invite:
