@@ -126,6 +126,9 @@ async def _fetch_bookings_or_none(
 
 
 PER_PAGE = 10
+CHUNK_1 = 1
+CHUNK_2 = 2
+FIRST_CHUNK_SIZE = 6
 
 SCHEDULE_CB: dict[str, str] = {
     Scope.TODAY.value: f"m:schedule:{Scope.TODAY.value}",
@@ -150,23 +153,80 @@ TITLE_MAP: dict[Scope, str] = {
 
 # ---------- callback builders (short + stable) ----------
 
-
-def cb_schedule(scope: Scope, page: int) -> str:
-    # m:s:<scope>:p:<page>
-    return f"m:s:{scope.value}:p:{page}"
-
-
-def cb_open_booking(booking_id: int, scope: Scope, page: int) -> str:
-    # m:b:<booking_id>:s:<scope>:p:<page>
-    return f"m:b:{booking_id}:s:{scope.value}:p:{page}"
+def _normalize_chunk(chunk: int | None) -> int:
+    if chunk == CHUNK_2:
+        return CHUNK_2
+    return CHUNK_1
 
 
-def cb_action(action: str, booking_id: int, scope: Scope, page: int) -> str:
-    # m:a:<action>:<booking_id>:s:<scope>:p:<page>
-    return f"m:a:{action}:{booking_id}:s:{scope.value}:p:{page}"
+def cb_schedule(scope: Scope, page: int, *, chunk: int = CHUNK_1) -> str:
+    # m:s:<scope>:p:<page>:c:<chunk>
+    return f"m:s:{scope.value}:p:{page}:c:{_normalize_chunk(chunk)}"
+
+
+def cb_open_booking(booking_id: int, scope: Scope, page: int, *, chunk: int = CHUNK_1) -> str:
+    # m:b:<booking_id>:s:<scope>:p:<page>:c:<chunk>
+    return f"m:b:{booking_id}:s:{scope.value}:p:{page}:c:{_normalize_chunk(chunk)}"
+
+
+def cb_action(action: str, booking_id: int, scope: Scope, page: int, *, chunk: int = CHUNK_1) -> str:
+    # m:a:<action>:<booking_id>:s:<scope>:p:<page>:c:<chunk>
+    return f"m:a:{action}:{booking_id}:s:{scope.value}:p:{page}:c:{_normalize_chunk(chunk)}"
 
 
 # ---------- keyboards ----------
+
+
+def _placeholder_button() -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=txt.btn_placeholder(), callback_data="m:noop")
+
+
+@dataclass(frozen=True, slots=True)
+class _ScheduleNavMeta:
+    scope: Scope
+    page: int
+    total_pages: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ScheduleView:
+    scope: Scope
+    page: int
+    chunk: int
+
+
+def _nav_row(meta: _ScheduleNavMeta) -> list[InlineKeyboardButton] | None:
+    if meta.total_pages <= 1:
+        return None
+    return [
+        InlineKeyboardButton(text="◀️", callback_data=cb_schedule(meta.scope, meta.page - 1))
+        if meta.page > 1
+        else _placeholder_button(),
+        InlineKeyboardButton(text=f"{meta.page}/{meta.total_pages}", callback_data="m:noop"),
+        InlineKeyboardButton(text="▶️", callback_data=cb_schedule(meta.scope, meta.page + 1))
+        if meta.page < meta.total_pages
+        else _placeholder_button(),
+    ]
+
+
+def _chunk_toggle_row(*, scope: Scope, page: int, chunk: int, total_in_page: int) -> list[InlineKeyboardButton] | None:
+    chunk = _normalize_chunk(chunk)
+    if total_in_page <= FIRST_CHUNK_SIZE:
+        return None
+
+    if chunk == CHUNK_1:
+        start = FIRST_CHUNK_SIZE + 1
+        end = int(total_in_page)
+        return [
+            InlineKeyboardButton(
+                text=f"Ещё ({start}–{end})",
+                callback_data=cb_schedule(scope, page, chunk=CHUNK_2),
+            ),
+        ]
+
+    start = 1
+    end = min(FIRST_CHUNK_SIZE, int(total_in_page))
+    return [InlineKeyboardButton(text=f"Назад ({start}–{end})", callback_data=cb_schedule(scope, page, chunk=CHUNK_1))]
 
 
 def _build_period_keyboard() -> InlineKeyboardMarkup:
@@ -245,15 +305,18 @@ def _build_bookings_list_keyboard(
     tz: ZoneInfo,
     scope: Scope,
     page: int,
+    chunk: int = CHUNK_1,
     per_page: int = PER_PAGE,
 ) -> InlineKeyboardMarkup:
     total = len(bookings)
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = max(1, min(page, total_pages))
+    chunk = _normalize_chunk(chunk)
 
     start = (page - 1) * per_page
     end = start + per_page
-    page_items = bookings[start:end]
+    base_items = bookings[start:end]
+    page_items = base_items[:FIRST_CHUNK_SIZE] if chunk == CHUNK_1 else base_items[FIRST_CHUNK_SIZE:]
 
     rows: list[list[InlineKeyboardButton]] = []
     for booking in page_items:
@@ -261,19 +324,18 @@ def _build_bookings_list_keyboard(
             [
                 InlineKeyboardButton(
                     text=_button_text(booking, tz, scope),
-                    callback_data=cb_open_booking(booking.id, scope, page),
+                    callback_data=cb_open_booking(booking.id, scope, page, chunk=chunk),
                 ),
             ],
         )
 
-    if total_pages > 1:
-        nav_row: list[InlineKeyboardButton] = []
-        if page > 1:
-            nav_row.append(InlineKeyboardButton(text="◀️", callback_data=cb_schedule(scope, page - 1)))
-        nav_row.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="m:noop"))
-        if page < total_pages:
-            nav_row.append(InlineKeyboardButton(text="▶️", callback_data=cb_schedule(scope, page + 1)))
-        rows.append(nav_row)
+    nav = _nav_row(_ScheduleNavMeta(scope=scope, page=page, total_pages=total_pages))
+    if nav is not None:
+        rows.append(nav)
+
+    toggle = _chunk_toggle_row(scope=scope, page=page, chunk=chunk, total_in_page=len(base_items))
+    if toggle is not None:
+        rows.append(toggle)
 
     rows.append([InlineKeyboardButton(text=btn_back(), callback_data=SCHEDULE_CB["back_periods"])])
     rows.append([InlineKeyboardButton(text=btn_close(), callback_data=SCHEDULE_CB["back_menu"])])
@@ -285,6 +347,7 @@ def _build_booking_card_keyboard(
     booking_id: int,
     scope: Scope,
     page: int,
+    chunk: int,
     meta: "_BookingCardKeyboardMeta",
 ) -> InlineKeyboardMarkup:
     inline_keyboard: list[list[InlineKeyboardButton]] = []
@@ -316,13 +379,13 @@ def _build_booking_card_keyboard(
         actions: list[InlineKeyboardButton] = [
             InlineKeyboardButton(
                 text=btn_cancel_booking(),
-                callback_data=cb_action("cancel", booking_id, scope, page),
+                callback_data=cb_action("cancel", booking_id, scope, page, chunk=chunk),
             ),
         ]
         actions.append(
             InlineKeyboardButton(
                 text=txt.btn_reschedule(),
-                callback_data=cb_action("reschedule", booking_id, scope, page),
+                callback_data=cb_action("reschedule", booking_id, scope, page, chunk=chunk),
             ),
         )
         inline_keyboard.append(actions)
@@ -331,11 +394,11 @@ def _build_booking_card_keyboard(
             [
                 InlineKeyboardButton(
                     text=txt.btn_mark_attended(),
-                    callback_data=cb_action("attended", booking_id, scope, page),
+                    callback_data=cb_action("attended", booking_id, scope, page, chunk=chunk),
                 ),
                 InlineKeyboardButton(
                     text=txt.btn_mark_no_show(),
-                    callback_data=cb_action("no_show", booking_id, scope, page),
+                    callback_data=cb_action("no_show", booking_id, scope, page, chunk=chunk),
                 ),
             ],
         )
@@ -343,7 +406,7 @@ def _build_booking_card_keyboard(
         [
             InlineKeyboardButton(
                 text=txt.btn_back_to_schedule(),
-                callback_data=cb_schedule(scope, page),
+                callback_data=cb_schedule(scope, page, chunk=chunk),
             ),
         ],
     )
@@ -358,17 +421,17 @@ def _build_booking_card_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-def _build_cancel_confirm_keyboard(*, booking_id: int, scope: Scope, page: int) -> InlineKeyboardMarkup:
+def _build_cancel_confirm_keyboard(*, booking_id: int, scope: Scope, page: int, chunk: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=txt.btn_cancel_yes(),
-                    callback_data=cb_action("cancel_yes", booking_id, scope, page),
+                    callback_data=cb_action("cancel_yes", booking_id, scope, page, chunk=chunk),
                 ),
                 InlineKeyboardButton(
                     text=txt.btn_cancel_no(),
-                    callback_data=cb_action("cancel_no", booking_id, scope, page),
+                    callback_data=cb_action("cancel_no", booking_id, scope, page, chunk=chunk),
                 ),
             ],
         ],
@@ -573,7 +636,7 @@ async def _maybe_notify_client_cancelled(
 # ---------- rendering ----------
 
 
-async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1) -> None:
+async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1, chunk: int = CHUNK_1) -> None:
     bind_log_context(flow="master_schedule", step="send_schedule")
     master = await _fetch_master_or_none(callback)
     if master is None:
@@ -605,12 +668,18 @@ async def _send_schedule(callback: CallbackQuery, *, scope: Scope, page: int = 1
         )
     else:
         text = txt.choose_booking(title=title)
-        reply_markup = _build_bookings_list_keyboard(bookings=bookings, tz=master_tz, scope=scope, page=page)
+        reply_markup = _build_bookings_list_keyboard(
+            bookings=bookings,
+            tz=master_tz,
+            scope=scope,
+            page=page,
+            chunk=chunk,
+        )
 
     await _send_or_edit(callback, text=text, reply_markup=reply_markup)
 
 
-async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int, chunk: int) -> None:
     bind_log_context(flow="master_schedule", step="booking_card")
     try:
         master = await _fetch_master(callback.from_user.id)
@@ -634,7 +703,7 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
 
     if booking.master.id != master.id:
         await callback.answer(txt.no_access(), show_alert=True)
-        await _send_schedule(callback, scope=scope, page=page)
+        await _send_schedule(callback, scope=scope, page=page, chunk=chunk)
         return
 
     render = _render_booking_card(booking, master_tz=master_tz)
@@ -660,6 +729,7 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
             booking_id=booking_id,
             scope=scope,
             page=page,
+            chunk=chunk,
             meta=_BookingCardKeyboardMeta(
                 status=render.status,
                 attendance_outcome=render.attendance_outcome,
@@ -673,7 +743,14 @@ async def _send_booking_card(callback: CallbackQuery, *, booking_id: int, scope:
     )
 
 
-async def _send_cancel_confirm_card(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+async def _send_cancel_confirm_card(
+    callback: CallbackQuery,
+    *,
+    booking_id: int,
+    scope: Scope,
+    page: int,
+    chunk: int,
+) -> None:
     bind_log_context(flow="master_schedule", step="cancel_confirm")
     try:
         master = await _fetch_master(callback.from_user.id)
@@ -695,7 +772,7 @@ async def _send_cancel_confirm_card(callback: CallbackQuery, *, booking_id: int,
 
     if booking.master.id != master.id:
         await callback.answer(txt.no_access(), show_alert=True)
-        await _send_schedule(callback, scope=scope, page=page)
+        await _send_schedule(callback, scope=scope, page=page, chunk=chunk)
         return
 
     client = getattr(booking, "client", None)
@@ -724,26 +801,37 @@ async def _send_cancel_confirm_card(callback: CallbackQuery, *, booking_id: int,
     await _send_or_edit(
         callback,
         text=text,
-        reply_markup=_build_cancel_confirm_keyboard(booking_id=booking_id, scope=scope, page=page),
+        reply_markup=_build_cancel_confirm_keyboard(booking_id=booking_id, scope=scope, page=page, chunk=chunk),
     )
 
 
-async def _handle_action_cancel_prompt(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+async def _handle_action_cancel_prompt(callback: CallbackQuery, *, booking_id: int, view: _ScheduleView) -> None:
     await callback.answer()
-    await _send_cancel_confirm_card(callback, booking_id=booking_id, scope=scope, page=page)
+    await _send_cancel_confirm_card(
+        callback,
+        booking_id=booking_id,
+        scope=view.scope,
+        page=view.page,
+        chunk=view.chunk,
+    )
 
 
-async def _handle_action_cancel_no(callback: CallbackQuery, *, booking_id: int, scope: Scope, page: int) -> None:
+async def _handle_action_cancel_no(callback: CallbackQuery, *, booking_id: int, view: _ScheduleView) -> None:
     await callback.answer()
-    await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+    await _send_booking_card(
+        callback,
+        booking_id=booking_id,
+        scope=view.scope,
+        page=view.page,
+        chunk=view.chunk,
+    )
 
 
 async def _handle_action_cancel_yes(
     callback: CallbackQuery,
     *,
     booking_id: int,
-    scope: Scope,
-    page: int,
+    view: _ScheduleView,
     notifier: Notifier,
     admin_alerter: AdminAlerter | None,
 ) -> None:
@@ -808,15 +896,14 @@ async def _handle_action_cancel_yes(
             admin_alerter=admin_alerter,
         )
 
-    await _send_schedule(callback, scope=scope, page=page)
+    await _send_schedule(callback, scope=view.scope, page=view.page, chunk=view.chunk)
 
 
 async def _handle_action_reschedule(
     callback: CallbackQuery,
     *,
     booking_id: int,
-    scope: Scope,
-    page: int,
+    view: _ScheduleView,
     state: FSMContext,
     rate_limiter: RateLimiter | None,
 ) -> None:
@@ -834,7 +921,12 @@ async def _handle_action_reschedule(
     if not plan.is_pro:
         await callback.answer()
         if callback.message is not None:
-            back_to_card = f"m:b:{booking_id}:s:{scope.value}:p:{page}"
+            back_to_card = cb_open_booking(
+                booking_id=booking_id,
+                scope=view.scope,
+                page=view.page,
+                chunk=view.chunk,
+            )
             await safe_edit_text(
                 callback.message,
                 text=paywall_txt.reschedule_pro_only(),
@@ -857,15 +949,20 @@ async def _handle_action_reschedule(
                 )
         return
 
-    await start_reschedule(callback, state, rate_limiter, booking_id=booking_id, scope=scope, page=page)
+    await start_reschedule(
+        callback,
+        state,
+        rate_limiter,
+        booking_id=booking_id,
+        return_to=(view.scope.value, view.page, view.chunk),
+    )
 
 
 async def _handle_action_attendance(
     callback: CallbackQuery,
     *,
     booking_id: int,
-    scope: Scope,
-    page: int,
+    view: _ScheduleView,
     outcome: AttendanceOutcome,
     admin_alerter: AdminAlerter | None,
 ) -> None:
@@ -895,16 +992,16 @@ async def _handle_action_attendance(
     if result.ok:
         ev.info("master_schedule.attendance_marked", booking_id=booking_id, outcome=str(outcome))
         await callback.answer(txt.attendance_marked(), show_alert=False)
-        await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+        await _send_booking_card(callback, booking_id=booking_id, scope=view.scope, page=view.page, chunk=view.chunk)
         return
 
     if result.error and result.error.value == "already_marked":
         await callback.answer(txt.attendance_already_marked(), show_alert=False)
-        await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+        await _send_booking_card(callback, booking_id=booking_id, scope=view.scope, page=view.page, chunk=view.chunk)
         return
 
     await callback.answer(txt.attendance_not_eligible(), show_alert=True)
-    await _send_schedule(callback, scope=scope, page=page)
+    await _send_schedule(callback, scope=view.scope, page=view.page, chunk=view.chunk)
 
 
 # ---------- entrypoint ----------
@@ -952,22 +1049,51 @@ async def master_schedule_period_callbacks(callback: CallbackQuery, rate_limiter
     except Exception:
         await callback.answer(txt.navigation_error(), show_alert=True)
         return
-    await _send_schedule(callback, scope=scope, page=1)
+    await _send_schedule(callback, scope=scope, page=1, chunk=CHUNK_1)
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedScheduleCallback:
+    scope: Scope
+    page: int
+    chunk: int = CHUNK_1
+
+
+def _parse_schedule_callback(data: str | None) -> _ParsedScheduleCallback | None:
+    # New: m:s:<scope>:p:<page>:c:<chunk>
+    # Old: m:s:<scope>:p:<page>
+    parts = (data or "").split(":")
+    if len(parts) == 5 and parts[:2] == ["m", "s"] and parts[3] == "p":  # noqa: PLR2004
+        try:
+            return _ParsedScheduleCallback(scope=Scope(parts[2]), page=int(parts[4]), chunk=CHUNK_1)
+        except Exception:
+            return None
+    if (
+        len(parts) == 7  # noqa: PLR2004
+        and parts[:2] == ["m", "s"]
+        and parts[3] == "p"
+        and parts[5] == "c"
+    ):
+        try:
+            return _ParsedScheduleCallback(
+                scope=Scope(parts[2]),
+                page=int(parts[4]),
+                chunk=_normalize_chunk(int(parts[6])),
+            )
+        except Exception:
+            return None
+    return None
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:s:"))
 async def master_schedule_pagination(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_schedule", step="pagination")
-    # m:s:<scope>:p:<page>
-    parts = (callback.data or "").split(":")
-    # ["m","s","week","p","2"]
-    try:
-        scope = Scope(parts[2])
-        page = int(parts[4])
-    except Exception:
+    parsed = _parse_schedule_callback(callback.data)
+    if parsed is None:
         await callback.answer(txt.navigation_error(), show_alert=False)
         ev.debug("schedule.pagination_parse_failed")
         return
+    scope, page, chunk = parsed.scope, parsed.page, parsed.chunk
 
     if not await rate_limit_callback(
         callback,
@@ -979,22 +1105,18 @@ async def master_schedule_pagination(callback: CallbackQuery, rate_limiter: Rate
     ):
         return
     await callback.answer()
-    await _send_schedule(callback, scope=scope, page=page)
+    await _send_schedule(callback, scope=scope, page=page, chunk=chunk)
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:b:"))
 async def master_open_booking_card(callback: CallbackQuery, rate_limiter: RateLimiter | None = None) -> None:
     bind_log_context(flow="master_schedule", step="open_booking")
-    # m:b:<booking_id>:s:<scope>:p:<page>
-    parts = (callback.data or "").split(":")
-    try:
-        booking_id = int(parts[2])
-        scope = Scope(parts[4])
-        page = int(parts[6])
-    except Exception:
+    parsed = _parse_open_booking_callback(callback.data)
+    if parsed is None:
         await callback.answer(txt.open_booking_error(), show_alert=False)
         ev.debug("schedule.open_booking_parse_failed")
         return
+    booking_id, scope, page, chunk = parsed.booking_id, parsed.scope, parsed.page, parsed.chunk
     if not await rate_limit_callback(
         callback,
         rate_limiter,
@@ -1004,7 +1126,97 @@ async def master_open_booking_card(callback: CallbackQuery, rate_limiter: RateLi
     ):
         return
     await callback.answer()
-    await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page)
+    await _send_booking_card(callback, booking_id=booking_id, scope=scope, page=page, chunk=chunk)
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedOpenBookingCallback:
+    booking_id: int
+    scope: Scope
+    page: int
+    chunk: int = CHUNK_1
+
+
+def _parse_open_booking_callback(data: str | None) -> _ParsedOpenBookingCallback | None:
+    # New: m:b:<booking_id>:s:<scope>:p:<page>:c:<chunk>
+    # Old: m:b:<booking_id>:s:<scope>:p:<page>
+    parts = (data or "").split(":")
+    if len(parts) == 7 and parts[:2] == ["m", "b"] and parts[3] == "s" and parts[5] == "p":  # noqa: PLR2004
+        try:
+            return _ParsedOpenBookingCallback(
+                booking_id=int(parts[2]),
+                scope=Scope(parts[4]),
+                page=int(parts[6]),
+                chunk=CHUNK_1,
+            )
+        except Exception:
+            return None
+    if (
+        len(parts) == 9  # noqa: PLR2004
+        and parts[:2] == ["m", "b"]
+        and parts[3] == "s"
+        and parts[5] == "p"
+        and parts[7] == "c"
+    ):
+        try:
+            return _ParsedOpenBookingCallback(
+                booking_id=int(parts[2]),
+                scope=Scope(parts[4]),
+                page=int(parts[6]),
+                chunk=_normalize_chunk(int(parts[8])),
+            )
+        except Exception:
+            return None
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedActionCallback:
+    action: str
+    booking_id: int
+    scope: Scope
+    page: int
+    chunk: int = CHUNK_1
+
+
+def _parse_action_callback(data: str | None) -> _ParsedActionCallback | None:
+    # New: m:a:<action>:<booking_id>:s:<scope>:p:<page>:c:<chunk>
+    # Old: m:a:<action>:<booking_id>:s:<scope>:p:<page>
+    parts = (data or "").split(":")
+    if (
+        len(parts) == 8  # noqa: PLR2004
+        and parts[:2] == ["m", "a"]
+        and parts[4] == "s"
+        and parts[6] == "p"
+    ):
+        try:
+            return _ParsedActionCallback(
+                action=str(parts[2]),
+                booking_id=int(parts[3]),
+                scope=Scope(parts[5]),
+                page=int(parts[7]),
+                chunk=CHUNK_1,
+            )
+        except Exception:
+            return None
+    if (
+        len(parts) == 10  # noqa: PLR2004
+        and parts[:2] == ["m", "a"]
+        and parts[4] == "s"
+        and parts[6] == "p"
+        and parts[8] == "c"
+    ):
+        try:
+            return _ParsedActionCallback(
+                action=str(parts[2]),
+                booking_id=int(parts[3]),
+                scope=Scope(parts[5]),
+                page=int(parts[7]),
+                chunk=_normalize_chunk(int(parts[9])),
+            )
+        except Exception:
+            return None
+    return None
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith("m:a:"))
@@ -1016,17 +1228,19 @@ async def master_booking_actions(
     admin_alerter: AdminAlerter | None = None,
 ) -> None:
     bind_log_context(flow="master_schedule", step="action")
-    # m:a:<action>:<booking_id>:s:<scope>:p:<page>
-    parts = (callback.data or "").split(":")
-    try:
-        action = parts[2]
-        booking_id = int(parts[3])
-        scope = Scope(parts[5])
-        page = int(parts[7])
-    except Exception:
+    parsed = _parse_action_callback(callback.data)
+    if parsed is None:
         await callback.answer(txt.action_error(), show_alert=False)
         ev.debug("schedule.action_parse_failed")
         return
+    action, booking_id, scope, page, chunk = (
+        parsed.action,
+        parsed.booking_id,
+        parsed.scope,
+        parsed.page,
+        parsed.chunk,
+    )
+    view = _ScheduleView(scope=scope, page=int(page), chunk=_normalize_chunk(chunk))
 
     if not await rate_limit_callback(
         callback,
@@ -1039,37 +1253,33 @@ async def master_booking_actions(
         return
 
     handlers = {
-        "cancel": lambda: _handle_action_cancel_prompt(callback, booking_id=booking_id, scope=scope, page=page),
-        "cancel_no": lambda: _handle_action_cancel_no(callback, booking_id=booking_id, scope=scope, page=page),
+        "cancel": lambda: _handle_action_cancel_prompt(callback, booking_id=booking_id, view=view),
+        "cancel_no": lambda: _handle_action_cancel_no(callback, booking_id=booking_id, view=view),
         "cancel_yes": lambda: _handle_action_cancel_yes(
             callback,
             booking_id=booking_id,
-            scope=scope,
-            page=page,
+            view=view,
             notifier=notifier,
             admin_alerter=admin_alerter,
         ),
         "reschedule": lambda: _handle_action_reschedule(
             callback,
             booking_id=booking_id,
-            scope=scope,
-            page=page,
+            view=view,
             state=state,
             rate_limiter=rate_limiter,
         ),
         "attended": lambda: _handle_action_attendance(
             callback,
             booking_id=booking_id,
-            scope=scope,
-            page=page,
+            view=view,
             outcome=AttendanceOutcome.ATTENDED,
             admin_alerter=admin_alerter,
         ),
         "no_show": lambda: _handle_action_attendance(
             callback,
             booking_id=booking_id,
-            scope=scope,
-            page=page,
+            view=view,
             outcome=AttendanceOutcome.NO_SHOW,
             admin_alerter=admin_alerter,
         ),

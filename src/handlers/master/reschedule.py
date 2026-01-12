@@ -81,6 +81,7 @@ class _ConfirmMeta:
     client_tg: int | None
     return_scope: str | None
     return_page: int | None
+    return_chunk: int | None
 
 
 def _cb_slot(index: int) -> str:
@@ -340,12 +341,13 @@ def _filter_out_original_slot(
     return filtered_slots_utc, filtered_slots_local
 
 
-def _confirm_state(data: dict) -> tuple[int, datetime, int | None, str | None, int | None] | None:
+def _confirm_state(data: dict) -> tuple[int, datetime, int | None, str | None, int | None, int | None] | None:
     booking_id = data.get("reschedule_booking_id")
     slot_iso = data.get("reschedule_selected_slot")
     client_tg = data.get("reschedule_client_tg")
     return_scope = data.get("reschedule_scope")
     return_page = data.get("reschedule_page")
+    return_chunk = data.get("reschedule_chunk")
     if booking_id is None or slot_iso is None:
         return None
     try:
@@ -353,12 +355,14 @@ def _confirm_state(data: dict) -> tuple[int, datetime, int | None, str | None, i
         new_start_at = datetime.fromisoformat(str(slot_iso))
         client_tg_int = int(client_tg) if client_tg is not None else None
         return_page_int = int(return_page) if return_page is not None else None
+        return_chunk_int = int(return_chunk) if return_chunk is not None else None
         return (
             booking_id_int,
             new_start_at,
             client_tg_int,
             str(return_scope) if return_scope else None,
             return_page_int,
+            return_chunk_int,
         )
     except (TypeError, ValueError):
         return None
@@ -383,8 +387,11 @@ async def _confirm_error_pro_required(callback: CallbackQuery, state: FSMContext
         await _confirm_error_reset(callback, state, text=txt.pro_only())
         return
 
-    booking_id, _new_start_at, _client_tg, scope, page = meta
-    back_cb = f"m:b:{booking_id}:s:{scope}:p:{page}" if scope and page is not None else "paywall:close"
+    booking_id, _new_start_at, _client_tg, scope, page, chunk = meta
+    if scope and page is not None:
+        back_cb = f"m:b:{booking_id}:s:{scope}:p:{page}:c:{int(chunk) if chunk is not None else 1}"
+    else:
+        back_cb = "paywall:close"
 
     await callback.answer()
     await safe_edit_text(
@@ -472,7 +479,12 @@ async def _apply_confirm_result(
     if not result.ok:
         await _handle_confirm_error(error=result.error, callback=callback, state=state)
         if result.error != RescheduleMasterBookingError.SLOT_NOT_AVAILABLE:
-            await _return_to_schedule(callback, scope=meta.return_scope, page=meta.return_page)
+            await _return_to_schedule(
+                callback,
+                scope=meta.return_scope,
+                page=meta.return_page,
+                chunk=meta.return_chunk,
+            )
         return
 
     booking = result.booking
@@ -494,7 +506,7 @@ async def _apply_confirm_result(
         )
 
     await _reset_reschedule(state, callback.bot)
-    await _return_to_schedule(callback, scope=meta.return_scope, page=meta.return_page)
+    await _return_to_schedule(callback, scope=meta.return_scope, page=meta.return_page, chunk=meta.return_chunk)
 
 
 async def _handle_confirm_error(
@@ -544,12 +556,61 @@ async def _notify_client_about_reschedule(
         )
 
 
-async def _return_to_schedule(callback: CallbackQuery, *, scope: str | None, page: int | None) -> None:
+async def _return_to_schedule(
+    callback: CallbackQuery,
+    *,
+    scope: str | None,
+    page: int | None,
+    chunk: int | None,
+) -> None:
     if callback.message is None or not scope or page is None:
         return
     from src.handlers.master.schedule import Scope, _send_schedule
 
-    await _send_schedule(callback, scope=Scope(scope), page=page)
+    await _send_schedule(callback, scope=Scope(scope), page=page, chunk=int(chunk) if chunk is not None else 1)
+
+
+def _back_cb_to_booking_card(*, booking_id: int, return_to: tuple[str, int, int] | None) -> str:
+    if return_to is None:
+        return "paywall:close"
+    scope_str, page_int, chunk_int = return_to
+    return f"m:b:{int(booking_id)}:s:{scope_str}:p:{int(page_int)}:c:{int(chunk_int)}"
+
+
+async def _show_reschedule_pro_required_paywall(
+    callback: CallbackQuery,
+    *,
+    booking_id: int,
+    return_to: tuple[str, int, int] | None,
+) -> None:
+    back_cb = _back_cb_to_booking_card(booking_id=booking_id, return_to=return_to)
+    await callback.answer()
+    markup = build_paywall_keyboard(
+        contact=get_settings().billing.contact,
+        upgrade_text=btn_go_pro(),
+        back_text=btn_back(),
+        back_callback_data=back_cb,
+        upgrade_callback_data="billing:pro:start",
+        force_upgrade_callback=True,
+    )
+
+    if callback.message is not None:
+        await safe_edit_text(
+            callback.message,
+            text=paywall_txt.reschedule_pro_only(),
+            reply_markup=markup,
+            parse_mode="HTML",
+            ev=ev,
+            event="master_reschedule.paywall_edit_failed",
+        )
+        return
+
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=paywall_txt.reschedule_pro_only(),
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
 
 
 async def start_reschedule(
@@ -558,12 +619,11 @@ async def start_reschedule(
     rate_limiter: RateLimiter | None = None,
     *,
     booking_id: int,
-    scope,
-    page: int,
+    return_to: tuple[str, int, int] | None,
 ) -> None:
     """
     Entrypoint called from schedule action handler.
-    `scope` is expected to be src.handlers.master.schedule.Scope.
+    `return_to` is a (scope, page, chunk) tuple used to return back to schedule/card.
     """
     bind_log_context(flow="master_reschedule", step="start")
     if not await rate_limit_callback(
@@ -586,38 +646,7 @@ async def start_reschedule(
         else:
             ev.info("master_reschedule.start_denied", **(deny_meta or {}))
         if (deny_meta or {}).get("reason") == "pro_required":
-            back_cb = f"m:b:{booking_id}:s:{getattr(scope, 'value', str(scope))}:p:{page}"
-            await callback.answer()
-            if callback.message is not None:
-                await safe_edit_text(
-                    callback.message,
-                    text=paywall_txt.reschedule_pro_only(),
-                    reply_markup=build_paywall_keyboard(
-                        contact=get_settings().billing.contact,
-                        upgrade_text=btn_go_pro(),
-                        back_text=btn_back(),
-                        back_callback_data=back_cb,
-                        upgrade_callback_data="billing:pro:start",
-                        force_upgrade_callback=True,
-                    ),
-                    parse_mode="HTML",
-                    ev=ev,
-                    event="master_reschedule.paywall_edit_failed",
-                )
-            else:
-                await callback.bot.send_message(
-                    chat_id=callback.from_user.id,
-                    text=paywall_txt.reschedule_pro_only(),
-                    reply_markup=build_paywall_keyboard(
-                        contact=get_settings().billing.contact,
-                        upgrade_text=btn_go_pro(),
-                        back_text=btn_back(),
-                        back_callback_data=back_cb,
-                        upgrade_callback_data="billing:pro:start",
-                        force_upgrade_callback=True,
-                    ),
-                    parse_mode="HTML",
-                )
+            await _show_reschedule_pro_required_paywall(callback, booking_id=booking_id, return_to=return_to)
             return
         await callback.answer(deny_text, show_alert=True)
         return
@@ -630,10 +659,12 @@ async def start_reschedule(
 
     await _reset_reschedule(state, callback.bot)
     client_alias = await _client_alias_for_master_view(booking=booking)
+    scope_str, page_int, chunk_int = return_to if return_to is not None else ("", 1, 1)
     await state.update_data(
         reschedule_booking_id=booking_id,
-        reschedule_scope=getattr(scope, "value", str(scope)),
-        reschedule_page=page,
+        reschedule_scope=str(scope_str),
+        reschedule_page=int(page_int),
+        reschedule_chunk=int(chunk_int),
         reschedule_master_id=booking.master.id,
         reschedule_master_tz=str(booking.master.timezone.value),
         reschedule_original_start_at=booking.start_at.astimezone(UTC).isoformat(),
@@ -950,7 +981,7 @@ async def confirm(
         ev.warning("master_reschedule.state_invalid", reason="missing_confirm_data")
         await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_confirm_data")
         return
-    booking_id, new_start_at, client_tg, return_scope, return_page = state_data
+    booking_id, new_start_at, client_tg, return_scope, return_page, return_chunk = state_data
     result = await _execute_reschedule(
         callback=callback,
         booking_id=booking_id,
@@ -968,6 +999,7 @@ async def confirm(
             client_tg=client_tg,
             return_scope=return_scope,
             return_page=return_page,
+            return_chunk=return_chunk,
         ),
     )
 
@@ -984,7 +1016,13 @@ async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     return_scope = data.get("reschedule_scope")
     return_page = data.get("reschedule_page")
+    return_chunk = data.get("reschedule_chunk")
     await _reset_reschedule(state, callback.bot)
     await callback.answer(txt.cancelled(), show_alert=True)
     if callback.message and return_scope and return_page:
-        await _send_schedule(callback, scope=Scope(return_scope), page=int(return_page))
+        await _send_schedule(
+            callback,
+            scope=Scope(return_scope),
+            page=int(return_page),
+            chunk=int(return_chunk) if return_chunk is not None else 1,
+        )

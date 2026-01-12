@@ -66,6 +66,115 @@ class MasterScheduleHandlerTests(unittest.IsolatedAsyncioTestCase):
         text = h._button_text(booking, tz=h.ZoneInfo("UTC"), scope=h.Scope.HISTORY_WEEK)
         self.assertTrue(text.startswith("🚫 "))
 
+    def test_schedule_list_keyboard_uses_chunks(self) -> None:
+        from src.handlers.master import schedule as h
+        from src.schemas.enums import BookingStatus
+
+        bookings = [
+            SimpleNamespace(
+                id=i,
+                client_id=i,
+                start_at=datetime(2025, 12, 31, 10, 0, tzinfo=UTC) + timedelta(minutes=i),
+                status=BookingStatus.CONFIRMED,
+                client=SimpleNamespace(name=f"C{i}"),
+            )
+            for i in range(1, 11)
+        ]
+
+        kb = h._build_bookings_list_keyboard(
+            bookings=bookings,
+            tz=h.ZoneInfo("UTC"),
+            scope=h.Scope.TODAY,
+            page=1,
+            chunk=h.CHUNK_1,
+        )
+
+        rows = kb.inline_keyboard
+        self.assertEqual(len(rows[0:6]), 6)
+        self.assertTrue(rows[0][0].callback_data.endswith(":c:1"))
+        self.assertTrue(rows[5][0].callback_data.endswith(":c:1"))
+        self.assertTrue(rows[6][0].text.startswith("Ещё"))
+        self.assertEqual(rows[6][0].callback_data, "m:s:today:p:1:c:2")
+        self.assertFalse(any(btn.text == "1/1" for row in rows for btn in row))
+
+        kb2 = h._build_bookings_list_keyboard(
+            bookings=bookings,
+            tz=h.ZoneInfo("UTC"),
+            scope=h.Scope.TODAY,
+            page=1,
+            chunk=h.CHUNK_2,
+        )
+        rows2 = kb2.inline_keyboard
+        self.assertEqual(len(rows2[0:4]), 4)
+        self.assertTrue(rows2[0][0].callback_data.endswith(":c:2"))
+        self.assertTrue(rows2[3][0].callback_data.endswith(":c:2"))
+        self.assertTrue(rows2[4][0].text.startswith("Назад"))
+        self.assertEqual(rows2[4][0].callback_data, "m:s:today:p:1:c:1")
+
+    def test_schedule_list_keyboard_nav_row_is_stable(self) -> None:
+        from src.handlers.master import schedule as h
+        from src.schemas.enums import BookingStatus
+
+        bookings = [
+            SimpleNamespace(
+                id=i,
+                client_id=i,
+                start_at=datetime(2025, 12, 31, 10, 0, tzinfo=UTC) + timedelta(minutes=i),
+                status=BookingStatus.CONFIRMED,
+                client=SimpleNamespace(name=f"C{i}"),
+            )
+            for i in range(1, 12)
+        ]
+
+        kb = h._build_bookings_list_keyboard(
+            bookings=bookings,
+            tz=h.ZoneInfo("UTC"),
+            scope=h.Scope.TODAY,
+            page=1,
+            chunk=h.CHUNK_1,
+        )
+        nav_row = next(row for row in kb.inline_keyboard if len(row) == 3)
+        self.assertEqual([b.callback_data for b in nav_row], ["m:noop", "m:noop", "m:s:today:p:2:c:1"])
+
+        kb_last = h._build_bookings_list_keyboard(
+            bookings=bookings,
+            tz=h.ZoneInfo("UTC"),
+            scope=h.Scope.TODAY,
+            page=2,
+            chunk=h.CHUNK_1,
+        )
+        nav_row_last = next(row for row in kb_last.inline_keyboard if len(row) == 3)
+        self.assertEqual([b.callback_data for b in nav_row_last], ["m:s:today:p:1:c:1", "m:noop", "m:noop"])
+
+    def test_schedule_callbacks_parse_old_and_new_formats(self) -> None:
+        from src.handlers.master import schedule as h
+
+        parsed = h._parse_schedule_callback("m:s:today:p:2")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.page, 2)
+        self.assertEqual(parsed.chunk, h.CHUNK_1)
+
+        parsed_new = h._parse_schedule_callback("m:s:today:p:2:c:2")
+        self.assertIsNotNone(parsed_new)
+        self.assertEqual(parsed_new.page, 2)
+        self.assertEqual(parsed_new.chunk, h.CHUNK_2)
+
+        open_old = h._parse_open_booking_callback("m:b:7:s:today:p:3")
+        self.assertIsNotNone(open_old)
+        self.assertEqual(open_old.chunk, h.CHUNK_1)
+
+        open_new = h._parse_open_booking_callback("m:b:7:s:today:p:3:c:2")
+        self.assertIsNotNone(open_new)
+        self.assertEqual(open_new.chunk, h.CHUNK_2)
+
+        action_old = h._parse_action_callback("m:a:cancel_yes:7:s:today:p:1")
+        self.assertIsNotNone(action_old)
+        self.assertEqual(action_old.chunk, h.CHUNK_1)
+
+        action_new = h._parse_action_callback("m:a:cancel_yes:7:s:today:p:1:c:2")
+        self.assertIsNotNone(action_new)
+        self.assertEqual(action_new.chunk, h.CHUNK_2)
+
     async def test_cancel_enqueues_client_notification(self) -> None:
         from src.handlers.master import schedule as h
         from src.notifications.policy import DefaultNotificationPolicy

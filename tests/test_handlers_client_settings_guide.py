@@ -22,3 +22,10 @@ class ClientSettingsGuideTests(unittest.TestCase):
         callback_data = {btn.callback_data for row in kb.inline_keyboard for btn in row}
         self.assertIn(f"{h.SETTINGS_CB_PREFIX}back_menu", callback_data)
         self.assertIn(f"{h.SETTINGS_CB_PREFIX}back", callback_data)
+
+    def test_guide_mentions_master_aliases(self) -> None:
+        from src.handlers.client import settings as h
+
+        pages = h._guide_pages()
+        joined = "\n".join(pages).lower()
+        self.assertIn("переимен", joined)

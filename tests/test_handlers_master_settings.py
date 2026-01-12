@@ -97,3 +97,10 @@ class MasterSettingsUiTests(unittest.TestCase):
                     self.assertIn("Редактировать", btn.text)
                     return
         raise AssertionError("edit_profile button not found")
+
+    def test_guide_mentions_client_aliases(self) -> None:
+        from src.handlers.master import settings as h
+
+        pages = h._guide_pages(plan_is_pro=True)
+        joined = "\n".join(pages).lower()
+        self.assertIn("алиас", joined)
