@@ -47,6 +47,9 @@ _NEW_CB = "billing:pro:new"
 _CONFIRM_PREFIX = "billing:pro:confirm:"
 _CONFIRM_CANCEL_PREFIX = "billing:pro:confirm_cancel:"
 
+_CONFIRM_GENERIC_PREFIX = "billing:pro:confirm_generic:"
+_CONFIRM_GENERIC_CANCEL_PREFIX = "billing:pro:confirm_generic_cancel:"
+
 _CONFIRM_PAYWALL_PREFIX = "billing:pro:confirm_paywall:"
 _CONFIRM_PAYWALL_CANCEL_PREFIX = "billing:pro:confirm_paywall_cancel:"
 
@@ -174,6 +177,17 @@ def _kb_confirm_invoice(*, action: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="✅ Да", callback_data=f"{_CONFIRM_PREFIX}{action}"),
                 InlineKeyboardButton(text=btn_cancel(), callback_data=f"{_CONFIRM_CANCEL_PREFIX}{action}"),
+            ],
+        ],
+    )
+
+
+def _kb_confirm_invoice_generic(*, action: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да", callback_data=f"{_CONFIRM_GENERIC_PREFIX}{action}"),
+                InlineKeyboardButton(text=btn_cancel(), callback_data=f"{_CONFIRM_GENERIC_CANCEL_PREFIX}{action}"),
             ],
         ],
     )
@@ -831,7 +845,13 @@ async def billing_pro_start(
             parse_mode="HTML",
         )
         return
-    await _create_and_show_invoice(callback, express_pay_client=express_pay_client, reuse_waiting=True)
+    await callback.answer()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=txt.pro_create_invoice_confirm(),
+        reply_markup=_kb_confirm_invoice_generic(action="start"),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == _RENEW_CB)
@@ -862,7 +882,13 @@ async def billing_pro_renew(
             parse_mode="HTML",
         )
         return
-    await _create_and_show_renewal_invoice(callback, express_pay_client=express_pay_client, reuse_waiting=True)
+    await callback.answer()
+    await callback.bot.send_message(
+        chat_id=callback.from_user.id,
+        text=txt.pro_create_invoice_confirm(),
+        reply_markup=_kb_confirm_invoice_generic(action="renew"),
+        parse_mode="HTML",
+    )
 
 
 @router.callback_query(UserRole(ActiveRole.MASTER), F.data == _NEW_CB)
@@ -1064,3 +1090,51 @@ async def billing_pro_paywall_confirm_yes(
         return
 
     await _create_and_show_invoice(callback, express_pay_client=express_pay_client, reuse_waiting=True)
+
+
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith(_CONFIRM_GENERIC_CANCEL_PREFIX))
+async def billing_pro_confirm_generic_cancel(callback: CallbackQuery) -> None:
+    bind_log_context(flow="billing_pro", step="confirm_generic_cancel")
+    await callback.answer()
+    if callback.message is None:
+        return
+    try:
+        await callback.message.delete()
+    except Exception:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+
+@router.callback_query(UserRole(ActiveRole.MASTER), F.data.startswith(_CONFIRM_GENERIC_PREFIX))
+async def billing_pro_confirm_generic_yes(
+    callback: CallbackQuery,
+    express_pay_client: ExpressPayClient | None = None,
+) -> None:
+    bind_log_context(flow="billing_pro", step="confirm_generic_yes")
+    action = (callback.data or "").removeprefix(_CONFIRM_GENERIC_PREFIX)
+
+    settings = get_settings()
+    contact = settings.billing.contact
+
+    if express_pay_client is None:
+        ev.info("billing.pro_confirm_unavailable", reason="no_express_pay_client", action=action, scope="generic")
+        await callback.answer()
+        await callback.bot.send_message(
+            chat_id=callback.from_user.id,
+            text=txt.pro_config_missing(),
+            reply_markup=_kb_config_missing(contact=contact),
+            parse_mode="HTML",
+        )
+        return
+
+    if action == "start":
+        await _create_and_show_invoice(callback, express_pay_client=express_pay_client, reuse_waiting=True)
+        return
+
+    if action == "renew":
+        await _create_and_show_renewal_invoice(callback, express_pay_client=express_pay_client, reuse_waiting=True)
+        return
+
+    await callback.answer("Неизвестное действие.", show_alert=True)
