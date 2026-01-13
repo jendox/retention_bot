@@ -412,6 +412,7 @@ class ScheduledNotificationRepository(BaseRepository):
                 "sent_at": None,
                 "updated_at": now_utc,
             },
+            where=ScheduledNotificationEntity.status != ScheduledNotificationStatus.SENT.value,
         )
         result = await self._session.execute(stmt)
         await self._session.flush()
