@@ -40,7 +40,7 @@ def no_slots(*, t: Translator = _noop_t) -> str:
 
 
 def slots_title(*, day: date, t: Translator = _noop_t) -> str:
-    return t(f"Свободные слоты на {day.strftime('%d.%m.%Y')}:")
+    return t(f"Свободное время на {day.strftime('%d.%m.%Y')}:")
 
 
 def confirm(*, client_name: str, day: str, time_str: str, t: Translator = _noop_t) -> str:

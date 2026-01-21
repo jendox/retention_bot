@@ -32,7 +32,7 @@ from src.repositories.scheduled_notification import ScheduledNotificationReposit
 from src.schemas.enums import BookingStatus, Timezone
 from src.settings import get_settings
 from src.texts import master_reschedule as txt, paywall as paywall_txt
-from src.texts.buttons import btn_back, btn_cancel, btn_close, btn_confirm, btn_go_pro
+from src.texts.buttons import btn_back, btn_close, btn_confirm, btn_go_pro
 from src.ui import month_calendar
 from src.use_cases.entitlements import EntitlementsService
 from src.use_cases.master_free_slots import GetMasterFreeSlots
@@ -61,7 +61,9 @@ async def _client_alias_for_master_view(*, booking) -> str | None:
 
 
 CB_CONFIRM = "m:reschedule:confirm"
-CB_CANCEL = "m:reschedule:cancel"
+CB_BACK_TO_CARD = "m:reschedule:back_card"
+CB_BACK_TO_CALENDAR = "m:reschedule:back_calendar"
+CB_BACK_TO_SLOTS = "m:reschedule:back_slots"
 MONTH_CAL_PREFIX = "m:reschedule:mc"
 _STATE_CAL_MONTH = "reschedule_calendar_month"
 _FREE_BOOKING_HORIZON_DAYS = 7
@@ -92,7 +94,7 @@ def _build_slots_keyboard(slots_local: list[datetime]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for index, slot in enumerate(slots_local):
         rows.append([InlineKeyboardButton(text=slot.strftime("%H:%M"), callback_data=_cb_slot(index))])
-    rows.append([InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL)])
+    rows.append([InlineKeyboardButton(text=btn_back(), callback_data=CB_BACK_TO_CALENDAR)])
     rows.append([InlineKeyboardButton(text=btn_close(), callback_data="m:close")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -102,7 +104,7 @@ def _build_confirm_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text=btn_confirm(), callback_data=CB_CONFIRM),
-                InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL),
+                InlineKeyboardButton(text=btn_back(), callback_data=CB_BACK_TO_SLOTS),
             ],
             [InlineKeyboardButton(text=btn_close(), callback_data="m:close")],
         ],
@@ -167,13 +169,13 @@ async def _calendar_markup(state: FSMContext, *, month: month_calendar.MonthRef 
     limits = await _calendar_limits(state)
     if limits is None:
         return InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=btn_cancel(), callback_data=CB_CANCEL)]],
+            inline_keyboard=[[InlineKeyboardButton(text=btn_back(), callback_data=CB_BACK_TO_CARD)]],
         )
 
     month_ref = month or _month_ref_from_state(data, today=limits.today)
     controls = month_calendar.CalendarControls(
-        cancel_text=btn_cancel(),
-        cancel_callback_data=CB_CANCEL,
+        cancel_text=btn_back(),
+        cancel_callback_data=CB_BACK_TO_CARD,
         show_pro_button=True,
     )
     await state.update_data(_STATE_CAL_MONTH=f"{int(month_ref.year):04d}{int(month_ref.month):02d}")
@@ -871,6 +873,95 @@ async def pick_date(callback: CallbackQuery, state: FSMContext, rate_limiter: Ra
 
 @router.callback_query(
     UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.selecting_date),
+    F.data == CB_BACK_TO_CARD,
+)
+async def back_to_booking_card(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reschedule", step="back_to_booking_card")
+    data = await state.get_data()
+    booking_id = data.get("reschedule_booking_id")
+    return_scope = data.get("reschedule_scope")
+    return_page = data.get("reschedule_page")
+    return_chunk = data.get("reschedule_chunk")
+    if booking_id is None or not return_scope or return_page is None:
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_return_to")
+        return
+
+    await callback.answer()
+    await _reset_reschedule(state, callback.bot)
+
+    from src.handlers.master.schedule import Scope, _send_booking_card
+
+    await _send_booking_card(
+        callback,
+        booking_id=int(booking_id),
+        scope=Scope(str(return_scope)),
+        page=int(return_page),
+        chunk=int(return_chunk) if return_chunk is not None else 1,
+    )
+
+
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.selecting_slot),
+    F.data == CB_BACK_TO_CALENDAR,
+)
+async def back_to_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reschedule", step="back_to_calendar")
+    await callback.answer()
+    await state.update_data(reschedule_day=None, reschedule_slots=None, reschedule_selected_slot=None)
+    await _restore_calendar(callback, state)
+    await state.set_state(RescheduleStates.selecting_date)
+
+
+async def _restore_slots_from_state(callback: CallbackQuery, state: FSMContext) -> bool:
+    data = await state.get_data()
+    master_tz_name = data.get("reschedule_master_tz")
+    if not master_tz_name:
+        return False
+
+    slots_iso: list[str] = list(data.get("reschedule_slots") or [])
+    if not slots_iso:
+        return False
+    try:
+        slots_utc = [datetime.fromisoformat(v) for v in slots_iso]
+    except ValueError:
+        return False
+
+    picked_day_raw = data.get("reschedule_day")
+    picked_day: date | None = None
+    if picked_day_raw:
+        try:
+            picked_day = date.fromisoformat(str(picked_day_raw))
+        except ValueError:
+            picked_day = None
+    if picked_day is None:
+        picked_day = slots_utc[0].astimezone(get_timezone(master_tz_name)).date()
+
+    master_tz = get_timezone(master_tz_name)
+    slots_local = [dt.astimezone(master_tz) for dt in slots_utc]
+    await _show_slots_list(callback, state, picked_day=picked_day, slots_local=slots_local)
+    return True
+
+
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
+    StateFilter(RescheduleStates.confirm),
+    F.data == CB_BACK_TO_SLOTS,
+)
+async def back_to_slots(callback: CallbackQuery, state: FSMContext) -> None:
+    bind_log_context(flow="master_reschedule", step="back_to_slots")
+    await callback.answer()
+    await state.update_data(reschedule_selected_slot=None, confirm_in_progress=False)
+    if not await _restore_slots_from_state(callback, state):
+        ev.warning("master_reschedule.state_invalid", reason="missing_slots_data", stage="back_to_slots")
+        await context_lost(callback, state, bucket=RESCHEDULE_BUCKET, reason="missing_slots_data")
+        return
+    await state.set_state(RescheduleStates.selecting_slot)
+
+
+@router.callback_query(
+    UserRole(ActiveRole.MASTER),
     StateFilter(RescheduleStates.selecting_slot),
     F.data.startswith("m:reschedule:slot:"),
 )
@@ -1002,27 +1093,3 @@ async def confirm(
             return_chunk=return_chunk,
         ),
     )
-
-
-@router.callback_query(
-    UserRole(ActiveRole.MASTER),
-    StateFilter(RescheduleStates.selecting_date, RescheduleStates.selecting_slot, RescheduleStates.confirm),
-    F.data == CB_CANCEL,
-)
-async def cancel(callback: CallbackQuery, state: FSMContext) -> None:
-    from src.handlers.master.schedule import Scope, _send_schedule
-
-    bind_log_context(flow="master_reschedule", step="cancel")
-    data = await state.get_data()
-    return_scope = data.get("reschedule_scope")
-    return_page = data.get("reschedule_page")
-    return_chunk = data.get("reschedule_chunk")
-    await _reset_reschedule(state, callback.bot)
-    await callback.answer(txt.cancelled(), show_alert=True)
-    if callback.message and return_scope and return_page:
-        await _send_schedule(
-            callback,
-            scope=Scope(return_scope),
-            page=int(return_page),
-            chunk=int(return_chunk) if return_chunk is not None else 1,
-        )
