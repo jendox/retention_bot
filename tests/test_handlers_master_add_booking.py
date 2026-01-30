@@ -190,7 +190,7 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         answer_tracked = AsyncMock()
         with (
             patch.object(h, "track_message", AsyncMock()),
-            patch.object(h, "_load_master_with_clients", AsyncMock(return_value=_Master())),
+            patch.object(h, "_load_master_with_clients_and_aliases", AsyncMock(return_value=(_Master(), {}))),
             patch.object(h, "answer_tracked", answer_tracked),
         ):
             await h.search_client(message=message, state=state)
@@ -198,6 +198,149 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
         reply_markup = answer_tracked.await_args.kwargs.get("reply_markup")
         self.assertIsNotNone(reply_markup)
         self.assertEqual(reply_markup.inline_keyboard[0][0].callback_data, "m:add_booking:cancel")
+
+    async def test_search_by_alias_finds_online_client(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        await state.set_state(h.AddBookingStates.search_client)
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            text="Vanya",
+            bot=SimpleNamespace(),
+        )
+
+        class _Client:
+            id = 1
+            telegram_id = 123
+            name = "Ivan Petrov"
+            phone = "+375291112233"
+
+            def to_state_dict(self) -> dict:
+                return {
+                    "id": self.id,
+                    "telegram_id": self.telegram_id,
+                    "name": self.name,
+                    "phone": self.phone,
+                    "timezone": "Europe/Minsk",
+                    "notifications_enabled": True,
+                }
+
+        class _Master:
+            id = 7
+            slot_size_min = 60
+            timezone = SimpleNamespace(value="Europe/Minsk")
+            clients = [_Client()]
+
+        answer_tracked = AsyncMock()
+        with (
+            patch.object(h, "track_message", AsyncMock()),
+            patch.object(h, "_load_master_with_clients_and_aliases", AsyncMock(return_value=(_Master(), {1: "Vanya"}))),
+            patch.object(h, "answer_tracked", answer_tracked),
+        ):
+            await h.search_client(message=message, state=state)
+
+        data = await state.get_data()
+        self.assertEqual(data["clients"][0]["name"], "Vanya")
+        self.assertEqual(data["clients"][0]["original_name"], "Ivan Petrov")
+        self.assertEqual(data["clients"][0]["alias"], "Vanya")
+
+        reply_markup = answer_tracked.await_args.kwargs["reply_markup"]
+        self.assertEqual(reply_markup.inline_keyboard[0][0].callback_data, "m:add_booking:client:1")
+        self.assertIn("Vanya", reply_markup.inline_keyboard[0][0].text)
+
+    async def test_search_by_original_name_finds_client_even_with_alias(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        await state.set_state(h.AddBookingStates.search_client)
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            text="Ivan",
+            bot=SimpleNamespace(),
+        )
+
+        class _Client:
+            id = 1
+            telegram_id = 123
+            name = "Ivan Petrov"
+            phone = "+375291112233"
+
+            def to_state_dict(self) -> dict:
+                return {
+                    "id": self.id,
+                    "telegram_id": self.telegram_id,
+                    "name": self.name,
+                    "phone": self.phone,
+                    "timezone": "Europe/Minsk",
+                    "notifications_enabled": True,
+                }
+
+        class _Master:
+            id = 7
+            slot_size_min = 60
+            timezone = SimpleNamespace(value="Europe/Minsk")
+            clients = [_Client()]
+
+        answer_tracked = AsyncMock()
+        with (
+            patch.object(h, "track_message", AsyncMock()),
+            patch.object(h, "_load_master_with_clients_and_aliases", AsyncMock(return_value=(_Master(), {1: "Vanya"}))),
+            patch.object(h, "answer_tracked", answer_tracked),
+        ):
+            await h.search_client(message=message, state=state)
+
+        data = await state.get_data()
+        self.assertEqual(data["clients"][0]["id"], 1)
+        self.assertEqual(data["clients"][0]["name"], "Vanya")  # display name is alias
+        self.assertEqual(data["clients"][0]["original_name"], "Ivan Petrov")
+
+    async def test_search_by_phone_finds_client_even_with_alias(self) -> None:
+        from src.handlers.master import add_booking as h
+
+        state = MemoryState()
+        await state.set_state(h.AddBookingStates.search_client)
+
+        message = SimpleNamespace(
+            from_user=SimpleNamespace(id=10),
+            text="1112233",
+            bot=SimpleNamespace(),
+        )
+
+        class _Client:
+            id = 1
+            telegram_id = 123
+            name = "Ivan Petrov"
+            phone = "+375291112233"
+
+            def to_state_dict(self) -> dict:
+                return {
+                    "id": self.id,
+                    "telegram_id": self.telegram_id,
+                    "name": self.name,
+                    "phone": self.phone,
+                    "timezone": "Europe/Minsk",
+                    "notifications_enabled": True,
+                }
+
+        class _Master:
+            id = 7
+            slot_size_min = 60
+            timezone = SimpleNamespace(value="Europe/Minsk")
+            clients = [_Client()]
+
+        answer_tracked = AsyncMock()
+        with (
+            patch.object(h, "track_message", AsyncMock()),
+            patch.object(h, "_load_master_with_clients_and_aliases", AsyncMock(return_value=(_Master(), {1: "Vanya"}))),
+            patch.object(h, "answer_tracked", answer_tracked),
+        ):
+            await h.search_client(message=message, state=state)
+
+        data = await state.get_data()
+        self.assertEqual(data["clients"][0]["id"], 1)
 
     async def test_calendar_cancel_restores_clients_list(self) -> None:
         from src.handlers.master import add_booking as h
@@ -500,6 +643,7 @@ class MasterAddBookingHandlerTests(unittest.IsolatedAsyncioTestCase):
             patch.object(h, "rate_limit_callback", AsyncMock(return_value=True)),
             patch.object(h, "answer_tracked", AsyncMock()),
             patch.object(h, "_load_master_with_clients", AsyncMock(return_value=master)),
+            patch.object(h, "_load_master_with_clients_and_aliases", AsyncMock(return_value=(master, {}))),
             patch.object(
                 h,
                 "_calendar_limits",

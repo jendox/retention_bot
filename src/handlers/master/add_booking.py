@@ -26,7 +26,7 @@ from src.observability.events import EventLogger
 from src.paywall import build_paywall_keyboard
 from src.plans import PRO_BOOKING_HORIZON_DAYS
 from src.rate_limiter import RateLimiter
-from src.repositories import MasterRepository
+from src.repositories import MasterClientRepository, MasterRepository
 from src.repositories.scheduled_notification import ScheduledNotificationRepository
 from src.schemas import MasterWithClients
 from src.schemas.enums import Timezone
@@ -81,13 +81,14 @@ class _ConfirmInput:
     slots: list[datetime]
 
 
-def _filter_clients(clients: Iterable, query: str) -> list:
+def _filter_clients(clients: Iterable, *, aliases: dict[int, str], query: str) -> list:
     q = query.lower()
     result = []
     for client in clients:
         name = getattr(client, "name", "") or ""
+        alias = aliases.get(int(getattr(client, "id", 0)) or 0) or ""
         phone = getattr(client, "phone", "") or ""
-        if q in name.lower() or q in phone:
+        if q in name.lower() or q in alias.lower() or q in phone:
             result.append(client)
     return result
 
@@ -160,6 +161,14 @@ async def _load_master_with_clients(telegram_id: int) -> MasterWithClients:
     async with session_local() as session:
         repo = MasterRepository(session)
         return await repo.get_with_clients_by_telegram_id(telegram_id)
+
+
+async def _load_master_with_clients_and_aliases(telegram_id: int) -> tuple[MasterWithClients, dict[int, str]]:
+    async with session_local() as session:
+        repo = MasterRepository(session)
+        master = await repo.get_with_clients_by_telegram_id(telegram_id)
+        aliases = await MasterClientRepository(session).get_client_aliases_for_master(master_id=int(master.id))
+        return master, aliases
 
 
 async def _reset_add_booking(state: FSMContext, bot) -> None:
@@ -705,14 +714,14 @@ async def search_client(message: Message, state: FSMContext) -> None:
 
     telegram_id = message.from_user.id
     try:
-        master = await _load_master_with_clients(telegram_id)
+        master, aliases = await _load_master_with_clients_and_aliases(telegram_id)
     except Exception as exc:
         await ev.aexception("master_add_booking.search_client_failed", stage="load_master", exc=exc)
         await message.answer(ASYNC_CTX_ERROR)
         await _reset_add_booking(state, message.bot)
         return
 
-    matches = _filter_clients(master.clients, query)
+    matches = _filter_clients(master.clients, aliases=aliases, query=query)
     if not matches:
         ev.info("master_add_booking.search_result", outcome="no_matches", query_len=len(query))
         await answer_tracked(
@@ -726,19 +735,29 @@ async def search_client(message: Message, state: FSMContext) -> None:
         )
         return
 
+    matches_raw: list[dict] = []
+    for client in matches:
+        raw = client.to_state_dict()
+        raw["original_name"] = raw.get("name")
+        alias = aliases.get(int(raw.get("id") or 0))
+        if alias:
+            raw["alias"] = alias
+            raw["name"] = alias
+        matches_raw.append(raw)
+
     ev.info("master_add_booking.search_result", outcome="matches", matches=len(matches), query_len=len(query))
     await state.update_data(
         master_id=master.id,
         master_slot_size=master.slot_size_min,
         master_timezone=str(master.timezone.value),
         master_day=None,
-        clients=[client.to_state_dict() for client in matches],
+        clients=matches_raw,
     )
     await answer_tracked(
         message,
         state,
         text=txt.choose_client(),
-        reply_markup=_build_clients_keyboard(matches),
+        reply_markup=_build_clients_keyboard_from_state(matches_raw),
         bucket=ADD_BOOKING_BUCKET,
     )
 
