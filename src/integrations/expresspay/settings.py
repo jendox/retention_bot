@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class ExpressPaySettings(BaseModel):
     token: str = Field(..., description="API token Express Pay (обязателен)")
-    account_number: str = Field(..., description="Базовый номер аккаунта Express Pay")
+    account_number: str = Field(..., description="Базовый номер аккаунта Express Pay для оплат бота (2 цифры, напр. '01')")
     secret_word: str = Field("", description="Secret word для HMAC подписи (может быть пустым)")
     use_signature: bool = Field(True, description="Добавлять ли signature в запросы")
     sandbox: bool = Field(False, description="Использовать sandbox-api.express-pay.by")

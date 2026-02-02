@@ -43,41 +43,42 @@ def format_expiration(dt: datetime | date) -> str:
 def default_epos_account_no(
     master_id: int,
     *,
-    base_account_number: str = "29239-0-",
-    formed_at: datetime | None = None,
+    base_account_number: str = "01",
+    formed_at: datetime | date | None = None,
 ) -> str:
     """
     AccountNo (22 символа):
-        base_account_number (например "29239-0-") +
-        "1" +
+        base_account_number (2 цифры, например "01") +
         дата формирования инвойса ("%d%m%y") +
         нули до нужной длины +
         master_id (в конце)
 
     Пример (master_id=123):
-        29239-0-1 271225 0000 123
+        01 271225 00000000000 123
         (пробелы только для примера; в реальности без пробелов)
     """
     if master_id <= 0:
         raise ValueError("master_id must be positive")
 
-    if len(base_account_number) != 8:  # noqa: PLR2004
-        raise ValueError("base_account_number must be exactly 8 characters")
+    if len(base_account_number) != 2:  # noqa: PLR2004
+        raise ValueError("base_account_number must be exactly 2 characters")
+    if not base_account_number.isdigit():
+        raise ValueError("base_account_number must contain only digits")
 
     dt = formed_at or datetime.now(UTC)
     date_part = dt.strftime("%d%m%y")  # 6 символов
     order_part = str(master_id)
 
-    # 22 = 8 (base) + 1 ("1") + 6 (date) + pad + len(order_part)
-    fixed_len = len(base_account_number) + 1 + len(date_part)  # 8 + 1 + 6 = 15
-    remaining = 22 - fixed_len  # 7 символов под pad+master_id
+    # 22 = 2 (base) + 6 (date) + pad + len(order_part)
+    fixed_len = len(base_account_number) + len(date_part)  # 2 + 6 = 8
+    remaining = 22 - fixed_len  # 14 символов под pad+master_id
 
     if len(order_part) > remaining:
         raise ValueError(f"master_id is too long to fit: max {remaining} digits, got {len(order_part)}")
 
     pad = "0" * (remaining - len(order_part))
 
-    account_no = f"{base_account_number}1{date_part}{pad}{order_part}"
+    account_no = f"{base_account_number}{date_part}{pad}{order_part}"
 
     if len(account_no) != ACCOUNT_NUMBER_LENGTH:
         raise AssertionError(f"AccountNo must be 22 chars, got {len(account_no)}: {account_no}")
