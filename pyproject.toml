@@ -1,7 +1,7 @@
 [project]
 name = "retention-bot"
 version = "0.1.0"
-description = "Retention Telegram Bot"
+description = "Production-oriented Telegram booking and client retention bot with aiogram, async SQLAlchemy, PostgreSQL, Redis, background workers, observability, and optional ExpressPay integration."
 requires-python = ">=3.13,<= 3.14"
 dependencies = [
     "aiogram>=3.23.0",
